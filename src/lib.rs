@@ -3,11 +3,12 @@ compile_error!(
     "externally-driven-async-rt currently supports only macOS (Linux support is planned)"
 );
 
-mod backend;
 mod context;
 mod event_loop;
 mod inner;
 mod net;
+#[expect(dead_code, unused_imports)]
+mod selectors;
 mod task;
 mod timers;
 mod waker;
