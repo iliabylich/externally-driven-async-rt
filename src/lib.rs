@@ -11,8 +11,11 @@ mod inner;
 mod net;
 #[expect(dead_code, unused_imports)]
 mod selectors;
+mod state;
 #[expect(dead_code)]
 mod task;
 #[expect(dead_code)]
 mod timers;
 mod waker;
+
+pub use state::State;
