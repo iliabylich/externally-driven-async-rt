@@ -11,6 +11,7 @@ mod inner;
 mod net;
 #[expect(dead_code, unused_imports)]
 mod selectors;
+#[expect(dead_code)]
 mod task;
 #[expect(dead_code)]
 mod timers;
