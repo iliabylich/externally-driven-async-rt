@@ -7,6 +7,23 @@ use rustix::fd::BorrowedFd;
 use crate::inner::{Direction, Inner};
 use crate::selectors::Token;
 
+// Runs a non-blocking syscall until it doesn't return `EAGAIN`, waiting for `$direction`
+// readiness of `$fd` in between. Must be used inside an `async` block.
+macro_rules! io_loop {
+    ($ctx:expr, $fd:expr, $direction:expr, $syscall:expr) => {{
+        let mut registration = $crate::io::IoRegistration::new($ctx.inner(), $fd);
+        loop {
+            match $syscall {
+                Err(rustix::io::Errno::INTR) => {}
+                Err(rustix::io::Errno::AGAIN) => registration.wait($direction).await,
+                result => break result,
+            }
+        }
+    }};
+}
+
+pub(crate) use io_loop;
+
 pub(crate) struct IoRegistration<'a, E> {
     inner: &'a Inner<E>,
     token: Token,

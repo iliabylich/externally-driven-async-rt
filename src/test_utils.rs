@@ -105,3 +105,13 @@ impl<A: Future + Unpin, B: Future + Unpin> Future for First<A, B> {
         Poll::Pending
     }
 }
+
+pub(crate) fn run_until_events(event_loop: &mut EventLoop<Log>, count: usize) {
+    while event_loop.state_mut().0.len() < count {
+        assert!(
+            is_readable(&*event_loop, 2000),
+            "the loop never became ready"
+        );
+        assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
+    }
+}
