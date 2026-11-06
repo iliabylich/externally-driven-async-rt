@@ -117,6 +117,22 @@ impl<E> Inner<E> {
         self.selector.set_interest(token, waiters.interest());
     }
 
+    pub(crate) fn has_io_waker(&self, token: Token, direction: Direction) -> bool {
+        let io = self.io.borrow();
+        let Some(waiters) = io.get(&token) else {
+            return false;
+        };
+        match direction {
+            Direction::Read => waiters.reader.is_some(),
+            Direction::Write => waiters.writer.is_some(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn io_registration_count(&self) -> usize {
+        self.io.borrow().len()
+    }
+
     fn take_io_waker(&self, token: Token, direction: Direction) -> Option<Waker> {
         let mut io = self.io.borrow_mut();
         let waiters = io.get_mut(&token)?;

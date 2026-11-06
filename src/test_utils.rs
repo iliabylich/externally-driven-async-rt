@@ -3,11 +3,11 @@ use core::pin::Pin;
 use core::task::Poll;
 
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
-use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
+use rustix::fd::{AsFd, OwnedFd};
 use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
 
 use crate::inner::Direction;
-use crate::selectors::Token;
+use crate::io::IoRegistration;
 use crate::{Context, Error, EventLoop, State};
 
 #[derive(Default)]
@@ -43,45 +43,16 @@ pub(crate) fn is_readable(fd: impl AsFd, timeout_ms: i64) -> bool {
     poll(&mut fds, Some(&timeout)).unwrap() == 1
 }
 
-// Stand-in for real IO futures (step 11): resolves once `fd` is readable.
-pub(crate) struct Readable<'a> {
+pub(crate) fn readable<'a>(
     ctx: &'a Context<u32>,
-    fd: BorrowedFd<'a>,
-    token: Option<Token>,
-}
-
-pub(crate) fn readable<'a>(ctx: &'a Context<u32>, fd: &'a OwnedFd) -> Readable<'a> {
-    Readable {
-        ctx,
-        fd: fd.as_fd(),
-        token: None,
-    }
-}
-
-impl Future for Readable<'_> {
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {
-        if is_readable(self.fd, 0) {
-            return Poll::Ready(());
+    fd: &'a OwnedFd,
+) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
+    Box::pin(async move {
+        let mut registration = IoRegistration::new(ctx.inner(), fd.as_fd());
+        while !is_readable(fd, 0) {
+            registration.wait(Direction::Read).await;
         }
-        let inner = self.ctx.inner();
-        let token = match self.token {
-            Some(token) => token,
-            None => inner.register_io(self.fd),
-        };
-        inner.set_io_waker(token, Direction::Read, cx.waker());
-        self.token = Some(token);
-        Poll::Pending
-    }
-}
-
-impl Drop for Readable<'_> {
-    fn drop(&mut self) {
-        if let Some(token) = self.token {
-            self.ctx.inner().deregister_io(token).unwrap();
-        }
-    }
+    })
 }
 
 pub(crate) fn wake_by_writing(event_loop: &impl AsFd, peer: &OwnedFd) {

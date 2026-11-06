@@ -9,6 +9,8 @@ mod context;
 mod event_loop;
 #[expect(dead_code)]
 mod inner;
+#[cfg_attr(not(test), expect(dead_code))]
+mod io;
 mod join_handle;
 mod net;
 #[expect(dead_code)]
