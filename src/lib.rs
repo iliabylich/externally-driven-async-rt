@@ -16,6 +16,7 @@ mod state;
 mod task;
 #[expect(dead_code)]
 mod timers;
+#[cfg_attr(not(test), expect(dead_code))]
 mod waker;
 
 pub use state::State;
