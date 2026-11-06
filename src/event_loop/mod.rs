@@ -85,6 +85,11 @@ impl<S: State> EventLoop<S> {
         &mut self.state
     }
 
+    #[cfg(test)]
+    pub(crate) fn inner(&self) -> &crate::inner::Inner<S::Event> {
+        self.inner.get()
+    }
+
     fn finish_drain(&mut self, status: RootStatus) -> Result<(), Error> {
         let inner = self.inner.get();
         if status == RootStatus::Finished {

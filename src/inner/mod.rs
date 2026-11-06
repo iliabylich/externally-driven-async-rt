@@ -86,6 +86,10 @@ impl<E> Inner<E> {
         &self.tasks
     }
 
+    pub(crate) fn timers(&self) -> &RefCell<Timers> {
+        &self.timers
+    }
+
     pub(crate) fn register_io(&self, fd: BorrowedFd<'_>) -> Token {
         let token = self.selector.register(fd);
         self.io.borrow_mut().insert(token, IoWaiters::default());

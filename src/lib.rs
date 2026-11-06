@@ -9,16 +9,21 @@ mod context;
 mod event_loop;
 #[expect(dead_code)]
 mod inner;
+mod join_handle;
 mod net;
 #[expect(dead_code)]
 mod selectors;
+mod sleep;
 mod state;
 #[expect(dead_code)]
 mod task;
-#[expect(dead_code)]
+#[cfg(test)]
+mod test_utils;
 mod timers;
 mod waker;
 
-pub use context::{Context, JoinHandle};
+pub use context::Context;
 pub use event_loop::{Error, EventLoop};
+pub use join_handle::JoinHandle;
+pub use sleep::Sleep;
 pub use state::State;

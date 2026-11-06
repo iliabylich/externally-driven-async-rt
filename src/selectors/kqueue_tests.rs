@@ -1,12 +1,11 @@
 use core::time::Duration;
 use std::time::Instant;
 
-use rustix::event::{PollFd, PollFlags, Timespec, poll};
-use rustix::fd::{AsFd, OwnedFd};
-use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
+use rustix::fd::AsFd;
 
 use super::kqueue::Selector;
 use super::{Interest, SelectorEvent};
+use crate::test_utils::{is_readable, pair};
 
 const READ: Interest = Interest {
     read: true,
@@ -21,32 +20,10 @@ const NONE: Interest = Interest {
     write: false,
 };
 
-fn pair() -> (OwnedFd, OwnedFd) {
-    let (a, b) = socketpair(
-        AddressFamily::UNIX,
-        SocketType::STREAM,
-        SocketFlags::empty(),
-        None,
-    )
-    .unwrap();
-    rustix::io::ioctl_fionbio(&a, true).unwrap();
-    rustix::io::ioctl_fionbio(&b, true).unwrap();
-    (a, b)
-}
-
 fn collect(selector: &Selector) -> Vec<SelectorEvent> {
     let mut events = Vec::new();
     selector.poll_nonblocking(&mut events).unwrap();
     events
-}
-
-fn kqueue_is_readable(selector: &Selector, timeout_ms: i64) -> bool {
-    let mut fds = [PollFd::new(selector, PollFlags::IN)];
-    let timeout = Timespec {
-        tv_sec: 0,
-        tv_nsec: timeout_ms * 1_000_000,
-    };
-    poll(&mut fds, Some(&timeout)).unwrap() == 1
 }
 
 #[test]
@@ -56,7 +33,7 @@ fn registration_alone_produces_no_events() {
     selector.register(a.as_fd());
     selector.flush().unwrap();
     rustix::io::write(&b, b"x").unwrap();
-    assert!(!kqueue_is_readable(&selector, 0));
+    assert!(!is_readable(&selector, 0));
     assert_eq!(collect(&selector), vec![]);
 }
 
@@ -82,7 +59,7 @@ fn read_interest_is_one_shot() {
     rustix::io::write(&b, b"hello").unwrap();
     assert_eq!(collect(&selector), vec![SelectorEvent::Readable(token)]);
     rustix::io::write(&b, b"more").unwrap();
-    assert!(!kqueue_is_readable(&selector, 0));
+    assert!(!is_readable(&selector, 0));
     assert_eq!(collect(&selector), vec![]);
 
     selector.set_interest(token, READ);
@@ -111,7 +88,7 @@ fn removing_armed_interest_prevents_events() {
     selector.set_interest(token, NONE);
     selector.flush().unwrap();
     rustix::io::write(&b, b"x").unwrap();
-    assert!(!kqueue_is_readable(&selector, 0));
+    assert!(!is_readable(&selector, 0));
 }
 
 #[test]
@@ -177,7 +154,7 @@ fn deregister_removes_armed_filters_immediately() {
     selector.flush().unwrap();
     selector.deregister(token).unwrap();
     rustix::io::write(&b, b"x").unwrap();
-    assert!(!kqueue_is_readable(&selector, 0));
+    assert!(!is_readable(&selector, 0));
 }
 
 #[test]
@@ -210,17 +187,17 @@ fn timer_fires_after_flush() {
     let start = Instant::now();
     selector.arm_timer(Instant::now() + Duration::from_millis(20));
     selector.flush().unwrap();
-    assert!(kqueue_is_readable(&selector, 500));
+    assert!(is_readable(&selector, 500));
     assert!(start.elapsed() >= Duration::from_millis(20));
     assert_eq!(collect(&selector), vec![SelectorEvent::Timer]);
-    assert!(!kqueue_is_readable(&selector, 50));
+    assert!(!is_readable(&selector, 50));
 }
 
 #[test]
 fn timer_is_not_armed_without_flush() {
     let selector = Selector::new().unwrap();
     selector.arm_timer(Instant::now() + Duration::from_millis(1));
-    assert!(!kqueue_is_readable(&selector, 50));
+    assert!(!is_readable(&selector, 50));
 }
 
 #[test]
@@ -229,11 +206,11 @@ fn last_timer_change_before_flush_wins() {
     selector.arm_timer(Instant::now() + Duration::from_millis(1));
     selector.arm_timer(Instant::now() + Duration::from_secs(10));
     selector.flush().unwrap();
-    assert!(!kqueue_is_readable(&selector, 50));
+    assert!(!is_readable(&selector, 50));
 
     selector.arm_timer(Instant::now() + Duration::from_millis(10));
     selector.flush().unwrap();
-    assert!(kqueue_is_readable(&selector, 500));
+    assert!(is_readable(&selector, 500));
     assert_eq!(collect(&selector), vec![SelectorEvent::Timer]);
 }
 
@@ -244,7 +221,7 @@ fn disarm_prevents_firing() {
     selector.flush().unwrap();
     selector.disarm_timer();
     selector.flush().unwrap();
-    assert!(!kqueue_is_readable(&selector, 50));
+    assert!(!is_readable(&selector, 50));
     assert_eq!(collect(&selector), vec![]);
 }
 
@@ -253,7 +230,7 @@ fn disarm_after_timer_fired_is_ok() {
     let selector = Selector::new().unwrap();
     selector.arm_timer(Instant::now() + Duration::ZERO);
     selector.flush().unwrap();
-    assert!(kqueue_is_readable(&selector, 500));
+    assert!(is_readable(&selector, 500));
     selector.disarm_timer();
     selector.flush().unwrap();
     assert_eq!(collect(&selector), vec![]);

@@ -6,9 +6,9 @@ use core::task::{Context, Poll};
 use core::time::Duration;
 use std::rc::Rc;
 
-use rustix::event::{PollFd, PollFlags, Timespec, poll};
-use rustix::fd::{AsFd, OwnedFd};
-use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
+use rustix::fd::AsFd;
+
+use crate::test_utils::{is_readable, pair};
 
 fn inner() -> OwnedInner<()> {
     OwnedInner::new().unwrap()
@@ -27,28 +27,6 @@ fn parked_task(inner: &Inner<()>) -> (TaskId, Waker) {
     // SAFETY: `inner` outlives the waker.
     let waker = unsafe { new_waker(&inner.ready, id) };
     (id, waker)
-}
-
-fn pair() -> (OwnedFd, OwnedFd) {
-    let (a, b) = socketpair(
-        AddressFamily::UNIX,
-        SocketType::STREAM,
-        SocketFlags::empty(),
-        None,
-    )
-    .unwrap();
-    rustix::io::ioctl_fionbio(&a, true).unwrap();
-    rustix::io::ioctl_fionbio(&b, true).unwrap();
-    (a, b)
-}
-
-fn kqueue_is_readable(inner: &Inner<()>, timeout_ms: i64) -> bool {
-    let mut fds = [PollFd::new(&inner.selector, PollFlags::IN)];
-    let timeout = Timespec {
-        tv_sec: 0,
-        tv_nsec: timeout_ms * 1_000_000,
-    };
-    poll(&mut fds, Some(&timeout)).unwrap() == 1
 }
 
 #[test]
@@ -180,7 +158,7 @@ fn readable_event_wakes_the_reader_once() {
 
     rustix::io::write(&b, b"x").unwrap();
     inner.flush().unwrap();
-    assert!(!kqueue_is_readable(inner, 0));
+    assert!(!is_readable(inner, 0));
 }
 
 #[test]
@@ -194,7 +172,7 @@ fn removed_io_waker_arms_nothing() {
     inner.remove_io_waker(token, Direction::Read);
     rustix::io::write(&b, b"x").unwrap();
     inner.flush().unwrap();
-    assert!(!kqueue_is_readable(inner, 0));
+    assert!(!is_readable(inner, 0));
 }
 
 #[test]
@@ -208,7 +186,7 @@ fn deregistered_io_produces_no_events() {
     inner.flush().unwrap();
     inner.deregister_io(token).unwrap();
     rustix::io::write(&b, b"x").unwrap();
-    assert!(!kqueue_is_readable(inner, 0));
+    assert!(!is_readable(inner, 0));
 }
 
 #[test]
@@ -227,7 +205,7 @@ fn expired_timer_wakes_its_task() {
         .borrow_mut()
         .insert(now + Duration::from_secs(60), later_waker);
     inner.flush().unwrap();
-    assert!(kqueue_is_readable(inner, 500));
+    assert!(is_readable(inner, 500));
     inner.process_selector_events().unwrap();
     assert_eq!(*inner.ready.borrow(), vec![task]);
 }

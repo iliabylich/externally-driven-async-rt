@@ -1,10 +1,10 @@
-use core::cell::RefCell;
-use core::future::Future;
-use core::pin::Pin;
-use core::task::Poll;
+use core::time::Duration;
+use std::time::Instant;
 
 use crate::inner::Inner;
-use crate::task::{JoinStatus, TaskFuture, TaskId, Tasks};
+use crate::join_handle::JoinHandle;
+use crate::sleep::Sleep;
+use crate::task::TaskFuture;
 
 pub struct Context<E> {
     inner: *const Inner<E>,
@@ -29,26 +29,15 @@ impl<E> Context<E> {
         let inner = self.inner();
         // SAFETY: the future is stored in this `Inner`'s task storage right away.
         let id = inner.spawn(unsafe { task_future(self.inner, f) });
-        JoinHandle {
-            tasks: inner.tasks(),
-            id,
-        }
+        JoinHandle::new(inner.tasks(), id)
     }
-}
 
-pub struct JoinHandle<'ctx> {
-    tasks: &'ctx RefCell<Tasks>,
-    id: TaskId,
-}
+    pub fn sleep_until(&self, deadline: Instant) -> Sleep<'_> {
+        Sleep::new(self.inner().timers(), deadline)
+    }
 
-impl Future for JoinHandle<'_> {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {
-        match self.tasks.borrow_mut().set_join_waiter(self.id, cx.waker()) {
-            JoinStatus::Running => Poll::Pending,
-            JoinStatus::Finished => Poll::Ready(()),
-        }
+    pub fn sleep(&self, duration: Duration) -> Sleep<'_> {
+        self.sleep_until(Instant::now() + duration)
     }
 }
 
