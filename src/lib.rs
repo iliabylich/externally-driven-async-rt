@@ -7,9 +7,10 @@ extern crate alloc;
 
 mod context;
 mod event_loop;
+#[expect(dead_code)]
 mod inner;
 mod net;
-#[expect(dead_code, unused_imports)]
+#[cfg_attr(not(test), expect(dead_code))]
 mod selectors;
 mod state;
 #[expect(dead_code)]

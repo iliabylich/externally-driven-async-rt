@@ -1,6 +1,5 @@
 use alloc::collections::BTreeMap;
 use core::task::Waker;
-use core::time::Duration;
 use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -45,9 +44,9 @@ impl Timers {
         }
     }
 
-    pub(crate) fn next_timeout(&self, now: Instant) -> Option<Duration> {
+    pub(crate) fn next_deadline(&self) -> Option<Instant> {
         let (key, _) = self.map.first_key_value()?;
-        Some(key.deadline.saturating_duration_since(now))
+        Some(key.deadline)
     }
 }
 
@@ -55,6 +54,7 @@ impl Timers {
 mod tests {
     use super::*;
     use alloc::sync::Arc;
+    use core::time::Duration;
     use std::sync::Mutex;
     use std::task::Wake;
 
@@ -114,7 +114,7 @@ mod tests {
         let mut out = Vec::new();
         timers.expire(now, &mut out);
         assert!(out.is_empty());
-        assert_eq!(timers.next_timeout(now), None);
+        assert_eq!(timers.next_deadline(), None);
     }
 
     #[test]
@@ -130,19 +130,17 @@ mod tests {
     }
 
     #[test]
-    fn next_timeout_is_the_earliest_deadline() {
+    fn next_deadline_is_the_earliest_one() {
         let log = Arc::new(Log::default());
         let now = Instant::now();
         let mut timers = Timers::default();
-        assert_eq!(timers.next_timeout(now), None);
-        timers.insert(now + Duration::from_millis(30), waker(&log, 1));
-        let earliest = timers.insert(now + Duration::from_millis(10), waker(&log, 2));
-        assert_eq!(timers.next_timeout(now), Some(Duration::from_millis(10)));
+        assert_eq!(timers.next_deadline(), None);
+        let later = now + Duration::from_millis(30);
+        let earlier = now + Duration::from_millis(10);
+        timers.insert(later, waker(&log, 1));
+        let earliest = timers.insert(earlier, waker(&log, 2));
+        assert_eq!(timers.next_deadline(), Some(earlier));
         timers.remove(earliest);
-        assert_eq!(timers.next_timeout(now), Some(Duration::from_millis(30)));
-        assert_eq!(
-            timers.next_timeout(now + Duration::from_secs(1)),
-            Some(Duration::ZERO)
-        );
+        assert_eq!(timers.next_deadline(), Some(later));
     }
 }

@@ -199,7 +199,7 @@ fn many_ready_fds_are_all_delivered() {
         let token = selector.register(a.as_fd());
         selector.set_interest(token, WRITE);
     }
-    selector.arm_timer(Duration::from_secs(10));
+    selector.arm_timer(Instant::now() + Duration::from_secs(10));
     selector.flush().unwrap();
     assert_eq!(collect(&selector).len(), pairs.len());
 }
@@ -208,7 +208,7 @@ fn many_ready_fds_are_all_delivered() {
 fn timer_fires_after_flush() {
     let selector = Selector::new().unwrap();
     let start = Instant::now();
-    selector.arm_timer(Duration::from_millis(20));
+    selector.arm_timer(Instant::now() + Duration::from_millis(20));
     selector.flush().unwrap();
     assert!(kqueue_is_readable(&selector, 500));
     assert!(start.elapsed() >= Duration::from_millis(20));
@@ -219,19 +219,19 @@ fn timer_fires_after_flush() {
 #[test]
 fn timer_is_not_armed_without_flush() {
     let selector = Selector::new().unwrap();
-    selector.arm_timer(Duration::from_millis(1));
+    selector.arm_timer(Instant::now() + Duration::from_millis(1));
     assert!(!kqueue_is_readable(&selector, 50));
 }
 
 #[test]
 fn last_timer_change_before_flush_wins() {
     let selector = Selector::new().unwrap();
-    selector.arm_timer(Duration::from_millis(1));
-    selector.arm_timer(Duration::from_secs(10));
+    selector.arm_timer(Instant::now() + Duration::from_millis(1));
+    selector.arm_timer(Instant::now() + Duration::from_secs(10));
     selector.flush().unwrap();
     assert!(!kqueue_is_readable(&selector, 50));
 
-    selector.arm_timer(Duration::from_millis(10));
+    selector.arm_timer(Instant::now() + Duration::from_millis(10));
     selector.flush().unwrap();
     assert!(kqueue_is_readable(&selector, 500));
     assert_eq!(collect(&selector), vec![SelectorEvent::Timer]);
@@ -240,7 +240,7 @@ fn last_timer_change_before_flush_wins() {
 #[test]
 fn disarm_prevents_firing() {
     let selector = Selector::new().unwrap();
-    selector.arm_timer(Duration::from_millis(10));
+    selector.arm_timer(Instant::now() + Duration::from_millis(10));
     selector.flush().unwrap();
     selector.disarm_timer();
     selector.flush().unwrap();
@@ -251,7 +251,7 @@ fn disarm_prevents_firing() {
 #[test]
 fn disarm_after_timer_fired_is_ok() {
     let selector = Selector::new().unwrap();
-    selector.arm_timer(Duration::ZERO);
+    selector.arm_timer(Instant::now() + Duration::ZERO);
     selector.flush().unwrap();
     assert!(kqueue_is_readable(&selector, 500));
     selector.disarm_timer();

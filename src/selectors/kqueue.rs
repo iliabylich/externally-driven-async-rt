@@ -1,6 +1,7 @@
 use core::cell::RefCell;
 use core::mem::MaybeUninit;
 use core::time::Duration;
+use std::time::Instant;
 
 use rustix::buffer::spare_capacity;
 use rustix::event::kqueue::{Event, EventFilter, EventFlags, kevent, kqueue};
@@ -54,8 +55,8 @@ impl Selector {
             .set_interest_in_memory(token, interest);
     }
 
-    pub(crate) fn arm_timer(&self, after: Duration) {
-        self.timer.borrow_mut().arm_in_memory(after);
+    pub(crate) fn arm_timer(&self, deadline: Instant) {
+        self.timer.borrow_mut().arm_in_memory(deadline);
     }
 
     pub(crate) fn disarm_timer(&self) {
@@ -67,7 +68,7 @@ impl Selector {
         for transition in self.registrations.borrow_mut().flush() {
             changes.extend(transition.kevents());
         }
-        if let Some(change) = self.timer.borrow_mut().flush() {
+        if let Some(change) = self.timer.borrow_mut().flush(Instant::now()) {
             changes.push(change.kevent());
         }
         self.submit(&changes)
@@ -146,7 +147,7 @@ impl Selector {
 impl TimerChange {
     fn kevent(self) -> Event {
         let (timer, flags) = match self {
-            // `after` is whole milliseconds (see `Timer::arm_in_memory`): rustix truncates
+            // `after` is whole milliseconds (see `Timer::flush`): rustix truncates
             // sub-ms parts for some durations (e.g. 1.0005s becomes 1s), but converts these
             // exactly.
             TimerChange::Arm(after) => (Some(after), EventFlags::ADD | EventFlags::ONESHOT),
