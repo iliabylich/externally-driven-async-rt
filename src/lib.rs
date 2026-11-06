@@ -5,6 +5,7 @@ compile_error!(
 
 extern crate alloc;
 
+#[cfg_attr(not(test), expect(dead_code))]
 mod context;
 mod event_loop;
 #[expect(dead_code)]
@@ -20,4 +21,5 @@ mod timers;
 #[cfg_attr(not(test), expect(dead_code))]
 mod waker;
 
+pub use context::Context;
 pub use state::State;

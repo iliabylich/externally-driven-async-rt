@@ -68,6 +68,14 @@ impl<E> Inner<E> {
         })
     }
 
+    pub(crate) fn dispatch(&self, event: E) {
+        self.events.borrow_mut().push_back(event);
+    }
+
+    pub(crate) fn pop_event(&self) -> Option<E> {
+        self.events.borrow_mut().pop_front()
+    }
+
     pub(crate) fn spawn(&self, future: TaskFuture) -> TaskId {
         let id = self.tasks.borrow_mut().insert(future);
         self.ready.borrow_mut().push(id);
