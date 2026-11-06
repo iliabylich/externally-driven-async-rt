@@ -1,5 +1,10 @@
+use core::cell::RefCell;
+use core::future::Future;
+use core::pin::Pin;
+use core::task::Poll;
+
 use crate::inner::Inner;
-use crate::task::TaskFuture;
+use crate::task::{JoinStatus, TaskFuture, TaskId, Tasks};
 
 pub struct Context<E> {
     inner: *const Inner<E>,
@@ -14,6 +19,36 @@ impl<E> Context<E> {
 
     pub fn dispatch(&self, event: E) {
         self.inner().dispatch(event);
+    }
+
+    pub fn spawn<F>(&self, f: F) -> JoinHandle<'_>
+    where
+        E: 'static,
+        F: AsyncFnOnce(&Context<E>) + 'static,
+    {
+        let inner = self.inner();
+        // SAFETY: the future is stored in this `Inner`'s task storage right away.
+        let id = inner.spawn(unsafe { task_future(self.inner, f) });
+        JoinHandle {
+            tasks: inner.tasks(),
+            id,
+        }
+    }
+}
+
+pub struct JoinHandle<'ctx> {
+    tasks: &'ctx RefCell<Tasks>,
+    id: TaskId,
+}
+
+impl Future for JoinHandle<'_> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {
+        match self.tasks.borrow_mut().set_join_waiter(self.id, cx.waker()) {
+            JoinStatus::Running => Poll::Pending,
+            JoinStatus::Finished => Poll::Ready(()),
+        }
     }
 }
 

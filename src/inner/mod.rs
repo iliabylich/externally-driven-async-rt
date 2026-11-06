@@ -6,7 +6,7 @@ use core::task::Waker;
 use std::collections::HashMap;
 use std::time::Instant;
 
-use rustix::fd::BorrowedFd;
+use rustix::fd::{AsFd, BorrowedFd};
 
 use crate::selectors::{Interest, Selector, SelectorEvent, Token};
 use crate::task::{TaskFuture, TaskId, Tasks};
@@ -82,6 +82,10 @@ impl<E> Inner<E> {
         id
     }
 
+    pub(crate) fn tasks(&self) -> &RefCell<Tasks> {
+        &self.tasks
+    }
+
     pub(crate) fn register_io(&self, fd: BorrowedFd<'_>) -> Token {
         let token = self.selector.register(fd);
         self.io.borrow_mut().insert(token, IoWaiters::default());
@@ -146,6 +150,10 @@ impl<E> Inner<E> {
         self.selector.flush()
     }
 
+    pub(crate) fn has_ready_tasks(&self) -> bool {
+        !self.ready.borrow().is_empty()
+    }
+
     pub(crate) fn run_ready_tasks(&self, root: TaskId) -> RootStatus {
         loop {
             let ready = mem::take(&mut *self.ready.borrow_mut());
@@ -192,6 +200,12 @@ impl<E> Inner<E> {
             // Dropping may spawn new tasks, the next iteration drops them as well.
             futures.clear();
         }
+    }
+}
+
+impl<E> AsFd for Inner<E> {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.selector.as_fd()
     }
 }
 

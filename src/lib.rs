@@ -5,21 +5,20 @@ compile_error!(
 
 extern crate alloc;
 
-#[cfg_attr(not(test), expect(dead_code))]
 mod context;
 mod event_loop;
 #[expect(dead_code)]
 mod inner;
 mod net;
-#[cfg_attr(not(test), expect(dead_code))]
+#[expect(dead_code)]
 mod selectors;
 mod state;
 #[expect(dead_code)]
 mod task;
 #[expect(dead_code)]
 mod timers;
-#[cfg_attr(not(test), expect(dead_code))]
 mod waker;
 
-pub use context::Context;
+pub use context::{Context, JoinHandle};
+pub use event_loop::{Error, EventLoop};
 pub use state::State;
