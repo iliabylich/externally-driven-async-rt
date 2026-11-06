@@ -8,16 +8,14 @@ use rustix::event::kqueue::{Event, EventFilter, EventFlags, kevent, kqueue};
 use rustix::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use rustix::io::{Errno, FdFlags, fcntl_setfd};
 
-use super::registrations::{Registrations, Transition};
 use super::timer::{Timer, TimerChange};
-use super::{Interest, SelectorEvent, Token};
+use super::{Direction, IoAction, IoChange, SelectorEvent, Token};
 
 const TIMER_IDENT: isize = 0;
 const EVENTS_PER_CALL: usize = 64;
 
 pub(crate) struct Selector {
     kq: OwnedFd,
-    registrations: RefCell<Registrations>,
     timer: RefCell<Timer>,
 }
 
@@ -27,32 +25,15 @@ impl Selector {
         fcntl_setfd(&kq, FdFlags::CLOEXEC)?;
         Ok(Self {
             kq,
-            registrations: RefCell::new(Registrations::default()),
             timer: RefCell::new(Timer::default()),
         })
     }
 
-    pub(crate) fn register(&self, fd: BorrowedFd<'_>) -> Token {
-        self.registrations
-            .borrow_mut()
-            .register_in_memory(fd.as_raw_fd())
-    }
-
-    /// Must be called while the fd is still open. Armed filters are deleted right away (not
-    /// in the next `flush`): by then the fd may be closed and its number reused by another
-    /// socket, whose filters a batched delete would remove.
-    pub(crate) fn deregister(&self, token: Token) -> rustix::io::Result<()> {
-        let Some(transition) = self.registrations.borrow_mut().deregister_now(token) else {
-            return Ok(());
-        };
-        let changes: Vec<Event> = transition.kevents().collect();
-        self.submit(&changes)
-    }
-
-    pub(crate) fn set_interest(&self, token: Token, interest: Interest) {
-        self.registrations
-            .borrow_mut()
-            .set_interest_in_memory(token, interest);
+    /// Applies `change` right away instead of in the next `flush`. Used to delete the filter of
+    /// a registration that ends: by the next `flush` its fd may be closed and its number reused
+    /// by another socket, whose filter a batched delete would remove. `change.fd` must be open.
+    pub(crate) fn apply_now(&self, change: IoChange) -> rustix::io::Result<()> {
+        self.submit(&[change.kevent()])
     }
 
     pub(crate) fn arm_timer(&self, deadline: Instant) {
@@ -63,11 +44,10 @@ impl Selector {
         self.timer.borrow_mut().disarm_in_memory();
     }
 
-    pub(crate) fn flush(&self) -> rustix::io::Result<()> {
-        let mut changes = Vec::new();
-        for transition in self.registrations.borrow_mut().flush() {
-            changes.extend(transition.kevents());
-        }
+    /// Submits `io_changes` and the pending timer change in one changelist. Every fd in
+    /// `io_changes` must be open.
+    pub(crate) fn flush(&self, io_changes: &[IoChange]) -> rustix::io::Result<()> {
+        let mut changes: Vec<Event> = io_changes.iter().map(|change| change.kevent()).collect();
         if let Some(change) = self.timer.borrow_mut().flush(Instant::now()) {
             changes.push(change.kevent());
         }
@@ -101,9 +81,9 @@ impl Selector {
             return Ok(());
         }
         let mut receipts = Vec::with_capacity(changes.len());
-        // SAFETY: every fd in `changes` belongs to a live registration, and registrations
-        // are removed (with their filters) before their fd is closed (see `deregister`),
-        // so the kqueue never refers to an invalid fd.
+        // SAFETY: the callers (`flush`, `apply_now`) only pass open fds, and a filter is deleted
+        // (`apply_now`) before its registration ends and the fd can be closed, so the kqueue
+        // never refers to an invalid fd.
         let result = unsafe {
             kevent(
                 &self.kq,
@@ -131,10 +111,9 @@ impl Selector {
 
     fn consume(&self, event: &Event) -> Option<SelectorEvent> {
         let token = Token(event.udata().addr() as u64);
-        let mut registrations = self.registrations.borrow_mut();
         match event.filter() {
-            EventFilter::Read(_) => registrations.on_readable(token),
-            EventFilter::Write(_) => registrations.on_writable(token),
+            EventFilter::Read(_) => Some(SelectorEvent::Readable(token)),
+            EventFilter::Write(_) => Some(SelectorEvent::Writable(token)),
             EventFilter::Timer { .. } => {
                 self.timer.borrow_mut().fired();
                 Some(SelectorEvent::Timer)
@@ -164,32 +143,18 @@ impl TimerChange {
     }
 }
 
-impl Transition {
-    fn read_flags(&self) -> Option<EventFlags> {
-        filter_flags(self.armed.read, self.desired.read)
-    }
-
-    fn write_flags(&self) -> Option<EventFlags> {
-        filter_flags(self.armed.write, self.desired.write)
-    }
-
-    fn kevents(&self) -> impl Iterator<Item = Event> {
+impl IoChange {
+    fn kevent(self) -> Event {
+        let filter = match self.direction {
+            Direction::Read => EventFilter::Read(self.fd),
+            Direction::Write => EventFilter::Write(self.fd),
+        };
+        let flags = match self.action {
+            IoAction::Arm => EventFlags::ADD | EventFlags::ONESHOT,
+            IoAction::Disarm => EventFlags::DELETE,
+        };
         let udata = core::ptr::without_provenance_mut(self.token.0 as usize);
-        let read = self
-            .read_flags()
-            .map(|flags| Event::new(EventFilter::Read(self.fd), flags, udata));
-        let write = self
-            .write_flags()
-            .map(|flags| Event::new(EventFilter::Write(self.fd), flags, udata));
-        read.into_iter().chain(write)
-    }
-}
-
-fn filter_flags(armed: bool, desired: bool) -> Option<EventFlags> {
-    match (armed, desired) {
-        (false, true) => Some(EventFlags::ADD | EventFlags::ONESHOT | EventFlags::RECEIPT),
-        (true, false) => Some(EventFlags::DELETE | EventFlags::RECEIPT),
-        _ => None,
+        Event::new(filter, flags | EventFlags::RECEIPT, udata)
     }
 }
 

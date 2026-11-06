@@ -6,9 +6,17 @@ use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::fd::{AsFd, OwnedFd};
 use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
 
-use crate::inner::Direction;
 use crate::io::IoRegistration;
+use crate::selectors::Direction;
 use crate::{Context, Error, EventLoop, State};
+
+pub(crate) const TEST_MAX_TASKS: usize = 128;
+
+pub(crate) const TEST_MAX_TIMERS: usize = 128;
+
+pub(crate) const TEST_MAX_IO: usize = 64;
+
+pub(crate) type TestContext = Context<Log>;
 
 #[derive(Default)]
 pub(crate) struct Log(pub(crate) Vec<u32>);
@@ -44,13 +52,13 @@ pub(crate) fn is_readable(fd: impl AsFd, timeout_ms: i64) -> bool {
 }
 
 pub(crate) fn readable<'a>(
-    ctx: &'a Context<u32>,
+    ctx: &'a TestContext,
     fd: &'a OwnedFd,
 ) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
     Box::pin(async move {
-        let mut registration = IoRegistration::new(ctx.inner(), fd.as_fd());
+        let mut registration = IoRegistration::new(ctx.event_loop(), fd.as_fd(), Direction::Read);
         while !is_readable(fd, 0) {
-            registration.wait(Direction::Read).await;
+            registration.wait().await;
         }
     })
 }
@@ -60,13 +68,13 @@ pub(crate) fn wake_by_writing(event_loop: &impl AsFd, peer: &OwnedFd) {
     assert!(is_readable(event_loop, 1000));
 }
 
-pub(crate) fn run_until_root_finishes<S: State>(event_loop: &mut EventLoop<S>) {
+pub(crate) fn run_until_root_finishes<S: State>(event_loop: &mut Pin<Box<EventLoop<S>>>) {
     loop {
         assert!(
-            is_readable(&*event_loop, 2000),
+            is_readable(&**event_loop, 2000),
             "the loop never became ready"
         );
-        match event_loop.drain_events_without_blocking() {
+        match event_loop.as_mut().drain_events_without_blocking() {
             Ok(()) => {}
             Err(Error::RootFinished) => return,
             Err(err) => panic!("{err}"),
@@ -76,10 +84,9 @@ pub(crate) fn run_until_root_finishes<S: State>(event_loop: &mut EventLoop<S>) {
 
 pub(crate) fn has_timers<S: State>(event_loop: &EventLoop<S>) -> bool {
     event_loop
-        .inner()
-        .timers()
+        .storage()
         .borrow()
-        .next_deadline()
+        .next_timer_deadline()
         .is_some()
 }
 
@@ -106,12 +113,12 @@ impl<A: Future + Unpin, B: Future + Unpin> Future for First<A, B> {
     }
 }
 
-pub(crate) fn run_until_events(event_loop: &mut EventLoop<Log>, count: usize) {
-    while event_loop.state_mut().0.len() < count {
+pub(crate) fn run_until_events(event_loop: &mut Pin<Box<EventLoop<Log>>>, count: usize) {
+    while event_loop.as_mut().state_mut().0.len() < count {
         assert!(
-            is_readable(&*event_loop, 2000),
+            is_readable(&**event_loop, 2000),
             "the loop never became ready"
         );
-        assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
+        assert_eq!(event_loop.as_mut().drain_events_without_blocking(), Ok(()));
     }
 }

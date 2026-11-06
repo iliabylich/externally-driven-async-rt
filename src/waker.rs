@@ -1,10 +1,8 @@
-use core::cell::RefCell;
 use core::task::{RawWaker, RawWakerVTable, Waker};
 use std::thread::{self, ThreadId};
 
-use crate::task::TaskId;
-
-pub(crate) type ReadyQueue = RefCell<Vec<TaskId>>;
+use crate::ready::ReadyQueue;
+use crate::storage::TaskId;
 
 #[derive(Clone, Copy)]
 struct WakerData {
@@ -57,7 +55,7 @@ fn push(data: WakerData) {
     }
     // SAFETY: `new_waker`'s caller guarantees `ready` is valid while wakers may be woken, and
     // we are on the loop's thread, so nothing else accesses it concurrently.
-    unsafe { (*data.ready).borrow_mut().push(data.task) };
+    unsafe { (*data.ready).push(data.task) };
 }
 
 unsafe fn drop_waker(ptr: *const ()) {
@@ -69,50 +67,80 @@ unsafe fn drop_waker(ptr: *const ()) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::task::Tasks;
+    use crate::storage::Storage;
 
-    fn task_id() -> TaskId {
-        Tasks::default().insert(Box::pin(async {}))
+    fn storage_with_task() -> (Storage, TaskId) {
+        let mut storage = Storage::new(2, 1, 1);
+        let task = storage.insert_task(Box::pin(async {})).ok().unwrap();
+        (storage, task)
+    }
+
+    fn queued(storage: &Storage) -> Vec<TaskId> {
+        core::iter::from_fn(|| storage.ready().pop()).collect()
     }
 
     #[test]
     fn waking_pushes_the_task() {
-        let ready = ReadyQueue::default();
-        let task = task_id();
-        // SAFETY: `ready` outlives the waker.
-        let waker = unsafe { new_waker(&ready, task) };
+        let (storage, task) = storage_with_task();
+        // SAFETY: `storage` outlives the waker.
+        let waker = unsafe { new_waker(storage.ready(), task) };
         waker.wake_by_ref();
+        assert_eq!(queued(&storage), vec![task]);
         let clone = waker.clone();
         drop(waker);
         clone.wake();
-        assert_eq!(*ready.borrow(), vec![task, task]);
+        assert_eq!(queued(&storage), vec![task]);
+    }
+
+    #[test]
+    fn duplicate_wakes_queue_the_task_once() {
+        let (storage, task) = storage_with_task();
+        // SAFETY: `storage` outlives the waker.
+        let waker = unsafe { new_waker(storage.ready(), task) };
+        waker.wake_by_ref();
+        waker.wake_by_ref();
+        waker.wake();
+        assert_eq!(queued(&storage), vec![task]);
+    }
+
+    #[test]
+    fn waking_after_the_storage_was_mutated() {
+        let (mut storage, task) = storage_with_task();
+        // SAFETY: `storage` outlives the waker.
+        let waker = unsafe { new_waker(storage.ready(), task) };
+        let other = storage.insert_task(Box::pin(async {})).ok().unwrap();
+        storage.alloc_timer(std::time::Instant::now(), Waker::noop().clone());
+        waker.wake_by_ref();
+        storage.remove_task(other);
+        waker.wake();
+        assert_eq!(queued(&storage), vec![task]);
     }
 
     #[test]
     fn dropping_does_not_wake() {
-        let ready = ReadyQueue::default();
-        // SAFETY: `ready` outlives the waker.
-        let waker = unsafe { new_waker(&ready, task_id()) };
+        let (storage, task) = storage_with_task();
+        // SAFETY: `storage` outlives the waker.
+        let waker = unsafe { new_waker(storage.ready(), task) };
         drop(waker.clone());
         drop(waker);
-        assert!(ready.borrow().is_empty());
+        assert!(storage.ready().is_empty());
     }
 
     #[test]
     fn dropping_on_another_thread_is_fine() {
-        let ready = ReadyQueue::default();
-        // SAFETY: `ready` outlives the waker.
-        let waker = unsafe { new_waker(&ready, task_id()) };
+        let (storage, task) = storage_with_task();
+        // SAFETY: `storage` outlives the waker.
+        let waker = unsafe { new_waker(storage.ready(), task) };
         thread::spawn(move || drop(waker.clone())).join().unwrap();
     }
 
     #[test]
     fn waking_on_another_thread_panics() {
-        let ready = ReadyQueue::default();
-        // SAFETY: `ready` outlives the waker.
-        let waker = unsafe { new_waker(&ready, task_id()) };
+        let (storage, task) = storage_with_task();
+        // SAFETY: `storage` outlives the waker.
+        let waker = unsafe { new_waker(storage.ready(), task) };
         let result = thread::spawn(move || waker.wake()).join();
         assert!(result.is_err());
-        assert!(ready.borrow().is_empty());
+        assert!(storage.ready().is_empty());
     }
 }

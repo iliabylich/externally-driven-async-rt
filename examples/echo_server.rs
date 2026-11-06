@@ -4,6 +4,14 @@ use core::time::Duration;
 
 use externally_driven_async_rt::net::{TcpListener, TcpStream};
 use externally_driven_async_rt::{Context, Error, EventLoop, State};
+
+const MAX_TASKS: usize = 1024;
+
+const MAX_TIMERS: usize = 4;
+
+const MAX_IO: usize = 1024;
+
+type ServerContext = Context<Server>;
 use rustix::event::{PollFd, PollFlags, poll};
 use rustix::io::Errno;
 
@@ -68,7 +76,7 @@ impl Server {
     }
 }
 
-async fn accept_loop(ctx: &Context<Event>, addr: SocketAddr) {
+async fn accept_loop(ctx: &ServerContext, addr: SocketAddr) {
     let mut listener = TcpListener::bind(addr).unwrap();
     ctx.dispatch(Event::Listening(listener.local_addr().unwrap()));
     ctx.spawn(async |ctx| {
@@ -95,7 +103,7 @@ async fn accept_loop(ctx: &Context<Event>, addr: SocketAddr) {
 }
 
 async fn echo(
-    ctx: &Context<Event>,
+    ctx: &ServerContext,
     mut stream: TcpStream,
     peer: SocketAddr,
 ) -> rustix::io::Result<()> {
@@ -149,10 +157,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(arg) => arg.parse()?,
         None => "127.0.0.1:7878".parse()?,
     };
-    let mut event_loop = EventLoop::new(Server::default(), async move |ctx| {
-        accept_loop(ctx, addr).await;
-    })?;
-    for line in mem::take(&mut event_loop.state_mut().log) {
+    let mut event_loop = EventLoop::new(
+        Server::default(),
+        MAX_TASKS,
+        MAX_TIMERS,
+        MAX_IO,
+        async move |ctx| {
+            accept_loop(ctx, addr).await;
+        },
+    )?;
+    for line in mem::take(&mut event_loop.as_mut().state_mut().log) {
         println!("{line}");
     }
     println!("commands: stats, quit");
@@ -163,7 +177,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         let (loop_ready, stdin_ready) = {
             let mut fds = [
-                PollFd::new(&event_loop, PollFlags::IN),
+                PollFd::new(&*event_loop, PollFlags::IN),
                 PollFd::new(&stdin, PollFlags::IN),
             ];
             match poll(&mut fds, None) {
@@ -175,8 +189,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         if loop_ready {
-            let result = event_loop.drain_events_without_blocking();
-            for line in mem::take(&mut event_loop.state_mut().log) {
+            let result = event_loop.as_mut().drain_events_without_blocking();
+            for line in mem::take(&mut event_loop.as_mut().state_mut().log) {
                 println!("{line}");
             }
             match result {
@@ -193,7 +207,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             for command in commands.drain(..) {
                 match command {
-                    Command::Stats => println!("{}", event_loop.state_mut().stats()),
+                    Command::Stats => println!("{}", event_loop.as_mut().state_mut().stats()),
                     Command::Quit => return Ok(()),
                     Command::Unknown(command) => println!("unknown command: {command:?}"),
                 }

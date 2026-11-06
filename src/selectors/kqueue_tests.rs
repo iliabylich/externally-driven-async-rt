@@ -1,24 +1,28 @@
 use core::time::Duration;
 use std::time::Instant;
 
-use rustix::fd::AsFd;
+use rustix::fd::{AsRawFd, OwnedFd};
 
 use super::kqueue::Selector;
-use super::{Interest, SelectorEvent};
+use super::{Direction, IoAction, IoChange, SelectorEvent, Token};
 use crate::test_utils::{is_readable, pair};
 
-const READ: Interest = Interest {
-    read: true,
-    write: false,
-};
-const WRITE: Interest = Interest {
-    read: false,
-    write: true,
-};
-const NONE: Interest = Interest {
-    read: false,
-    write: false,
-};
+fn change(token: u64, fd: &OwnedFd, direction: Direction, action: IoAction) -> IoChange {
+    IoChange {
+        token: Token(token),
+        fd: fd.as_raw_fd(),
+        direction,
+        action,
+    }
+}
+
+fn arm(token: u64, fd: &OwnedFd, direction: Direction) -> IoChange {
+    change(token, fd, direction, IoAction::Arm)
+}
+
+fn disarm(token: u64, fd: &OwnedFd, direction: Direction) -> IoChange {
+    change(token, fd, direction, IoAction::Disarm)
+}
 
 fn collect(selector: &Selector) -> Vec<SelectorEvent> {
     let mut events = Vec::new();
@@ -27,44 +31,37 @@ fn collect(selector: &Selector) -> Vec<SelectorEvent> {
 }
 
 #[test]
-fn registration_alone_produces_no_events() {
+fn nothing_armed_produces_no_events() {
     let selector = Selector::new().unwrap();
-    let (a, b) = pair();
-    selector.register(a.as_fd());
-    selector.flush().unwrap();
+    let (_a, b) = pair();
+    selector.flush(&[]).unwrap();
     rustix::io::write(&b, b"x").unwrap();
     assert!(!is_readable(&selector, 0));
     assert_eq!(collect(&selector), vec![]);
 }
 
 #[test]
-fn interest_is_applied_only_on_flush() {
+fn armed_write_is_reported_with_its_token() {
     let selector = Selector::new().unwrap();
     let (a, _b) = pair();
-    let token = selector.register(a.as_fd());
-    selector.set_interest(token, WRITE);
-    assert_eq!(collect(&selector), vec![]);
-    selector.flush().unwrap();
-    assert_eq!(collect(&selector), vec![SelectorEvent::Writable(token)]);
+    selector.flush(&[arm(1, &a, Direction::Write)]).unwrap();
+    assert_eq!(collect(&selector), vec![SelectorEvent::Writable(Token(1))]);
 }
 
 #[test]
 fn read_interest_is_one_shot() {
     let selector = Selector::new().unwrap();
     let (a, b) = pair();
-    let token = selector.register(a.as_fd());
-    selector.set_interest(token, READ);
-    selector.flush().unwrap();
+    selector.flush(&[arm(2, &a, Direction::Read)]).unwrap();
 
     rustix::io::write(&b, b"hello").unwrap();
-    assert_eq!(collect(&selector), vec![SelectorEvent::Readable(token)]);
+    assert_eq!(collect(&selector), vec![SelectorEvent::Readable(Token(2))]);
     rustix::io::write(&b, b"more").unwrap();
     assert!(!is_readable(&selector, 0));
     assert_eq!(collect(&selector), vec![]);
 
-    selector.set_interest(token, READ);
-    selector.flush().unwrap();
-    assert_eq!(collect(&selector), vec![SelectorEvent::Readable(token)]);
+    selector.flush(&[arm(2, &a, Direction::Read)]).unwrap();
+    assert_eq!(collect(&selector), vec![SelectorEvent::Readable(Token(2))]);
 }
 
 #[test]
@@ -72,112 +69,74 @@ fn data_that_arrived_before_arming_is_reported() {
     let selector = Selector::new().unwrap();
     let (a, b) = pair();
     rustix::io::write(&b, b"early").unwrap();
-    let token = selector.register(a.as_fd());
-    selector.set_interest(token, READ);
-    selector.flush().unwrap();
-    assert_eq!(collect(&selector), vec![SelectorEvent::Readable(token)]);
+    selector.flush(&[arm(3, &a, Direction::Read)]).unwrap();
+    assert_eq!(collect(&selector), vec![SelectorEvent::Readable(Token(3))]);
 }
 
 #[test]
-fn removing_armed_interest_prevents_events() {
+fn disarming_prevents_events() {
     let selector = Selector::new().unwrap();
     let (a, b) = pair();
-    let token = selector.register(a.as_fd());
-    selector.set_interest(token, READ);
-    selector.flush().unwrap();
-    selector.set_interest(token, NONE);
-    selector.flush().unwrap();
+    selector.flush(&[arm(4, &a, Direction::Read)]).unwrap();
+    selector.flush(&[disarm(4, &a, Direction::Read)]).unwrap();
     rustix::io::write(&b, b"x").unwrap();
     assert!(!is_readable(&selector, 0));
 }
 
 #[test]
-fn interest_toggled_before_flush_issues_nothing() {
+fn apply_now_deletes_an_armed_filter_without_flush() {
     let selector = Selector::new().unwrap();
     let (a, b) = pair();
-    let token = selector.register(a.as_fd());
-    selector.set_interest(token, READ);
-    selector.set_interest(token, NONE);
-    selector.flush().unwrap();
+    selector.flush(&[arm(5, &a, Direction::Read)]).unwrap();
+    selector.apply_now(disarm(5, &a, Direction::Read)).unwrap();
     rustix::io::write(&b, b"x").unwrap();
-    assert_eq!(collect(&selector), vec![]);
+    assert!(!is_readable(&selector, 0));
 }
 
 #[test]
-fn deregistered_then_closed_fd_produces_no_events() {
+fn deleted_then_closed_fd_produces_no_events() {
     let selector = Selector::new().unwrap();
     let (a, b) = pair();
-    let token = selector.register(a.as_fd());
-    selector.set_interest(token, READ);
-    selector.flush().unwrap();
-    selector.deregister(token).unwrap();
+    selector.flush(&[arm(6, &a, Direction::Read)]).unwrap();
+    selector.apply_now(disarm(6, &a, Direction::Read)).unwrap();
     drop(a);
     rustix::io::write(&b, b"x").ok();
     assert_eq!(collect(&selector), vec![]);
 }
 
 #[test]
-fn pending_change_of_deregistered_fd_is_dropped() {
+fn disarming_a_filter_that_already_fired_is_ok() {
     let selector = Selector::new().unwrap();
     let (a, _b) = pair();
-    let token = selector.register(a.as_fd());
-    selector.set_interest(token, WRITE);
-    selector.deregister(token).unwrap();
-    drop(a);
-    selector.flush().unwrap();
-    assert_eq!(collect(&selector), vec![]);
+    selector.flush(&[arm(7, &a, Direction::Write)]).unwrap();
+    assert_eq!(collect(&selector), vec![SelectorEvent::Writable(Token(7))]);
+    selector.apply_now(disarm(7, &a, Direction::Write)).unwrap();
 }
 
 #[test]
 fn reused_fd_number_reports_the_new_token() {
     let selector = Selector::new().unwrap();
     let (a, _b) = pair();
-    let token = selector.register(a.as_fd());
-    selector.set_interest(token, WRITE);
-    selector.flush().unwrap();
-    selector.deregister(token).unwrap();
+    selector.flush(&[arm(8, &a, Direction::Write)]).unwrap();
+    selector.apply_now(disarm(8, &a, Direction::Write)).unwrap();
     drop(a);
 
     let (c, _d) = pair();
-    let new_token = selector.register(c.as_fd());
-    selector.set_interest(new_token, WRITE);
-    selector.flush().unwrap();
-    assert_eq!(collect(&selector), vec![SelectorEvent::Writable(new_token)]);
-}
-
-#[test]
-fn deregister_removes_armed_filters_immediately() {
-    let selector = Selector::new().unwrap();
-    let (a, b) = pair();
-    let token = selector.register(a.as_fd());
-    selector.set_interest(token, READ);
-    selector.flush().unwrap();
-    selector.deregister(token).unwrap();
-    rustix::io::write(&b, b"x").unwrap();
-    assert!(!is_readable(&selector, 0));
-}
-
-#[test]
-fn deregister_after_event_was_consumed_is_ok() {
-    let selector = Selector::new().unwrap();
-    let (a, _b) = pair();
-    let token = selector.register(a.as_fd());
-    selector.set_interest(token, WRITE);
-    selector.flush().unwrap();
-    assert_eq!(collect(&selector), vec![SelectorEvent::Writable(token)]);
-    selector.deregister(token).unwrap();
+    selector.flush(&[arm(9, &c, Direction::Write)]).unwrap();
+    assert_eq!(collect(&selector), vec![SelectorEvent::Writable(Token(9))]);
 }
 
 #[test]
 fn many_ready_fds_are_all_delivered() {
     let selector = Selector::new().unwrap();
     let pairs: Vec<_> = (0..100).map(|_| pair()).collect();
-    for (a, _) in &pairs {
-        let token = selector.register(a.as_fd());
-        selector.set_interest(token, WRITE);
-    }
+    let changes: Vec<_> = pairs
+        .iter()
+        .enumerate()
+        .map(|(i, (a, _))| arm(i as u64, a, Direction::Write))
+        .collect();
     selector.arm_timer(Instant::now() + Duration::from_secs(10));
-    selector.flush().unwrap();
+    selector.flush(&changes).unwrap();
     assert_eq!(collect(&selector).len(), pairs.len());
 }
 
@@ -186,7 +145,7 @@ fn timer_fires_after_flush() {
     let selector = Selector::new().unwrap();
     let start = Instant::now();
     selector.arm_timer(Instant::now() + Duration::from_millis(20));
-    selector.flush().unwrap();
+    selector.flush(&[]).unwrap();
     assert!(is_readable(&selector, 500));
     assert!(start.elapsed() >= Duration::from_millis(20));
     assert_eq!(collect(&selector), vec![SelectorEvent::Timer]);
@@ -205,11 +164,11 @@ fn last_timer_change_before_flush_wins() {
     let selector = Selector::new().unwrap();
     selector.arm_timer(Instant::now() + Duration::from_millis(1));
     selector.arm_timer(Instant::now() + Duration::from_secs(10));
-    selector.flush().unwrap();
+    selector.flush(&[]).unwrap();
     assert!(!is_readable(&selector, 50));
 
     selector.arm_timer(Instant::now() + Duration::from_millis(10));
-    selector.flush().unwrap();
+    selector.flush(&[]).unwrap();
     assert!(is_readable(&selector, 500));
     assert_eq!(collect(&selector), vec![SelectorEvent::Timer]);
 }
@@ -218,9 +177,9 @@ fn last_timer_change_before_flush_wins() {
 fn disarm_prevents_firing() {
     let selector = Selector::new().unwrap();
     selector.arm_timer(Instant::now() + Duration::from_millis(10));
-    selector.flush().unwrap();
+    selector.flush(&[]).unwrap();
     selector.disarm_timer();
-    selector.flush().unwrap();
+    selector.flush(&[]).unwrap();
     assert!(!is_readable(&selector, 50));
     assert_eq!(collect(&selector), vec![]);
 }
@@ -229,10 +188,10 @@ fn disarm_prevents_firing() {
 fn disarm_after_timer_fired_is_ok() {
     let selector = Selector::new().unwrap();
     selector.arm_timer(Instant::now() + Duration::ZERO);
-    selector.flush().unwrap();
+    selector.flush(&[]).unwrap();
     assert!(is_readable(&selector, 500));
     selector.disarm_timer();
-    selector.flush().unwrap();
+    selector.flush(&[]).unwrap();
     assert_eq!(collect(&selector), vec![]);
 }
 
@@ -240,5 +199,5 @@ fn disarm_after_timer_fired_is_ok() {
 fn disarm_when_never_armed_is_ok() {
     let selector = Selector::new().unwrap();
     selector.disarm_timer();
-    selector.flush().unwrap();
+    selector.flush(&[]).unwrap();
 }

@@ -12,8 +12,9 @@ use rustix::net::sockopt::{set_socket_nosigpipe, socket_error};
 use rustix::net::{AddressFamily, RecvFlags, SendFlags, SocketAddrAny, SocketAddrUnix, SocketType};
 
 use crate::context::Context;
-use crate::inner::Direction;
 use crate::io::{IoRegistration, io_loop};
+use crate::selectors::Direction;
+use crate::state::State;
 
 pub use halves::{ReadHalf, WriteHalf};
 pub use tcp::{TcpListener, TcpStream};
@@ -100,8 +101,8 @@ fn peer_addr<A: Address>(fd: &OwnedFd) -> rustix::io::Result<A> {
     A::from_any(rustix::net::getpeername(fd)?)
 }
 
-async fn connect<E, A: Address>(
-    ctx: &Context<E>,
+async fn connect<S: State, A: Address>(
+    ctx: &Context<S>,
     family: AddressFamily,
     addr: &A,
 ) -> rustix::io::Result<OwnedFd> {
@@ -112,14 +113,17 @@ async fn connect<E, A: Address>(
         Err(Errno::INPROGRESS | Errno::INTR) => {}
         Err(errno) => return Err(errno),
     }
-    IoRegistration::new(ctx.inner(), fd.as_fd())
-        .wait(Direction::Write)
+    IoRegistration::new(ctx.event_loop(), fd.as_fd(), Direction::Write)
+        .wait()
         .await;
     socket_error(&fd)??;
     Ok(fd)
 }
 
-async fn accept<E, A: Address>(ctx: &Context<E>, fd: &OwnedFd) -> rustix::io::Result<(OwnedFd, A)> {
+async fn accept<S: State, A: Address>(
+    ctx: &Context<S>,
+    fd: &OwnedFd,
+) -> rustix::io::Result<(OwnedFd, A)> {
     let (stream, addr) = io_loop!(
         ctx,
         fd.as_fd(),
@@ -130,7 +134,11 @@ async fn accept<E, A: Address>(ctx: &Context<E>, fd: &OwnedFd) -> rustix::io::Re
     Ok((stream, A::from_any(addr)?))
 }
 
-async fn read<E>(ctx: &Context<E>, fd: &OwnedFd, buf: &mut [u8]) -> rustix::io::Result<usize> {
+async fn read<S: State>(
+    ctx: &Context<S>,
+    fd: &OwnedFd,
+    buf: &mut [u8],
+) -> rustix::io::Result<usize> {
     io_loop!(
         ctx,
         fd.as_fd(),
@@ -139,7 +147,7 @@ async fn read<E>(ctx: &Context<E>, fd: &OwnedFd, buf: &mut [u8]) -> rustix::io::
     )
 }
 
-async fn write<E>(ctx: &Context<E>, fd: &OwnedFd, buf: &[u8]) -> rustix::io::Result<usize> {
+async fn write<S: State>(ctx: &Context<S>, fd: &OwnedFd, buf: &[u8]) -> rustix::io::Result<usize> {
     io_loop!(
         ctx,
         fd.as_fd(),
@@ -148,7 +156,7 @@ async fn write<E>(ctx: &Context<E>, fd: &OwnedFd, buf: &[u8]) -> rustix::io::Res
     )
 }
 
-async fn send<E>(ctx: &Context<E>, fd: &OwnedFd, buf: &[u8]) -> rustix::io::Result<usize> {
+async fn send<S: State>(ctx: &Context<S>, fd: &OwnedFd, buf: &[u8]) -> rustix::io::Result<usize> {
     io_loop!(
         ctx,
         fd.as_fd(),
@@ -157,7 +165,11 @@ async fn send<E>(ctx: &Context<E>, fd: &OwnedFd, buf: &[u8]) -> rustix::io::Resu
     )
 }
 
-async fn recv<E>(ctx: &Context<E>, fd: &OwnedFd, buf: &mut [u8]) -> rustix::io::Result<usize> {
+async fn recv<S: State>(
+    ctx: &Context<S>,
+    fd: &OwnedFd,
+    buf: &mut [u8],
+) -> rustix::io::Result<usize> {
     let (len, _) = io_loop!(
         ctx,
         fd.as_fd(),
@@ -167,8 +179,8 @@ async fn recv<E>(ctx: &Context<E>, fd: &OwnedFd, buf: &mut [u8]) -> rustix::io::
     Ok(len)
 }
 
-async fn send_to<E, A: Address>(
-    ctx: &Context<E>,
+async fn send_to<S: State, A: Address>(
+    ctx: &Context<S>,
     fd: &OwnedFd,
     buf: &[u8],
     addr: &A,
@@ -181,8 +193,8 @@ async fn send_to<E, A: Address>(
     )
 }
 
-async fn recv_from<E, A: Address>(
-    ctx: &Context<E>,
+async fn recv_from<S: State, A: Address>(
+    ctx: &Context<S>,
     fd: &OwnedFd,
     buf: &mut [u8],
 ) -> rustix::io::Result<(usize, A)> {
