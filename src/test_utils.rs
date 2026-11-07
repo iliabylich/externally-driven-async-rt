@@ -7,7 +7,9 @@ use rustix::fd::{AsFd, OwnedFd};
 use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
 
 use crate::io::IoRegistration;
+use crate::ready::ReadyQueue;
 use crate::selectors::Direction;
+use crate::storage::Storage;
 use crate::{Context, Error, EventLoop, State};
 
 pub(crate) const TEST_MAX_TASKS: usize = 128;
@@ -56,7 +58,7 @@ pub(crate) fn readable<'a>(
     fd: &'a OwnedFd,
 ) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
     Box::pin(async move {
-        let mut registration = IoRegistration::new(ctx.event_loop(), fd.as_fd(), Direction::Read);
+        let mut registration = IoRegistration::new(ctx.storage(), fd.as_fd(), Direction::Read);
         while !is_readable(fd, 0) {
             registration.wait().await;
         }
@@ -68,13 +70,13 @@ pub(crate) fn wake_by_writing(event_loop: &impl AsFd, peer: &OwnedFd) {
     assert!(is_readable(event_loop, 1000));
 }
 
-pub(crate) fn run_until_root_finishes<S: State>(event_loop: &mut Pin<Box<EventLoop<S>>>) {
+pub(crate) fn run_until_root_finishes<S: State>(event_loop: &mut EventLoop<S>) {
     loop {
         assert!(
-            is_readable(&**event_loop, 2000),
+            is_readable(&*event_loop, 2000),
             "the loop never became ready"
         );
-        match event_loop.as_mut().drain_events_without_blocking() {
+        match event_loop.drain_events_without_blocking() {
             Ok(()) => {}
             Err(Error::RootFinished) => return,
             Err(err) => panic!("{err}"),
@@ -83,11 +85,7 @@ pub(crate) fn run_until_root_finishes<S: State>(event_loop: &mut Pin<Box<EventLo
 }
 
 pub(crate) fn has_timers<S: State>(event_loop: &EventLoop<S>) -> bool {
-    event_loop
-        .storage()
-        .borrow()
-        .next_timer_deadline()
-        .is_some()
+    event_loop.storage().next_timer_deadline().is_some()
 }
 
 // Resolves with whichever future completes first, dropping the other one.
@@ -113,12 +111,46 @@ impl<A: Future + Unpin, B: Future + Unpin> Future for First<A, B> {
     }
 }
 
-pub(crate) fn run_until_events(event_loop: &mut Pin<Box<EventLoop<Log>>>, count: usize) {
-    while event_loop.as_mut().state_mut().0.len() < count {
+pub(crate) fn run_until_events(event_loop: &mut EventLoop<Log>, count: usize) {
+    while event_loop.state_mut().0.len() < count {
         assert!(
-            is_readable(&**event_loop, 2000),
+            is_readable(&*event_loop, 2000),
             "the loop never became ready"
         );
-        assert_eq!(event_loop.as_mut().drain_events_without_blocking(), Ok(()));
+        assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
+    }
+}
+
+// A `Storage` without a selector (so no kqueue: usable under Miri), destroyed on drop.
+pub(crate) struct TestStorage(Storage<()>);
+
+impl TestStorage {
+    pub(crate) fn new(
+        max_tasks_count: usize,
+        max_timers_count: usize,
+        max_io_count: usize,
+    ) -> Self {
+        Self(Storage::new(
+            (),
+            (),
+            max_tasks_count,
+            max_timers_count,
+            max_io_count,
+        ))
+    }
+
+    pub(crate) fn storage(&self) -> Storage<()> {
+        self.0
+    }
+
+    pub(crate) fn ready(&self) -> &ReadyQueue {
+        self.0.ready()
+    }
+}
+
+impl Drop for TestStorage {
+    fn drop(&mut self) {
+        // SAFETY: created with the state `()`, destroyed once, with no task being polled.
+        unsafe { self.0.destroy::<()>() };
     }
 }

@@ -1,4 +1,3 @@
-use core::cell::RefCell;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::Poll;
@@ -7,12 +6,12 @@ use crate::storage::{Storage, TaskId};
 use crate::task::JoinStatus;
 
 pub struct JoinHandle<'ctx> {
-    storage: &'ctx RefCell<Storage>,
+    storage: &'ctx Storage,
     id: TaskId,
 }
 
 impl<'ctx> JoinHandle<'ctx> {
-    pub(crate) fn new(storage: &'ctx RefCell<Storage>, id: TaskId) -> Self {
+    pub(crate) fn new(storage: &'ctx Storage, id: TaskId) -> Self {
         Self { storage, id }
     }
 }
@@ -21,11 +20,7 @@ impl Future for JoinHandle<'_> {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {
-        match self
-            .storage
-            .borrow_mut()
-            .set_join_waiter(self.id, cx.waker())
-        {
+        match self.storage.set_join_waiter(self.id, cx.waker()) {
             JoinStatus::Running => Poll::Pending,
             JoinStatus::Finished => Poll::Ready(()),
         }
@@ -60,13 +55,13 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(event_loop.as_mut().state_mut().0.is_empty());
-        wake_by_writing(&*event_loop, &b);
+        assert!(event_loop.state_mut().0.is_empty());
+        wake_by_writing(&event_loop, &b);
         assert_eq!(
-            event_loop.as_mut().drain_events_without_blocking(),
+            event_loop.drain_events_without_blocking(),
             Err(Error::RootFinished)
         );
-        assert_eq!(event_loop.as_mut().state_mut().0, vec![1, 2]);
+        assert_eq!(event_loop.state_mut().0, vec![1, 2]);
     }
 
     #[test]
@@ -85,13 +80,13 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(event_loop.as_mut().state_mut().0, vec![1]);
-        wake_by_writing(&*event_loop, &b);
+        assert_eq!(event_loop.state_mut().0, vec![1]);
+        wake_by_writing(&event_loop, &b);
         assert_eq!(
-            event_loop.as_mut().drain_events_without_blocking(),
+            event_loop.drain_events_without_blocking(),
             Err(Error::RootFinished)
         );
-        assert_eq!(event_loop.as_mut().state_mut().0, vec![1, 2]);
+        assert_eq!(event_loop.state_mut().0, vec![1, 2]);
     }
 
     #[test]
@@ -111,9 +106,9 @@ mod tests {
             },
         )
         .unwrap();
-        wake_by_writing(&*event_loop, &b);
-        assert_eq!(event_loop.as_mut().drain_events_without_blocking(), Ok(()));
-        assert_eq!(event_loop.as_mut().state_mut().0, vec![1]);
+        wake_by_writing(&event_loop, &b);
+        assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
+        assert_eq!(event_loop.state_mut().0, vec![1]);
     }
 
     #[test]
@@ -133,6 +128,6 @@ mod tests {
                 pending::<()>().await;
             },
         );
-        assert_eq!(event_loop.unwrap().as_mut().state_mut().0, vec![1, 2, 3]);
+        assert_eq!(event_loop.unwrap().state_mut().0, vec![1, 2, 3]);
     }
 }

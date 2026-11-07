@@ -1,8 +1,17 @@
 use super::*;
+use core::cell::{Cell, RefCell};
 use core::future::{Future, pending, poll_fn};
-use core::task::Poll;
+use core::pin::Pin;
+use core::task::{Poll, Waker};
 use core::time::Duration;
 use std::rc::Rc;
+use std::time::Instant;
+
+use crate::selectors::Direction;
+use crate::storage::Storage;
+use crate::storage::TaskId;
+use crate::task::TaskFuture;
+use crate::waker::new_waker;
 
 use crate::test_utils::{
     Log, TEST_MAX_IO, TEST_MAX_TASKS, TEST_MAX_TIMERS, TestContext, is_readable, pair, readable,
@@ -34,7 +43,7 @@ fn events_dispatched_during_new_are_applied() {
             pending::<()>().await;
         },
     );
-    assert_eq!(event_loop.unwrap().as_mut().state_mut().0, vec![1, 2]);
+    assert_eq!(event_loop.unwrap().state_mut().0, vec![1, 2]);
 }
 
 #[test]
@@ -47,9 +56,9 @@ fn idle_loop_is_not_readable_and_drains_to_nothing() {
         async |_| pending().await,
     )
     .unwrap();
-    assert!(!is_readable(&*event_loop, 0));
-    assert_eq!(event_loop.as_mut().drain_events_without_blocking(), Ok(()));
-    assert!(event_loop.as_mut().state_mut().0.is_empty());
+    assert!(!is_readable(&event_loop, 0));
+    assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
+    assert!(event_loop.state_mut().0.is_empty());
 }
 
 #[test]
@@ -68,19 +77,19 @@ fn root_finishing_inside_a_drain() {
         },
     )
     .unwrap();
-    assert_eq!(event_loop.as_mut().state_mut().0, vec![1]);
+    assert_eq!(event_loop.state_mut().0, vec![1]);
 
-    wake_by_writing(&*event_loop, &b);
+    wake_by_writing(&event_loop, &b);
     assert_eq!(
-        event_loop.as_mut().drain_events_without_blocking(),
+        event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)
     );
-    assert_eq!(event_loop.as_mut().state_mut().0, vec![1, 2, 3]);
+    assert_eq!(event_loop.state_mut().0, vec![1, 2, 3]);
     assert_eq!(
-        event_loop.as_mut().drain_events_without_blocking(),
+        event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)
     );
-    assert!(!is_readable(&*event_loop, 0));
+    assert!(!is_readable(&event_loop, 0));
 }
 
 #[test]
@@ -104,10 +113,10 @@ fn root_progresses_across_drains() {
     )
     .unwrap();
     for i in 0..3 {
-        wake_by_writing(&*event_loop, &b);
-        assert_eq!(event_loop.as_mut().drain_events_without_blocking(), Ok(()));
-        assert_eq!(event_loop.as_mut().state_mut().0.pop(), Some(i));
-        assert!(!is_readable(&*event_loop, 0));
+        wake_by_writing(&event_loop, &b);
+        assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
+        assert_eq!(event_loop.state_mut().0.pop(), Some(i));
+        assert!(!is_readable(&event_loop, 0));
     }
 }
 
@@ -127,16 +136,15 @@ fn handle_survives_moves_and_an_ffi_round_trip() {
     .unwrap();
     let handles = vec![event_loop];
     let event_loop = handles.into_iter().next().unwrap();
-    // SAFETY: the loop is turned back into the same `Pin<Box>` right away and never moved.
-    let raw = Box::into_raw(unsafe { Pin::into_inner_unchecked(event_loop) });
-    // SAFETY: `raw` comes from `Box::into_raw` of a pinned box.
-    let mut event_loop = unsafe { Pin::new_unchecked(Box::from_raw(raw)) };
-    wake_by_writing(&*event_loop, &b);
+    let raw = Box::into_raw(Box::new(event_loop));
+    // SAFETY: `raw` comes from `Box::into_raw` right above.
+    let mut event_loop = *unsafe { Box::from_raw(raw) };
+    wake_by_writing(&event_loop, &b);
     assert_eq!(
-        event_loop.as_mut().drain_events_without_blocking(),
+        event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)
     );
-    assert_eq!(event_loop.as_mut().state_mut().0, vec![1]);
+    assert_eq!(event_loop.state_mut().0, vec![1]);
 }
 
 #[test]
@@ -166,15 +174,15 @@ fn two_loops_on_one_thread_are_independent() {
     )
     .unwrap();
 
-    wake_by_writing(&*first, &b1);
-    assert!(!is_readable(&*second, 0));
-    assert_eq!(second.as_mut().drain_events_without_blocking(), Ok(()));
+    wake_by_writing(&first, &b1);
+    assert!(!is_readable(&second, 0));
+    assert_eq!(second.drain_events_without_blocking(), Ok(()));
     assert_eq!(
-        first.as_mut().drain_events_without_blocking(),
+        first.drain_events_without_blocking(),
         Err(Error::RootFinished)
     );
-    assert_eq!(first.as_mut().state_mut().0, vec![1]);
-    assert!(second.as_mut().state_mut().0.is_empty());
+    assert_eq!(first.state_mut().0, vec![1]);
+    assert!(second.state_mut().0.is_empty());
 }
 
 #[test]
@@ -204,8 +212,8 @@ fn panic_propagates_out_of_drain() {
         },
     )
     .unwrap();
-    wake_by_writing(&*event_loop, &b);
-    let _ = event_loop.as_mut().drain_events_without_blocking();
+    wake_by_writing(&event_loop, &b);
+    let _ = event_loop.drain_events_without_blocking();
 }
 
 struct PanickingState;
@@ -271,10 +279,7 @@ fn finished_tasks_free_their_slots() {
             pending::<()>().await;
         },
     );
-    assert_eq!(
-        event_loop.unwrap().as_mut().state_mut().0,
-        vec![0, 1, 2, 3, 4]
-    );
+    assert_eq!(event_loop.unwrap().state_mut().0, vec![0, 1, 2, 3, 4]);
 }
 
 #[test]
@@ -290,7 +295,7 @@ fn spawned_task_runs_in_the_same_drain() {
             pending::<()>().await;
         },
     );
-    assert_eq!(event_loop.unwrap().as_mut().state_mut().0, vec![1, 2]);
+    assert_eq!(event_loop.unwrap().state_mut().0, vec![1, 2]);
 }
 
 #[test]
@@ -315,12 +320,12 @@ fn tasks_are_dropped_when_the_root_finishes() {
         },
     )
     .unwrap();
-    wake_by_writing(&*event_loop, &b);
+    wake_by_writing(&event_loop, &b);
     assert_eq!(
-        event_loop.as_mut().drain_events_without_blocking(),
+        event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)
     );
-    let log = &mut event_loop.as_mut().state_mut().0;
+    let log = &mut event_loop.state_mut().0;
     assert_eq!(log[0], 1);
     log[1..].sort();
     assert_eq!(log[1..], [10, 20]);
@@ -353,12 +358,12 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
         },
     )
     .unwrap();
-    wake_by_writing(&*event_loop, &b);
+    wake_by_writing(&event_loop, &b);
     assert_eq!(
-        event_loop.as_mut().drain_events_without_blocking(),
+        event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)
     );
-    assert_eq!(event_loop.as_mut().state_mut().0, vec![1, 3]);
+    assert_eq!(event_loop.state_mut().0, vec![1, 3]);
 }
 
 struct Flag(Rc<Cell<bool>>);
@@ -433,7 +438,7 @@ fn dropping_the_loop_drops_its_tasks() {
     assert!(dropped.get());
 }
 
-fn parked_loop() -> Pin<Box<EventLoop<Log>>> {
+fn parked_loop() -> EventLoop<Log> {
     EventLoop::new(
         Log::default(),
         TEST_MAX_TASKS,
@@ -453,96 +458,97 @@ fn counting(polls: &Rc<Cell<u32>>) -> TaskFuture {
 }
 
 fn ready_tasks(event_loop: &EventLoop<Log>) -> Vec<TaskId> {
-    core::iter::from_fn(|| event_loop.storage.borrow().ready().pop()).collect()
+    core::iter::from_fn(|| event_loop.storage().ready().pop()).collect()
 }
 
 fn parked_task(event_loop: &EventLoop<Log>) -> (TaskId, Waker) {
     let id = event_loop
-        .storage
-        .borrow_mut()
+        .storage()
         .insert_task(Box::pin(pending()))
         .ok()
         .unwrap();
     // SAFETY: `event_loop` outlives the waker.
-    let waker = unsafe { new_waker(event_loop.storage.borrow().ready(), id) };
+    let waker = unsafe { new_waker(event_loop.storage().ready(), id) };
     (id, waker)
 }
 
 #[test]
 fn finished_task_is_removed() {
     let owned = parked_loop();
-    let event_loop = &*owned;
+    let event_loop = &owned;
     let (root, _) = parked_task(event_loop);
-    let id = event_loop.spawn(Box::pin(async {}));
-    assert_eq!(event_loop.run_ready_tasks(root), RootStatus::Running);
-    assert!(event_loop.storage.borrow().task(id).is_none());
+    let id = event_loop.storage().spawn(Box::pin(async {}));
+    assert_eq!(
+        event_loop.storage().run_ready_tasks(root),
+        RootStatus::Running
+    );
+    assert!(event_loop.storage().task(id).is_none());
 }
 
 #[test]
 fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
     let owned = parked_loop();
-    let event_loop = &*owned;
+    let event_loop = &owned;
     let (root, _) = parked_task(event_loop);
     let polls = Rc::new(Cell::new(0));
     let counter = polls.clone();
-    event_loop.spawn(Box::pin(poll_fn(move |cx| {
+    event_loop.storage().spawn(Box::pin(poll_fn(move |cx| {
         counter.set(counter.get() + 1);
         if counter.get() < 3 {
             cx.waker().wake_by_ref();
         }
         Poll::<()>::Pending
     })));
-    event_loop.run_ready_tasks(root);
+    event_loop.storage().run_ready_tasks(root);
     assert_eq!(polls.get(), 3);
 }
 
 #[test]
 fn task_spawned_during_a_poll_runs_in_the_same_run() {
     let owned = parked_loop();
-    let event_loop = &*owned;
+    let event_loop = &owned;
     let (root, _) = parked_task(event_loop);
-    let ptr: *const EventLoop<Log> = event_loop;
+    let storage = event_loop.storage();
     let polls = Rc::new(Cell::new(0));
     let child = counting(&polls);
-    event_loop.spawn(Box::pin(async move {
-        // SAFETY: tasks are dropped before the loop's fields are.
-        unsafe { &*ptr }.spawn(child);
+    event_loop.storage().spawn(Box::pin(async move {
+        storage.spawn(child);
     }));
-    event_loop.run_ready_tasks(root);
+    event_loop.storage().run_ready_tasks(root);
     assert_eq!(polls.get(), 1);
 }
 
 #[test]
 fn join_waiter_is_woken_when_the_task_finishes() {
     let owned = parked_loop();
-    let event_loop = &*owned;
+    let event_loop = &owned;
     let (root, _) = parked_task(event_loop);
     let polls = Rc::new(Cell::new(0));
-    let waiter = event_loop.spawn(counting(&polls));
-    let task = event_loop.spawn(Box::pin(async {}));
+    let waiter = event_loop.storage().spawn(counting(&polls));
+    let task = event_loop.storage().spawn(Box::pin(async {}));
     // SAFETY: `event_loop` outlives the waker.
-    let waker = unsafe { new_waker(event_loop.storage.borrow().ready(), waiter) };
-    event_loop
-        .storage
-        .borrow_mut()
-        .set_join_waiter(task, &waker);
-    event_loop.run_ready_tasks(root);
+    let waker = unsafe { new_waker(event_loop.storage().ready(), waiter) };
+    event_loop.storage().set_join_waiter(task, &waker);
+    event_loop.storage().run_ready_tasks(root);
     assert_eq!(polls.get(), 2);
 }
 
 #[test]
 fn root_finishing_stops_the_run() {
     let owned = parked_loop();
-    let event_loop = &*owned;
-    let root = event_loop.spawn(Box::pin(async {}));
+    let event_loop = &owned;
+    let root = event_loop.storage().spawn(Box::pin(async {}));
     let polls = Rc::new(Cell::new(0));
-    event_loop.spawn(counting(&polls));
-    assert_eq!(event_loop.run_ready_tasks(root), RootStatus::Finished);
+    event_loop.storage().spawn(counting(&polls));
+    assert_eq!(
+        event_loop.storage().run_ready_tasks(root),
+        RootStatus::Finished
+    );
     assert_eq!(polls.get(), 0);
 }
 
 struct SpawnRawOnDrop {
-    event_loop: *const EventLoop<Log>,
+    storage: Storage,
     spawned_dropped: Rc<Cell<bool>>,
 }
 
@@ -558,8 +564,7 @@ impl Drop for SpawnRawOnDrop {
     fn drop(&mut self) {
         let flag = self.spawned_dropped.clone();
         let guard = DropGuard(flag);
-        // SAFETY: tasks are dropped before the loop's fields are.
-        unsafe { &*self.event_loop }.spawn(Box::pin(async move {
+        self.storage.spawn(Box::pin(async move {
             let _guard = guard;
         }));
     }
@@ -577,8 +582,8 @@ impl Drop for DropGuard {
 fn dropping_the_loop_drops_tasks_spawned_from_drop() {
     let owned = parked_loop();
     let spawned_dropped = Rc::new(Cell::new(false));
-    owned.spawn(Box::pin(SpawnRawOnDrop {
-        event_loop: &*owned,
+    owned.storage().spawn(Box::pin(SpawnRawOnDrop {
+        storage: owned.storage(),
         spawned_dropped: spawned_dropped.clone(),
     }));
     drop(owned);
@@ -588,45 +593,45 @@ fn dropping_the_loop_drops_tasks_spawned_from_drop() {
 #[test]
 fn readable_event_wakes_the_reader_once() {
     let owned = parked_loop();
-    let event_loop = &*owned;
+    let event_loop = &owned;
     let (a, b) = pair();
     let (task, waker) = parked_task(event_loop);
-    let io = event_loop.register_io(a.as_fd(), Direction::Read);
-    event_loop.set_io_waker(io, &waker);
-    event_loop.flush().unwrap();
+    let io = event_loop.storage().register_io(a.as_fd(), Direction::Read);
+    event_loop.storage().set_io_waker(io, &waker);
+    event_loop.storage().flush().unwrap();
     rustix::io::write(&b, b"x").unwrap();
-    event_loop.process_selector_events().unwrap();
+    event_loop.storage().process_selector_events().unwrap();
     assert_eq!(ready_tasks(event_loop), vec![task]);
 
     rustix::io::write(&b, b"x").unwrap();
-    event_loop.flush().unwrap();
+    event_loop.storage().flush().unwrap();
     assert!(!is_readable(event_loop, 0));
 }
 
 #[test]
 fn removed_io_waker_arms_nothing() {
     let owned = parked_loop();
-    let event_loop = &*owned;
+    let event_loop = &owned;
     let (a, b) = pair();
     let (_, waker) = parked_task(event_loop);
-    let io = event_loop.register_io(a.as_fd(), Direction::Read);
-    event_loop.set_io_waker(io, &waker);
-    event_loop.remove_io_waker(io);
+    let io = event_loop.storage().register_io(a.as_fd(), Direction::Read);
+    event_loop.storage().set_io_waker(io, &waker);
+    event_loop.storage().remove_io_waker(io);
     rustix::io::write(&b, b"x").unwrap();
-    event_loop.flush().unwrap();
+    event_loop.storage().flush().unwrap();
     assert!(!is_readable(event_loop, 0));
 }
 
 #[test]
 fn deregistered_io_produces_no_events() {
     let owned = parked_loop();
-    let event_loop = &*owned;
+    let event_loop = &owned;
     let (a, b) = pair();
     let (_, waker) = parked_task(event_loop);
-    let io = event_loop.register_io(a.as_fd(), Direction::Read);
-    event_loop.set_io_waker(io, &waker);
-    event_loop.flush().unwrap();
-    event_loop.deregister_io(io).unwrap();
+    let io = event_loop.storage().register_io(a.as_fd(), Direction::Read);
+    event_loop.storage().set_io_waker(io, &waker);
+    event_loop.storage().flush().unwrap();
+    event_loop.storage().deregister_io(io).unwrap();
     rustix::io::write(&b, b"x").unwrap();
     assert!(!is_readable(event_loop, 0));
 }
@@ -634,16 +639,15 @@ fn deregistered_io_produces_no_events() {
 #[test]
 fn expired_timer_wakes_its_task() {
     let owned = parked_loop();
-    let event_loop = &*owned;
+    let event_loop = &owned;
     let (task, waker) = parked_task(event_loop);
     let (_, later_waker) = parked_task(event_loop);
     let now = Instant::now();
-    let mut storage = event_loop.storage.borrow_mut();
+    let storage = event_loop.storage();
     storage.alloc_timer(now + Duration::from_millis(5), waker);
     storage.alloc_timer(now + Duration::from_secs(60), later_waker);
-    drop(storage);
-    event_loop.flush().unwrap();
+    event_loop.storage().flush().unwrap();
     assert!(is_readable(event_loop, 500));
-    event_loop.process_selector_events().unwrap();
+    event_loop.storage().process_selector_events().unwrap();
     assert_eq!(ready_tasks(event_loop), vec![task]);
 }

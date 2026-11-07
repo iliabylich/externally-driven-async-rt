@@ -1,14 +1,16 @@
 use alloc::alloc::{Layout, alloc, dealloc, handle_alloc_error};
+use core::cell::{Cell, Ref, RefCell, RefMut};
 use core::ptr::{self, NonNull};
 use core::task::Waker;
-
-use rustix::fd::RawFd;
 use std::time::Instant;
+
+use rustix::fd::{AsRawFd, BorrowedFd, RawFd};
 
 use crate::pool::{Index, ObjectPool};
 use crate::ready::ReadyQueue;
-use crate::selectors::{Direction, IoAction, IoChange, Token};
+use crate::selectors::{Direction, IoAction, IoChange, Selector, SelectorEvent, Token};
 use crate::task::{JoinStatus, OwnedTask, TaskFuture, TaskPtr};
+use crate::waker::new_waker;
 
 pub(crate) struct Timer {
     pub(crate) deadline: Instant,
@@ -29,14 +31,6 @@ pub(crate) struct IoWaiter {
 
 pub(crate) type IoIndex = Index<IoWaiter>;
 
-pub(crate) fn io_token(index: IoIndex) -> Token {
-    Token(index.to_bits())
-}
-
-pub(crate) fn io_index(token: Token) -> IoIndex {
-    IoIndex::from_bits(token.0)
-}
-
 pub(crate) struct TaskEntry {
     future: OwnedTask,
     join_waiter: Option<Waker>,
@@ -44,100 +38,198 @@ pub(crate) struct TaskEntry {
 
 pub(crate) type TaskId = Index<TaskEntry>;
 
-// One heap chunk holding every pool back to back, laid out like a C struct (`Layout::extend`);
-// each pool (free list included) lives entirely inside it.
-pub(crate) struct Storage {
-    chunk: NonNull<u8>,
-    layout: Layout,
-    timers: NonNull<ObjectPool<Timer>>,
-    io_waiters: NonNull<ObjectPool<IoWaiter>>,
-    tasks: NonNull<ObjectPool<TaskEntry>>,
-    ready: NonNull<ReadyQueue>,
-    next_timer_seq: u64,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RootStatus {
+    Running,
+    Finished,
 }
 
-impl Storage {
-    pub(crate) fn new(
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Root {
+    Running(TaskId),
+    Finished,
+}
+
+// At the start of the runtime's single allocation: the inline values, and a pointer to every
+// other part of the allocation (the state, each pool, the ready queue). The pointers are derived
+// from the allocation's base, so they're valid for the whole allocation, not just the header.
+struct StorageHeader<Sel> {
+    layout: Layout,
+    state: NonNull<u8>,
+    selector: Sel,
+    root: Cell<Root>,
+    next_timer_seq: Cell<u64>,
+    // `&mut` to a pool only exists while its `RefCell` is borrowed.
+    timers: RefCell<NonNull<ObjectPool<Timer>>>,
+    io_waiters: RefCell<NonNull<ObjectPool<IoWaiter>>>,
+    tasks: RefCell<NonNull<ObjectPool<TaskEntry>>>,
+    ready: NonNull<ReadyQueue>,
+}
+
+// The runtime: one allocation that never moves, reached through this pointer to its start (copied
+// into the `EventLoop` and every `Context`). Objects inside are addressed by typed indices.
+pub(crate) struct Storage<Sel = Selector>(NonNull<StorageHeader<Sel>>);
+
+impl<Sel> Clone for Storage<Sel> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<Sel> Copy for Storage<Sel> {}
+
+impl<Sel> Storage<Sel> {
+    pub(crate) fn new<S>(
+        selector: Sel,
+        state: S,
         max_tasks_count: usize,
         max_timers_count: usize,
         max_io_count: usize,
     ) -> Self {
-        let (layout, io_offset) = ObjectPool::<Timer>::layout(max_timers_count)
-            .extend(ObjectPool::<IoWaiter>::layout(max_io_count))
-            .expect("storage is too large");
-        let (layout, tasks_offset) = layout
-            .extend(ObjectPool::<TaskEntry>::layout(max_tasks_count))
-            .expect("storage is too large");
-        let (layout, ready_offset) = layout
-            .extend(ReadyQueue::layout(max_tasks_count))
-            .expect("storage is too large");
+        let extend = |layout: Layout, next: Layout| layout.extend(next).expect("too large");
+        let layout = Layout::new::<StorageHeader<Sel>>();
+        let (layout, state_offset) = extend(layout, Layout::new::<S>());
+        let (layout, timers_offset) = extend(layout, ObjectPool::<Timer>::layout(max_timers_count));
+        let (layout, io_offset) = extend(layout, ObjectPool::<IoWaiter>::layout(max_io_count));
+        let (layout, tasks_offset) =
+            extend(layout, ObjectPool::<TaskEntry>::layout(max_tasks_count));
+        let (layout, ready_offset) = extend(layout, ReadyQueue::layout(max_tasks_count));
         let layout = layout.pad_to_align();
-        // SAFETY: `layout` isn't zero-sized: every pool holds at least its free-list head.
-        let chunk =
+        // SAFETY: `layout` isn't zero-sized, it holds at least the header.
+        let base =
             NonNull::new(unsafe { alloc(layout) }).unwrap_or_else(|| handle_alloc_error(layout));
-        // SAFETY: `Layout::extend` placed each pool at an offset inside the allocation, aligned
-        // for it and not overlapping the others; the chunk lives until `drop`.
-        let (timers, io_waiters, tasks, ready) = unsafe {
-            (
-                ObjectPool::init(chunk, max_timers_count),
-                ObjectPool::init(chunk.byte_add(io_offset), max_io_count),
-                ObjectPool::init(chunk.byte_add(tasks_offset), max_tasks_count),
-                ReadyQueue::init(chunk.byte_add(ready_offset), max_tasks_count),
-            )
-        };
-        Self {
-            chunk,
-            layout,
-            timers,
-            io_waiters,
-            tasks,
-            ready,
-            next_timer_seq: 0,
+        // SAFETY: `Layout::extend` placed every part inside the fresh allocation, aligned for it
+        // and not overlapping the others; each is written exactly once, the header last.
+        unsafe {
+            let state_ptr = base.byte_add(state_offset);
+            state_ptr.cast::<S>().write(state);
+            let header = StorageHeader {
+                layout,
+                state: state_ptr,
+                selector,
+                root: Cell::new(Root::Finished),
+                next_timer_seq: Cell::new(0),
+                timers: RefCell::new(ObjectPool::init(
+                    base.byte_add(timers_offset),
+                    max_timers_count,
+                )),
+                io_waiters: RefCell::new(ObjectPool::init(base.byte_add(io_offset), max_io_count)),
+                tasks: RefCell::new(ObjectPool::init(
+                    base.byte_add(tasks_offset),
+                    max_tasks_count,
+                )),
+                ready: ReadyQueue::init(base.byte_add(ready_offset), max_tasks_count),
+            };
+            base.cast::<StorageHeader<Sel>>().write(header);
+        }
+        Self(base.cast())
+    }
+
+    fn header(&self) -> &StorageHeader<Sel> {
+        // SAFETY: the header is initialized in `new` and lives until `destroy`, which no
+        // reference into the storage outlives; it is only ever accessed through `&`.
+        unsafe { self.0.as_ref() }
+    }
+
+    /// # Safety
+    ///
+    /// `S` must be the state type the storage was created with.
+    pub(crate) unsafe fn state<S>(&self) -> NonNull<S> {
+        self.header().state.cast()
+    }
+
+    /// Drops every task, the state, the pools and the header, and frees the allocation.
+    ///
+    /// # Safety
+    ///
+    /// Called exactly once, with the state type the storage was created with, while no task is
+    /// being polled; the storage isn't used afterwards.
+    pub(crate) unsafe fn destroy<S>(self) {
+        // Task futures hold `Context`s pointing at the storage and may use them in their `Drop`
+        // impls, so they go first, while everything is intact.
+        self.drop_all_tasks();
+        let header = self.header();
+        let layout = header.layout;
+        let parts = (
+            *header.timers.borrow(),
+            *header.io_waiters.borrow(),
+            *header.tasks.borrow(),
+        );
+        // SAFETY: no task (so no `Context` and no reference into the storage) is left; every part
+        // was initialized in `new` and is dropped exactly once here (the ready queue holds only
+        // `Copy` data), the header last, then the allocation is freed with its layout.
+        unsafe {
+            ptr::drop_in_place(self.state::<S>().as_ptr());
+            ptr::drop_in_place(parts.0.as_ptr());
+            ptr::drop_in_place(parts.1.as_ptr());
+            ptr::drop_in_place(parts.2.as_ptr());
+            ptr::drop_in_place(self.0.as_ptr());
+            dealloc(self.0.cast().as_ptr(), layout);
         }
     }
 
-    fn timers(&mut self) -> &mut ObjectPool<Timer> {
-        // SAFETY: the pool is initialized in `new` and lives until `drop`; `&mut self` makes
-        // this the only reference to it.
-        unsafe { self.timers.as_mut() }
+    pub(crate) fn root(&self) -> Root {
+        self.header().root.get()
     }
 
-    fn timers_ref(&self) -> &ObjectPool<Timer> {
-        // SAFETY: as in `timers`, and `&self` rules out a mutable reference.
-        unsafe { self.timers.as_ref() }
-    }
-
-    fn io_waiters(&mut self) -> &mut ObjectPool<IoWaiter> {
-        // SAFETY: as in `timers`.
-        unsafe { self.io_waiters.as_mut() }
-    }
-
-    fn io_waiters_ref(&self) -> &ObjectPool<IoWaiter> {
-        // SAFETY: as in `timers_ref`.
-        unsafe { self.io_waiters.as_ref() }
-    }
-
-    fn tasks(&mut self) -> &mut ObjectPool<TaskEntry> {
-        // SAFETY: as in `timers`.
-        unsafe { self.tasks.as_mut() }
-    }
-
-    fn tasks_ref(&self) -> &ObjectPool<TaskEntry> {
-        // SAFETY: as in `timers_ref`.
-        unsafe { self.tasks.as_ref() }
+    pub(crate) fn set_root(&self, root: Root) {
+        self.header().root.set(root);
     }
 
     pub(crate) fn ready(&self) -> &ReadyQueue {
-        // SAFETY: the queue is initialized in `new` and lives until `drop`; it is only ever
-        // accessed through shared references (it consists of `Cell`s).
-        unsafe { self.ready.as_ref() }
+        // SAFETY: initialized in `new`, alive until `destroy`; it is only ever accessed through
+        // shared references (it consists of `Cell`s).
+        unsafe { self.header().ready.as_ref() }
+    }
+
+    fn timers(&self) -> RefMut<'_, ObjectPool<Timer>> {
+        // SAFETY: initialized in `new`, alive until `destroy`; the borrow makes this the only
+        // reference to the pool.
+        RefMut::map(self.header().timers.borrow_mut(), |pool| unsafe {
+            pool.as_mut()
+        })
+    }
+
+    fn timers_ref(&self) -> Ref<'_, ObjectPool<Timer>> {
+        // SAFETY: as in `timers`, and the shared borrow rules out a mutable reference.
+        Ref::map(self.header().timers.borrow(), |pool| unsafe {
+            pool.as_ref()
+        })
+    }
+
+    fn io_waiters(&self) -> RefMut<'_, ObjectPool<IoWaiter>> {
+        // SAFETY: as in `timers`.
+        RefMut::map(self.header().io_waiters.borrow_mut(), |pool| unsafe {
+            pool.as_mut()
+        })
+    }
+
+    fn io_waiters_ref(&self) -> Ref<'_, ObjectPool<IoWaiter>> {
+        // SAFETY: as in `timers_ref`.
+        Ref::map(self.header().io_waiters.borrow(), |pool| unsafe {
+            pool.as_ref()
+        })
+    }
+
+    fn tasks(&self) -> RefMut<'_, ObjectPool<TaskEntry>> {
+        // SAFETY: as in `timers`.
+        RefMut::map(self.header().tasks.borrow_mut(), |pool| unsafe {
+            pool.as_mut()
+        })
+    }
+
+    fn tasks_ref(&self) -> Ref<'_, ObjectPool<TaskEntry>> {
+        // SAFETY: as in `timers_ref`.
+        Ref::map(self.header().tasks.borrow(), |pool| unsafe {
+            pool.as_ref()
+        })
     }
 
     pub(crate) fn task_capacity(&self) -> usize {
         self.tasks_ref().capacity()
     }
 
-    pub(crate) fn insert_task(&mut self, future: TaskFuture) -> Result<TaskId, TaskFuture> {
+    pub(crate) fn insert_task(&self, future: TaskFuture) -> Result<TaskId, TaskFuture> {
         let entry = TaskEntry {
             future: OwnedTask::new(future),
             join_waiter: None,
@@ -154,14 +246,15 @@ impl Storage {
         Some(self.tasks_ref().get(id)?.future.ptr())
     }
 
-    pub(crate) fn remove_task(&mut self, id: TaskId) -> Option<(TaskFuture, Option<Waker>)> {
+    pub(crate) fn remove_task(&self, id: TaskId) -> Option<(TaskFuture, Option<Waker>)> {
         let entry = self.tasks().free(id)?;
         self.ready().untrack(id);
         Some((entry.future.into_future(), entry.join_waiter))
     }
 
-    pub(crate) fn set_join_waiter(&mut self, id: TaskId, waker: &Waker) -> JoinStatus {
-        let Some(entry) = self.tasks().get_mut(id) else {
+    pub(crate) fn set_join_waiter(&self, id: TaskId, waker: &Waker) -> JoinStatus {
+        let mut tasks = self.tasks();
+        let Some(entry) = tasks.get_mut(id) else {
             return JoinStatus::Finished;
         };
         match &mut entry.join_waiter {
@@ -171,37 +264,36 @@ impl Storage {
         JoinStatus::Running
     }
 
-    pub(crate) fn take_all_tasks(&mut self, out: &mut Vec<TaskFuture>) {
+    pub(crate) fn take_all_tasks(&self, out: &mut Vec<TaskFuture>) {
         let ids: Vec<TaskId> = self.tasks_ref().iter().map(|(id, _)| id).collect();
+        let mut tasks = self.tasks();
         for id in ids {
-            let entry = self
-                .tasks()
-                .free(id)
-                .expect("an iterated task is in the pool");
+            let entry = tasks.free(id).expect("an iterated task is in the pool");
             self.ready().untrack(id);
             out.push(entry.future.into_future());
         }
     }
 
-    pub(crate) fn alloc_timer(&mut self, deadline: Instant, waker: Waker) -> TimerIndex {
+    pub(crate) fn alloc_timer(&self, deadline: Instant, waker: Waker) -> TimerIndex {
+        let seq = self.header().next_timer_seq.get();
         let timer = Timer {
             deadline,
             waker,
-            seq: self.next_timer_seq,
+            seq,
         };
-        let timers = self.timers();
+        let mut timers = self.timers();
         let Ok(index) = timers.alloc(timer) else {
             panic!("more than {} concurrent sleeps", timers.capacity());
         };
-        self.next_timer_seq += 1;
+        self.header().next_timer_seq.set(seq + 1);
         index
     }
 
-    pub(crate) fn get_timer_mut(&mut self, index: TimerIndex) -> Option<&mut Timer> {
-        self.timers().get_mut(index)
+    pub(crate) fn get_timer_mut(&self, index: TimerIndex) -> Option<RefMut<'_, Timer>> {
+        RefMut::filter_map(self.timers(), |timers| timers.get_mut(index)).ok()
     }
 
-    pub(crate) fn release_timer(&mut self, index: TimerIndex) -> Option<Timer> {
+    pub(crate) fn release_timer(&self, index: TimerIndex) -> Option<Timer> {
         self.timers().free(index)
     }
 
@@ -212,8 +304,8 @@ impl Storage {
             .min()
     }
 
-    pub(crate) fn expire_timers(&mut self, now: Instant, out: &mut Vec<Waker>) {
-        let timers = self.timers();
+    pub(crate) fn expire_timers(&self, now: Instant, out: &mut Vec<Waker>) {
+        let mut timers = self.timers();
         let mut due: Vec<(Instant, u64, TimerIndex)> = timers
             .iter()
             .filter(|(_, timer)| timer.deadline <= now)
@@ -226,14 +318,14 @@ impl Storage {
         }
     }
 
-    pub(crate) fn alloc_io(&mut self, fd: RawFd, direction: Direction) -> IoIndex {
-        let io_waiters = self.io_waiters();
+    pub(crate) fn alloc_io(&self, fd: RawFd, direction: Direction) -> IoIndex {
         let waiter = IoWaiter {
             fd,
             direction,
             waker: None,
             armed: false,
         };
+        let mut io_waiters = self.io_waiters();
         let Ok(index) = io_waiters.alloc(waiter) else {
             panic!(
                 "more than {} concurrent IO operations",
@@ -243,15 +335,15 @@ impl Storage {
         index
     }
 
-    pub(crate) fn get_io(&self, index: IoIndex) -> Option<&IoWaiter> {
-        self.io_waiters_ref().get(index)
+    pub(crate) fn get_io(&self, index: IoIndex) -> Option<Ref<'_, IoWaiter>> {
+        Ref::filter_map(self.io_waiters_ref(), |io_waiters| io_waiters.get(index)).ok()
     }
 
-    pub(crate) fn get_io_mut(&mut self, index: IoIndex) -> Option<&mut IoWaiter> {
-        self.io_waiters().get_mut(index)
+    pub(crate) fn get_io_mut(&self, index: IoIndex) -> Option<RefMut<'_, IoWaiter>> {
+        RefMut::filter_map(self.io_waiters(), |io_waiters| io_waiters.get_mut(index)).ok()
     }
 
-    pub(crate) fn release_io(&mut self, index: IoIndex) -> Option<IoWaiter> {
+    pub(crate) fn release_io(&self, index: IoIndex) -> Option<IoWaiter> {
         self.io_waiters().free(index)
     }
 
@@ -267,7 +359,7 @@ impl Storage {
                 IoAction::Disarm
             };
             out.push(IoChange {
-                token: io_token(index),
+                token: Token(index.to_bits()),
                 fd: io.fd,
                 direction: io.direction,
                 action,
@@ -275,9 +367,10 @@ impl Storage {
         }
     }
 
-    pub(crate) fn mark_io_applied(&mut self, changes: &[IoChange]) {
+    pub(crate) fn mark_io_applied(&self, changes: &[IoChange]) {
+        let mut io_waiters = self.io_waiters();
         for change in changes {
-            if let Some(io) = self.io_waiters().get_mut(io_index(change.token)) {
+            if let Some(io) = io_waiters.get_mut(IoIndex::from_bits(change.token.0)) {
                 io.armed = change.action == IoAction::Arm;
             }
         }
@@ -287,18 +380,149 @@ impl Storage {
     pub(crate) fn io_count(&self) -> usize {
         self.io_waiters_ref().iter().count()
     }
+
+    pub(crate) fn spawn(&self, future: TaskFuture) -> TaskId {
+        let result = self.insert_task(future);
+        match result {
+            Ok(id) => {
+                self.ready().push(id);
+                id
+            }
+            Err(future) => {
+                // Dropped outside the pool borrow: its `Drop` may use the storage.
+                drop(future);
+                panic!("more than {} concurrent tasks", self.task_capacity());
+            }
+        }
+    }
+
+    pub(crate) fn register_io(&self, fd: BorrowedFd<'_>, direction: Direction) -> IoIndex {
+        self.alloc_io(fd.as_raw_fd(), direction)
+    }
+
+    pub(crate) fn set_io_waker(&self, index: IoIndex, waker: &Waker) {
+        let mut io = self.get_io_mut(index).expect("IO is not registered");
+        io.waker = Some(waker.clone());
+    }
+
+    pub(crate) fn remove_io_waker(&self, index: IoIndex) {
+        if let Some(mut io) = self.get_io_mut(index) {
+            io.waker = None;
+        }
+    }
+
+    pub(crate) fn has_io_waker(&self, index: IoIndex) -> bool {
+        self.get_io(index).is_some_and(|io| io.waker.is_some())
+    }
+
+    fn take_io_waker(&self, token: Token, direction: Direction) -> Option<Waker> {
+        let mut io = self.get_io_mut(IoIndex::from_bits(token.0))?;
+        if io.direction != direction {
+            return None;
+        }
+        // The filter is one-shot: delivering the event disarmed it.
+        io.armed = false;
+        io.waker.take()
+    }
+
+    pub(crate) fn has_ready_tasks(&self) -> bool {
+        !self.ready().is_empty()
+    }
+
+    pub(crate) fn run_ready_tasks(&self, root: TaskId) -> RootStatus {
+        loop {
+            let Some(id) = self.ready().pop() else {
+                return RootStatus::Running;
+            };
+            let Some(task) = self.task(id) else {
+                continue;
+            };
+            // SAFETY: the ready queue lives in the storage's allocation, which outlives every
+            // waker except deliberately leaked ones (documented as forbidden).
+            let waker = unsafe { new_waker(self.ready(), id) };
+            let mut cx = core::task::Context::from_waker(&waker);
+            // SAFETY: tasks are removed only right below (after the poll) and by
+            // `drop_all_tasks`, which is never called from inside a task; `run_ready_tasks`
+            // isn't either, so the task isn't polled re-entrantly.
+            if unsafe { task.poll(&mut cx) }.is_pending() {
+                continue;
+            }
+            let (future, join_waiter) = self
+                .remove_task(id)
+                .expect("a finished task is still in storage");
+            drop(future);
+            if let Some(join_waiter) = join_waiter {
+                join_waiter.wake();
+            }
+            if id == root {
+                return RootStatus::Finished;
+            }
+        }
+    }
+
+    pub(crate) fn drop_all_tasks(&self) {
+        let mut futures = Vec::new();
+        loop {
+            self.take_all_tasks(&mut futures);
+            if futures.is_empty() {
+                return;
+            }
+            // Dropping may spawn new tasks, the next iteration drops them as well.
+            futures.clear();
+        }
+    }
 }
 
-impl Drop for Storage {
-    fn drop(&mut self) {
-        // SAFETY: both pools are initialized (see `new`) and dropped exactly once here; the
-        // chunk is then freed with the layout it was allocated with.
-        unsafe {
-            ptr::drop_in_place(self.timers.as_ptr());
-            ptr::drop_in_place(self.io_waiters.as_ptr());
-            ptr::drop_in_place(self.tasks.as_ptr());
-            dealloc(self.chunk.as_ptr(), self.layout);
+impl Storage<Selector> {
+    pub(crate) fn selector(&self) -> &Selector {
+        &self.header().selector
+    }
+
+    /// Must be called while the fd is still open (see `Selector::apply_now`).
+    pub(crate) fn deregister_io(&self, index: IoIndex) -> rustix::io::Result<()> {
+        let Some(io) = self.release_io(index) else {
+            return Ok(());
+        };
+        if !io.armed {
+            return Ok(());
         }
+        self.selector().apply_now(IoChange {
+            token: Token(index.to_bits()),
+            fd: io.fd,
+            direction: io.direction,
+            action: IoAction::Disarm,
+        })
+    }
+
+    pub(crate) fn process_selector_events(&self) -> rustix::io::Result<()> {
+        let mut events = Vec::new();
+        self.selector().poll_nonblocking(&mut events)?;
+        let mut wakers = Vec::new();
+        for event in events {
+            match event {
+                SelectorEvent::Readable(token) => {
+                    wakers.extend(self.take_io_waker(token, Direction::Read));
+                }
+                SelectorEvent::Writable(token) => {
+                    wakers.extend(self.take_io_waker(token, Direction::Write));
+                }
+                SelectorEvent::Timer => self.expire_timers(Instant::now(), &mut wakers),
+            }
+        }
+        wakers.into_iter().for_each(Waker::wake);
+        Ok(())
+    }
+
+    pub(crate) fn flush(&self) -> rustix::io::Result<()> {
+        match self.next_timer_deadline() {
+            Some(deadline) => self.selector().arm_timer(deadline),
+            None => self.selector().disarm_timer(),
+        }
+        let mut io_changes = Vec::new();
+        self.io_changes(&mut io_changes);
+        self.selector().flush(&io_changes)?;
+        self.mark_io_applied(&io_changes);
+        Ok(())
     }
 }
 
@@ -306,6 +530,7 @@ impl Drop for Storage {
 mod tests {
     use super::*;
     use crate::task::JoinStatus;
+    use crate::test_utils::TestStorage;
     use alloc::sync::Arc;
     use core::time::Duration;
     use std::sync::Mutex;
@@ -344,7 +569,8 @@ mod tests {
     #[test]
     fn alloc_get_release() {
         let now = Instant::now();
-        let mut storage = Storage::new(1, 2, 1);
+        let backing = TestStorage::new(1, 2, 1);
+        let storage = backing.storage();
         let index = storage.alloc_timer(now, noop_waker());
         assert_eq!(storage.get_timer_mut(index).unwrap().deadline, now);
 
@@ -359,7 +585,8 @@ mod tests {
     #[should_panic(expected = "more than 1 concurrent sleeps")]
     fn timer_capacity_is_bounded() {
         let now = Instant::now();
-        let mut storage = Storage::new(1, 1, 1);
+        let backing = TestStorage::new(1, 1, 1);
+        let storage = backing.storage();
         storage.alloc_timer(now, noop_waker());
         storage.alloc_timer(now, noop_waker());
     }
@@ -368,7 +595,8 @@ mod tests {
     fn expire_wakes_due_timers_in_deadline_order() {
         let log = Arc::new(Log::default());
         let now = Instant::now();
-        let mut storage = Storage::new(1, 8, 1);
+        let backing = TestStorage::new(1, 8, 1);
+        let storage = backing.storage();
         storage.alloc_timer(now + Duration::from_millis(5), waker(&log, 3));
         storage.alloc_timer(now, waker(&log, 2));
         storage.alloc_timer(now + Duration::from_millis(5), waker(&log, 4));
@@ -392,7 +620,8 @@ mod tests {
     fn equal_deadlines_expire_in_insertion_order_across_slot_reuse() {
         let log = Arc::new(Log::default());
         let now = Instant::now();
-        let mut storage = Storage::new(1, 2, 1);
+        let backing = TestStorage::new(1, 2, 1);
+        let storage = backing.storage();
         let first = storage.alloc_timer(now, noop_waker());
         storage.alloc_timer(now, waker(&log, 1));
         storage.release_timer(first);
@@ -406,7 +635,8 @@ mod tests {
     fn released_timer_is_not_woken() {
         let log = Arc::new(Log::default());
         let now = Instant::now();
-        let mut storage = Storage::new(1, 1, 1);
+        let backing = TestStorage::new(1, 1, 1);
+        let storage = backing.storage();
         let index = storage.alloc_timer(now, waker(&log, 1));
         storage.release_timer(index);
         let mut out = Vec::new();
@@ -419,7 +649,8 @@ mod tests {
     fn replaced_waker_is_the_one_woken() {
         let log = Arc::new(Log::default());
         let now = Instant::now();
-        let mut storage = Storage::new(1, 1, 1);
+        let backing = TestStorage::new(1, 1, 1);
+        let storage = backing.storage();
         let index = storage.alloc_timer(now, waker(&log, 1));
         storage.get_timer_mut(index).unwrap().waker = waker(&log, 2);
         let mut out = Vec::new();
@@ -429,7 +660,8 @@ mod tests {
 
     #[test]
     fn io_alloc_get_release() {
-        let mut storage = Storage::new(1, 1, 1);
+        let backing = TestStorage::new(1, 1, 1);
+        let storage = backing.storage();
         let index = storage.alloc_io(3, Direction::Write);
         assert_eq!(storage.get_io(index).unwrap().direction, Direction::Write);
         storage.get_io_mut(index).unwrap().waker = Some(noop_waker());
@@ -442,7 +674,8 @@ mod tests {
 
     #[test]
     fn io_changes_follow_the_stored_waker() {
-        let mut storage = Storage::new(1, 1, 2);
+        let backing = TestStorage::new(1, 1, 2);
+        let storage = backing.storage();
         let reader = storage.alloc_io(3, Direction::Read);
         let writer = storage.alloc_io(4, Direction::Write);
         let mut changes = Vec::new();
@@ -454,7 +687,7 @@ mod tests {
         assert_eq!(
             changes,
             vec![IoChange {
-                token: io_token(reader),
+                token: Token(reader.to_bits()),
                 fd: 3,
                 direction: Direction::Read,
                 action: IoAction::Arm,
@@ -468,14 +701,15 @@ mod tests {
         storage.get_io_mut(reader).unwrap().waker = None;
         storage.io_changes(&mut changes);
         assert_eq!(changes[0].action, IoAction::Disarm);
-        assert_eq!(io_index(changes[0].token), reader);
+        assert_eq!(IoIndex::from_bits(changes[0].token.0), reader);
         assert!(storage.get_io(writer).is_some());
     }
 
     #[test]
     #[should_panic(expected = "more than 1 concurrent IO operations")]
     fn io_capacity_is_bounded() {
-        let mut storage = Storage::new(1, 1, 1);
+        let backing = TestStorage::new(1, 1, 1);
+        let storage = backing.storage();
         storage.alloc_io(3, Direction::Read);
         storage.alloc_io(3, Direction::Write);
     }
@@ -483,25 +717,27 @@ mod tests {
     #[test]
     fn dropping_the_storage_drops_live_wakers() {
         let log = Arc::new(Log::default());
-        let mut storage = Storage::new(1, 2, 2);
+        let backing = TestStorage::new(1, 2, 2);
+        let storage = backing.storage();
         storage.alloc_timer(Instant::now(), waker(&log, 1));
         let io = storage.alloc_io(3, Direction::Read);
         storage.get_io_mut(io).unwrap().waker = Some(waker(&log, 2));
         assert_eq!(Arc::strong_count(&log), 3);
-        drop(storage);
+        drop(backing);
         assert_eq!(Arc::strong_count(&log), 1);
     }
 
     #[test]
     #[should_panic(expected = "object pool capacity must not be zero")]
     fn zero_capacity_is_rejected() {
-        Storage::new(1, 1, 0);
+        TestStorage::new(1, 1, 0);
     }
 
     #[test]
     fn next_timer_deadline_is_the_earliest_one() {
         let now = Instant::now();
-        let mut storage = Storage::new(1, 4, 1);
+        let backing = TestStorage::new(1, 4, 1);
+        let storage = backing.storage();
         assert_eq!(storage.next_timer_deadline(), None);
         let later = now + Duration::from_millis(30);
         let earlier = now + Duration::from_millis(10);
@@ -535,7 +771,8 @@ mod tests {
 
     #[test]
     fn removing_a_task_returns_its_future_and_join_waiter() {
-        let mut storage = Storage::new(2, 1, 1);
+        let backing = TestStorage::new(2, 1, 1);
+        let storage = backing.storage();
         let id = storage.insert_task(Box::pin(async {})).ok().unwrap();
         assert!(storage.task(id).is_some());
         assert_eq!(
@@ -553,7 +790,8 @@ mod tests {
 
     #[test]
     fn finished_task_id_never_matches_a_reused_slot() {
-        let mut storage = Storage::new(1, 1, 1);
+        let backing = TestStorage::new(1, 1, 1);
+        let storage = backing.storage();
         let first = storage.insert_task(Box::pin(async {})).ok().unwrap();
         storage.remove_task(first);
         let second = storage.insert_task(Box::pin(async {})).ok().unwrap();
@@ -567,7 +805,8 @@ mod tests {
 
     #[test]
     fn full_task_pool_hands_the_future_back() {
-        let mut storage = Storage::new(1, 1, 1);
+        let backing = TestStorage::new(1, 1, 1);
+        let storage = backing.storage();
         storage.insert_task(Box::pin(async {})).ok().unwrap();
         let (future, dropped) = flagged_task();
         let rejected = storage.insert_task(future).err().unwrap();
@@ -579,7 +818,8 @@ mod tests {
 
     #[test]
     fn take_all_tasks_and_drop_free_the_futures() {
-        let mut storage = Storage::new(2, 1, 1);
+        let backing = TestStorage::new(2, 1, 1);
+        let storage = backing.storage();
         let (future, taken) = flagged_task();
         storage.insert_task(future).ok().unwrap();
         let mut out = Vec::new();
@@ -591,7 +831,43 @@ mod tests {
 
         let (future, left_over) = flagged_task();
         storage.insert_task(future).ok().unwrap();
-        drop(storage);
+        drop(backing);
         assert!(left_over.get());
+    }
+
+    #[test]
+    fn state_region_is_aligned_usable_and_dropped() {
+        #[repr(align(64))]
+        struct AlignedState {
+            value: u32,
+            dropped: std::rc::Rc<core::cell::Cell<bool>>,
+        }
+        impl Drop for AlignedState {
+            fn drop(&mut self) {
+                self.dropped.set(true);
+            }
+        }
+        let dropped = std::rc::Rc::new(core::cell::Cell::new(false));
+        let storage = Storage::new(
+            (),
+            AlignedState {
+                value: 7,
+                dropped: dropped.clone(),
+            },
+            1,
+            1,
+            1,
+        );
+        // SAFETY: created with `AlignedState`; nothing else references the state.
+        let state = unsafe { storage.state::<AlignedState>().as_mut() };
+        assert_eq!((state as *const AlignedState).addr() % 64, 0);
+        assert_eq!(state.value, 7);
+        state.value = 8;
+        // SAFETY: as above.
+        assert_eq!(unsafe { storage.state::<AlignedState>().as_ref() }.value, 8);
+        assert!(!dropped.get());
+        // SAFETY: created with `AlignedState`, destroyed once, no task is being polled.
+        unsafe { storage.destroy::<AlignedState>() };
+        assert!(dropped.get());
     }
 }

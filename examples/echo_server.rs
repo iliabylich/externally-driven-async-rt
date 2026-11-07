@@ -166,7 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             accept_loop(ctx, addr).await;
         },
     )?;
-    for line in mem::take(&mut event_loop.as_mut().state_mut().log) {
+    for line in mem::take(&mut event_loop.state_mut().log) {
         println!("{line}");
     }
     println!("commands: stats, quit");
@@ -177,7 +177,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         let (loop_ready, stdin_ready) = {
             let mut fds = [
-                PollFd::new(&*event_loop, PollFlags::IN),
+                PollFd::new(&event_loop, PollFlags::IN),
                 PollFd::new(&stdin, PollFlags::IN),
             ];
             match poll(&mut fds, None) {
@@ -189,8 +189,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         if loop_ready {
-            let result = event_loop.as_mut().drain_events_without_blocking();
-            for line in mem::take(&mut event_loop.as_mut().state_mut().log) {
+            let result = event_loop.drain_events_without_blocking();
+            for line in mem::take(&mut event_loop.state_mut().log) {
                 println!("{line}");
             }
             match result {
@@ -207,7 +207,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             for command in commands.drain(..) {
                 match command {
-                    Command::Stats => println!("{}", event_loop.as_mut().state_mut().stats()),
+                    Command::Stats => println!("{}", event_loop.state_mut().stats()),
                     Command::Quit => return Ok(()),
                     Command::Unknown(command) => println!("unknown command: {command:?}"),
                 }

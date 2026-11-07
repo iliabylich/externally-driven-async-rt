@@ -1,4 +1,3 @@
-use core::cell::RefCell;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::Poll;
@@ -8,13 +7,13 @@ use crate::storage::{Storage, TimerIndex};
 
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 pub struct Sleep<'ctx> {
-    storage: &'ctx RefCell<Storage>,
+    storage: &'ctx Storage,
     deadline: Instant,
     timer: Option<TimerIndex>,
 }
 
 impl<'ctx> Sleep<'ctx> {
-    pub(crate) fn new(storage: &'ctx RefCell<Storage>, deadline: Instant) -> Self {
+    pub(crate) fn new(storage: &'ctx Storage, deadline: Instant) -> Self {
         Self {
             storage,
             deadline,
@@ -29,22 +28,18 @@ impl Future for Sleep<'_> {
     fn poll(mut self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {
         if Instant::now() >= self.deadline {
             if let Some(timer) = self.timer.take() {
-                self.storage.borrow_mut().release_timer(timer);
+                self.storage.release_timer(timer);
             }
             return Poll::Ready(());
         }
-        let mut storage = self.storage.borrow_mut();
         match self.timer {
-            Some(timer) => storage
+            Some(timer) => self
+                .storage
                 .get_timer_mut(timer)
                 .expect("a pending sleep's timer is in storage")
                 .waker
                 .clone_from(cx.waker()),
-            None => {
-                let timer = storage.alloc_timer(self.deadline, cx.waker().clone());
-                drop(storage);
-                self.timer = Some(timer);
-            }
+            None => self.timer = Some(self.storage.alloc_timer(self.deadline, cx.waker().clone())),
         }
         Poll::Pending
     }
@@ -53,7 +48,7 @@ impl Future for Sleep<'_> {
 impl Drop for Sleep<'_> {
     fn drop(&mut self) {
         if let Some(timer) = self.timer {
-            self.storage.borrow_mut().release_timer(timer);
+            self.storage.release_timer(timer);
         }
     }
 }
@@ -86,7 +81,7 @@ mod tests {
             },
         );
         let mut event_loop = event_loop.unwrap();
-        assert_eq!(event_loop.as_mut().state_mut().0, vec![1]);
+        assert_eq!(event_loop.state_mut().0, vec![1]);
         assert!(!has_timers(&event_loop));
     }
 
@@ -104,10 +99,10 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(event_loop.as_mut().state_mut().0.is_empty());
+        assert!(event_loop.state_mut().0.is_empty());
         run_until_root_finishes(&mut event_loop);
         assert!(start.elapsed() >= Duration::from_millis(20));
-        assert_eq!(event_loop.as_mut().state_mut().0, vec![1]);
+        assert_eq!(event_loop.state_mut().0, vec![1]);
     }
 
     #[test]
@@ -131,8 +126,8 @@ mod tests {
         )
         .unwrap();
         run_until_root_finishes(&mut event_loop);
-        assert_eq!(event_loop.as_mut().state_mut().0, vec![10, 20, 30]);
-        assert!(!is_readable(&*event_loop, 0));
+        assert_eq!(event_loop.state_mut().0, vec![10, 20, 30]);
+        assert!(!is_readable(&event_loop, 0));
     }
 
     #[test]
@@ -157,7 +152,7 @@ mod tests {
         )
         .unwrap();
         run_until_root_finishes(&mut event_loop);
-        assert_eq!(event_loop.as_mut().state_mut().0.len(), 100);
+        assert_eq!(event_loop.state_mut().0.len(), 100);
     }
 
     #[test]
@@ -177,12 +172,12 @@ mod tests {
         )
         .unwrap();
         assert!(has_timers(&event_loop));
-        wake_by_writing(&*event_loop, &b);
-        assert_eq!(event_loop.as_mut().drain_events_without_blocking(), Ok(()));
-        assert_eq!(event_loop.as_mut().state_mut().0, vec![1]);
+        wake_by_writing(&event_loop, &b);
+        assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
+        assert_eq!(event_loop.state_mut().0, vec![1]);
         assert!(!has_timers(&event_loop));
         assert!(
-            !is_readable(&*event_loop, 100),
+            !is_readable(&event_loop, 100),
             "the OS timer is still armed"
         );
     }
@@ -206,12 +201,12 @@ mod tests {
             },
         )
         .unwrap();
-        while event_loop.as_mut().state_mut().0.is_empty() {
-            assert!(is_readable(&*event_loop, 2000));
-            assert_eq!(event_loop.as_mut().drain_events_without_blocking(), Ok(()));
+        while event_loop.state_mut().0.is_empty() {
+            assert!(is_readable(&event_loop, 2000));
+            assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
         }
         rustix::io::write(&b, b"x").unwrap();
-        assert!(!is_readable(&*event_loop, 0));
+        assert!(!is_readable(&event_loop, 0));
         assert!(is_readable(&*a, 0));
     }
 
@@ -235,7 +230,7 @@ mod tests {
         )
         .unwrap();
         run_until_root_finishes(&mut event_loop);
-        assert_eq!(event_loop.as_mut().state_mut().0, vec![0, 1, 2, 3, 4]);
+        assert_eq!(event_loop.state_mut().0, vec![0, 1, 2, 3, 4]);
         assert!(start.elapsed() >= period * 5);
     }
 
@@ -270,10 +265,10 @@ mod tests {
             },
         )
         .unwrap();
-        while event_loop.as_mut().state_mut().0.len() < 3 {
-            assert!(is_readable(&*event_loop, 2000));
-            assert_eq!(event_loop.as_mut().drain_events_without_blocking(), Ok(()));
+        while event_loop.state_mut().0.len() < 3 {
+            assert!(is_readable(&event_loop, 2000));
+            assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
         }
-        assert_eq!(event_loop.as_mut().state_mut().0, vec![0, 1, 2]);
+        assert_eq!(event_loop.state_mut().0, vec![0, 1, 2]);
     }
 }

@@ -193,7 +193,7 @@ mod tests {
         .unwrap();
         run_until_events(&mut event_loop, 1);
         assert_eq!(
-            event_loop.as_mut().state_mut().0,
+            event_loop.state_mut().0,
             vec![Errno::CONNREFUSED.raw_os_error() as u32]
         );
     }
@@ -235,7 +235,7 @@ mod tests {
         )
         .unwrap();
         run_until_events(&mut event_loop, 1);
-        assert_eq!(event_loop.as_mut().state_mut().0, vec![LEN as u32]);
+        assert_eq!(event_loop.state_mut().0, vec![LEN as u32]);
         server.join().unwrap();
     }
 }

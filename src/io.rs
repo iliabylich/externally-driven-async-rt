@@ -4,16 +4,15 @@ use core::task::Poll;
 
 use rustix::fd::BorrowedFd;
 
-use crate::event_loop::EventLoop;
 use crate::selectors::Direction;
-use crate::state::State;
 use crate::storage::IoIndex;
+use crate::storage::Storage;
 
 // Runs a non-blocking syscall until it doesn't return `EAGAIN`, waiting for `$direction`
 // readiness of `$fd` in between. Must be used inside an `async` block.
 macro_rules! io_loop {
     ($ctx:expr, $fd:expr, $direction:expr, $syscall:expr) => {{
-        let mut registration = $crate::io::IoRegistration::new($ctx.event_loop(), $fd, $direction);
+        let mut registration = $crate::io::IoRegistration::new($ctx.storage(), $fd, $direction);
         loop {
             match $syscall {
                 Err(rustix::io::Errno::INTR) => {}
@@ -26,24 +25,20 @@ macro_rules! io_loop {
 
 pub(crate) use io_loop;
 
-pub(crate) struct IoRegistration<'a, S: State> {
-    event_loop: &'a EventLoop<S>,
+pub(crate) struct IoRegistration<'a> {
+    storage: &'a Storage,
     index: IoIndex,
 }
 
-impl<'a, S: State> IoRegistration<'a, S> {
-    pub(crate) fn new(
-        event_loop: &'a EventLoop<S>,
-        fd: BorrowedFd<'a>,
-        direction: Direction,
-    ) -> Self {
+impl<'a> IoRegistration<'a> {
+    pub(crate) fn new(storage: &'a Storage, fd: BorrowedFd<'a>, direction: Direction) -> Self {
         Self {
-            event_loop,
-            index: event_loop.register_io(fd, direction),
+            storage,
+            index: storage.register_io(fd, direction),
         }
     }
 
-    pub(crate) fn wait(&mut self) -> Wait<'_, 'a, S> {
+    pub(crate) fn wait(&mut self) -> Wait<'_, 'a> {
         Wait {
             registration: self,
             waiting: false,
@@ -51,40 +46,40 @@ impl<'a, S: State> IoRegistration<'a, S> {
     }
 }
 
-impl<S: State> Drop for IoRegistration<'_, S> {
+impl Drop for IoRegistration<'_> {
     fn drop(&mut self) {
         // On failure the slot is released anyway, so a filter left armed can only produce one
         // ignored event (its index no longer matches) until the fd is closed.
-        let _ = self.event_loop.deregister_io(self.index);
+        let _ = self.storage.deregister_io(self.index);
     }
 }
 
-pub(crate) struct Wait<'r, 'a, S: State> {
-    registration: &'r mut IoRegistration<'a, S>,
+pub(crate) struct Wait<'r, 'a> {
+    registration: &'r mut IoRegistration<'a>,
     waiting: bool,
 }
 
-impl<S: State> Future for Wait<'_, '_, S> {
+impl Future for Wait<'_, '_> {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {
         let this = self.get_mut();
-        let IoRegistration { event_loop, index } = *this.registration;
-        if this.waiting && !event_loop.has_io_waker(index) {
+        let IoRegistration { storage, index } = *this.registration;
+        if this.waiting && !storage.has_io_waker(index) {
             this.waiting = false;
             return Poll::Ready(());
         }
-        event_loop.set_io_waker(index, cx.waker());
+        storage.set_io_waker(index, cx.waker());
         this.waiting = true;
         Poll::Pending
     }
 }
 
-impl<S: State> Drop for Wait<'_, '_, S> {
+impl Drop for Wait<'_, '_> {
     fn drop(&mut self) {
         if self.waiting {
-            let IoRegistration { event_loop, index } = *self.registration;
-            event_loop.remove_io_waker(index);
+            let IoRegistration { storage, index } = *self.registration;
+            storage.remove_io_waker(index);
         }
     }
 }
@@ -106,7 +101,7 @@ mod tests {
 
     async fn read_some(ctx: &TestContext, fd: &OwnedFd) -> rustix::io::Result<usize> {
         let mut buf = [0; 64];
-        let mut registration = IoRegistration::new(ctx.event_loop(), fd.as_fd(), Direction::Read);
+        let mut registration = IoRegistration::new(ctx.storage(), fd.as_fd(), Direction::Read);
         loop {
             match rustix::io::read(fd, &mut buf) {
                 Err(Errno::AGAIN) => registration.wait().await,
@@ -116,7 +111,7 @@ mod tests {
     }
 
     async fn write_some(ctx: &TestContext, fd: &OwnedFd) -> rustix::io::Result<usize> {
-        let mut registration = IoRegistration::new(ctx.event_loop(), fd.as_fd(), Direction::Write);
+        let mut registration = IoRegistration::new(ctx.storage(), fd.as_fd(), Direction::Write);
         loop {
             match rustix::io::write(fd, b"x") {
                 Err(Errno::AGAIN) => registration.wait().await,
@@ -135,7 +130,7 @@ mod tests {
     }
 
     fn registrations(event_loop: &EventLoop<Log>) -> usize {
-        event_loop.io_registration_count()
+        event_loop.storage().io_count()
     }
 
     #[test]
@@ -154,12 +149,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(registrations(&event_loop), 1);
-        assert!(!is_readable(&*event_loop, 0));
+        assert!(!is_readable(&event_loop, 0));
 
         rustix::io::write(&b, b"abc").unwrap();
-        assert!(is_readable(&*event_loop, 1000));
-        assert_eq!(event_loop.as_mut().drain_events_without_blocking(), Ok(()));
-        assert_eq!(event_loop.as_mut().state_mut().0, vec![3]);
+        assert!(is_readable(&event_loop, 1000));
+        assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
+        assert_eq!(event_loop.state_mut().0, vec![3]);
         assert_eq!(registrations(&event_loop), 0);
     }
 
@@ -178,12 +173,12 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(event_loop.as_mut().state_mut().0.is_empty());
-        assert!(!is_readable(&*event_loop, 0));
+        assert!(event_loop.state_mut().0.is_empty());
+        assert!(!is_readable(&event_loop, 0));
 
         drain_receive_buffer(&b);
         run_until_root_finishes(&mut event_loop);
-        assert_eq!(event_loop.as_mut().state_mut().0, vec![1]);
+        assert_eq!(event_loop.state_mut().0, vec![1]);
     }
 
     #[test]
@@ -202,10 +197,10 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(event_loop.as_mut().state_mut().0, vec![3]);
+        assert_eq!(event_loop.state_mut().0, vec![3]);
         assert_eq!(registrations(&event_loop), 0);
         rustix::io::write(&b, b"abc").unwrap();
-        assert!(!is_readable(&*event_loop, 0));
+        assert!(!is_readable(&event_loop, 0));
     }
 
     #[test]
@@ -226,13 +221,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(registrations(&event_loop), 1);
-        while event_loop.as_mut().state_mut().0.is_empty() {
-            assert!(is_readable(&*event_loop, 2000));
-            assert_eq!(event_loop.as_mut().drain_events_without_blocking(), Ok(()));
+        while event_loop.state_mut().0.is_empty() {
+            assert!(is_readable(&event_loop, 2000));
+            assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
         }
         assert_eq!(registrations(&event_loop), 0);
         rustix::io::write(&b, b"abc").unwrap();
-        assert!(!is_readable(&*event_loop, 0));
+        assert!(!is_readable(&event_loop, 0));
     }
 
     #[test]
@@ -260,13 +255,13 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(event_loop.as_mut().state_mut().0.is_empty());
+        assert!(event_loop.state_mut().0.is_empty());
         assert_eq!(registrations(&event_loop), 1);
 
         rustix::io::write(&b, b"abc").unwrap();
-        assert!(is_readable(&*event_loop, 1000));
-        assert_eq!(event_loop.as_mut().drain_events_without_blocking(), Ok(()));
-        assert_eq!(event_loop.as_mut().state_mut().0, vec![1]);
+        assert!(is_readable(&event_loop, 1000));
+        assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
+        assert_eq!(event_loop.state_mut().0, vec![1]);
     }
 
     #[test]
@@ -294,7 +289,7 @@ mod tests {
         )
         .unwrap();
         run_until_root_finishes(&mut event_loop);
-        assert_eq!(event_loop.as_mut().state_mut().0, vec![3]);
+        assert_eq!(event_loop.state_mut().0, vec![3]);
     }
 
     #[test]
@@ -332,12 +327,12 @@ mod tests {
         .unwrap();
         for i in 1..=3 {
             rustix::io::write(&b, &vec![0; i]).unwrap();
-            while event_loop.as_mut().state_mut().0.len() < i {
-                assert!(is_readable(&*event_loop, 2000));
-                assert_eq!(event_loop.as_mut().drain_events_without_blocking(), Ok(()));
+            while event_loop.state_mut().0.len() < i {
+                assert!(is_readable(&event_loop, 2000));
+                assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
             }
         }
-        assert_eq!(event_loop.as_mut().state_mut().0, vec![1, 2, 3]);
-        assert_eq!(event_loop.io_registration_count(), 0);
+        assert_eq!(event_loop.state_mut().0, vec![1, 2, 3]);
+        assert_eq!(event_loop.storage().io_count(), 0);
     }
 }

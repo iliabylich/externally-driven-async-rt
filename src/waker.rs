@@ -67,15 +67,19 @@ unsafe fn drop_waker(ptr: *const ()) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::Storage;
+    use crate::test_utils::TestStorage;
 
-    fn storage_with_task() -> (Storage, TaskId) {
-        let mut storage = Storage::new(2, 1, 1);
-        let task = storage.insert_task(Box::pin(async {})).ok().unwrap();
+    fn storage_with_task() -> (TestStorage, TaskId) {
+        let storage = TestStorage::new(2, 1, 1);
+        let task = storage
+            .storage()
+            .insert_task(Box::pin(async {}))
+            .ok()
+            .unwrap();
         (storage, task)
     }
 
-    fn queued(storage: &Storage) -> Vec<TaskId> {
+    fn queued(storage: &TestStorage) -> Vec<TaskId> {
         core::iter::from_fn(|| storage.ready().pop()).collect()
     }
 
@@ -105,13 +109,19 @@ mod tests {
 
     #[test]
     fn waking_after_the_storage_was_mutated() {
-        let (mut storage, task) = storage_with_task();
+        let (storage, task) = storage_with_task();
         // SAFETY: `storage` outlives the waker.
         let waker = unsafe { new_waker(storage.ready(), task) };
-        let other = storage.insert_task(Box::pin(async {})).ok().unwrap();
-        storage.alloc_timer(std::time::Instant::now(), Waker::noop().clone());
+        let other = storage
+            .storage()
+            .insert_task(Box::pin(async {}))
+            .ok()
+            .unwrap();
+        storage
+            .storage()
+            .alloc_timer(std::time::Instant::now(), Waker::noop().clone());
         waker.wake_by_ref();
-        storage.remove_task(other);
+        storage.storage().remove_task(other);
         waker.wake();
         assert_eq!(queued(&storage), vec![task]);
     }

@@ -113,7 +113,7 @@ async fn connect<S: State, A: Address>(
         Err(Errno::INPROGRESS | Errno::INTR) => {}
         Err(errno) => return Err(errno),
     }
-    IoRegistration::new(ctx.event_loop(), fd.as_fd(), Direction::Write)
+    IoRegistration::new(ctx.storage(), fd.as_fd(), Direction::Write)
         .wait()
         .await;
     socket_error(&fd)??;
