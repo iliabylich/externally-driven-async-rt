@@ -238,20 +238,16 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
                 selector,
                 root: Cell::new(Root::Finished),
                 next_timer_seq: Cell::new(0),
-                timers: ObjectPool::init(base.byte_add(parts.timers), capacities.max_timers)
-                    .as_ref(),
-                io_waiters: ObjectPool::init(base.byte_add(parts.io_waiters), capacities.max_io)
-                    .as_ref(),
-                tasks: ObjectPool::init(base.byte_add(parts.tasks), capacities.max_tasks).as_ref(),
-                ready: ReadyQueue::init(base.byte_add(parts.ready), capacities.max_tasks).as_ref(),
+                timers: ObjectPool::init(base.byte_add(parts.timers), capacities.max_timers),
+                io_waiters: ObjectPool::init(base.byte_add(parts.io_waiters), capacities.max_io),
+                tasks: ObjectPool::init(base.byte_add(parts.tasks), capacities.max_tasks),
+                ready: ReadyQueue::init(base.byte_add(parts.ready), capacities.max_tasks),
                 task_slab: TaskSlab::init(
                     base.byte_add(parts.task_slab),
                     capacities.max_tasks,
                     capacities.max_task_size,
-                )
-                .as_ref(),
-                root_region: RootRegion::init(base.byte_add(parts.root_region), root_layout.size())
-                    .as_ref(),
+                ),
+                root_region: RootRegion::init(base.byte_add(parts.root_region), root_layout.size()),
                 state: state_ptr.as_ref(),
             };
             let ptr = base.cast::<Self>();

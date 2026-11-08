@@ -10,15 +10,15 @@ impl RootRegion {
     /// # Safety
     ///
     /// `ptr` must be valid for writes of `size` bytes and stay valid (and otherwise unused) for
-    /// as long as the returned region is used.
-    pub(crate) unsafe fn init(ptr: NonNull<u8>, size: usize) -> NonNull<Self> {
+    /// `'a`.
+    pub(crate) unsafe fn init<'a>(ptr: NonNull<u8>, size: usize) -> &'a Self {
         let bytes = core::ptr::slice_from_raw_parts_mut(
             ptr.as_ptr().cast::<UnsafeCell<MaybeUninit<u8>>>(),
             size,
         ) as *mut Self;
-        // SAFETY: derived from a `NonNull`; the bytes are `MaybeUninit`, so they need no
-        // initialization.
-        unsafe { NonNull::new_unchecked(bytes) }
+        // SAFETY: the caller guarantees `ptr` is valid for `size` bytes for `'a`; the bytes are
+        // `MaybeUninit`, so they need no initialization.
+        unsafe { &*bytes }
     }
 
     pub(crate) fn fits(&self, layout: Layout) -> bool {
@@ -44,7 +44,7 @@ mod tests {
     fn region_in(memory: &mut [MaybeUninit<u8>], layout: Layout) -> &RootRegion {
         // SAFETY: `aligned_in` returns memory valid for `layout`, and `memory` stays borrowed for
         // as long as the returned region.
-        unsafe { RootRegion::init(aligned_in(memory, layout), layout.size()).as_ref() }
+        unsafe { RootRegion::init(aligned_in(memory, layout), layout.size()) }
     }
 
     #[test]
@@ -72,8 +72,7 @@ mod tests {
             .unwrap();
         // SAFETY: `memory` is valid for 8 bytes from `start` and stays borrowed for as long as
         // the region.
-        let region =
-            unsafe { RootRegion::init(NonNull::from(&mut memory[start..]).cast(), 8).as_ref() };
+        let region = unsafe { RootRegion::init(NonNull::from(&mut memory[start..]).cast(), 8) };
         assert!(region.fits(Layout::new::<[u8; 8]>()));
         assert!(!region.fits(Layout::new::<u16>()));
     }

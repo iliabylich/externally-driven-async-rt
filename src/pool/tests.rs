@@ -2,13 +2,13 @@ use crate::{
     pool::{Index, ObjectPool},
     test_utils::{aligned_in, assert_yields, stack_memory},
 };
-use core::{
-    alloc::Layout, cell::Cell, marker::PhantomData, mem::MaybeUninit, ops::Deref, ptr::NonNull,
-};
+use core::{alloc::Layout, cell::Cell, marker::PhantomData, mem::MaybeUninit, ops::Deref};
 
-// A pool in borrowed memory, dropped in place on drop.
+// A pool in borrowed memory, dropped in place on drop. Only a raw pointer, with the memory's
+// provenance: a stored reference would be protected while a `TestPool` is passed to `mem::drop`,
+// making the drop UB.
 struct TestPool<'m, T> {
-    pool: NonNull<ObjectPool<T>>,
+    pool: *mut ObjectPool<T>,
     _memory: PhantomData<&'m mut [MaybeUninit<u8>]>,
 }
 
@@ -17,9 +17,9 @@ impl<'m, T: Default> TestPool<'m, T> {
         let ptr = aligned_in(memory, ObjectPool::<T>::layout(len));
         // SAFETY: `ptr` is aligned and valid for the layout, and `memory` stays borrowed for
         // as long as the pool exists.
-        let pool = unsafe { ObjectPool::<T>::init(ptr, len) };
+        unsafe { ObjectPool::<T>::init(ptr, len) };
         Self {
-            pool,
+            pool: ObjectPool::raw(ptr, len),
             _memory: PhantomData,
         }
     }
@@ -30,14 +30,14 @@ impl<T> Deref for TestPool<'_, T> {
 
     fn deref(&self) -> &ObjectPool<T> {
         // SAFETY: initialized in `new` and only dropped in `drop`; borrowed through `self`.
-        unsafe { self.pool.as_ref() }
+        unsafe { &*self.pool }
     }
 }
 
 impl<T> Drop for TestPool<'_, T> {
     fn drop(&mut self) {
         // SAFETY: initialized in `new`, dropped once, and not used afterwards.
-        unsafe { core::ptr::drop_in_place(self.pool.as_ptr()) };
+        unsafe { core::ptr::drop_in_place(self.pool) };
     }
 }
 

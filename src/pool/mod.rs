@@ -93,9 +93,8 @@ impl<T: Default> ObjectPool<T> {
     /// # Safety
     ///
     /// `ptr` must be valid for writes of `Self::layout(len)` bytes (so `layout` must have accepted
-    /// `len`), aligned to it, and stay valid (and otherwise unused) for as long as the returned
-    /// pool is used.
-    pub(crate) unsafe fn init(ptr: NonNull<u8>, len: usize) -> NonNull<Self> {
+    /// `len`), aligned to it, and stay valid (and otherwise unused) for `'a`.
+    pub(crate) unsafe fn init<'a>(ptr: NonNull<u8>, len: usize) -> &'a Self {
         let pool = Self::raw(ptr, len);
         // SAFETY: the caller guarantees `ptr` is valid for `Self::layout(len)`, which (`repr(C)`)
         // covers every field; every slot is written without reading the uninitialized memory.
@@ -115,7 +114,7 @@ impl<T: Default> ObjectPool<T> {
                     value: T::default(),
                 });
             }
-            NonNull::new_unchecked(pool)
+            &*pool
         }
     }
 }

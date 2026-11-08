@@ -45,8 +45,8 @@ impl ReadyQueue {
     /// # Safety
     ///
     /// `ptr` must be valid for writes of `Self::layout(len)` bytes, aligned to it, and stay valid
-    /// (and otherwise unused) for as long as the returned queue is used.
-    pub(crate) unsafe fn init(ptr: NonNull<u8>, len: usize) -> NonNull<Self> {
+    /// (and otherwise unused) for `'a`.
+    pub(crate) unsafe fn init<'a>(ptr: NonNull<u8>, len: usize) -> &'a Self {
         let queue =
             core::ptr::slice_from_raw_parts_mut(ptr.as_ptr().cast::<Link>(), len) as *mut Self;
         // SAFETY: the caller guarantees `ptr` is valid for `Self::layout(len)`, which (`repr(C)`)
@@ -65,7 +65,7 @@ impl ReadyQueue {
                     next: Cell::new(None),
                 });
             }
-            NonNull::new_unchecked(queue)
+            &*queue
         }
     }
 
@@ -161,7 +161,7 @@ mod tests {
         let ptr = aligned_in(memory, ReadyQueue::layout(len));
         // SAFETY: `ptr` is aligned and valid for the layout, and `memory` stays borrowed for as
         // long as the returned queue.
-        unsafe { ReadyQueue::init(ptr, len).as_ref() }
+        unsafe { ReadyQueue::init(ptr, len) }
     }
 
     fn tracked(queue: &ReadyQueue, slot: u32, generation: u32) -> TaskId {

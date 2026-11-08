@@ -37,9 +37,8 @@ impl TaskSlab {
     /// # Safety
     ///
     /// `ptr` must be valid for writes of `Self::layout(blocks, block_size)` bytes (so `layout`
-    /// must have accepted them), aligned to it, and stay valid (and otherwise unused) for as long
-    /// as the returned slab is used.
-    pub(crate) unsafe fn init(ptr: NonNull<u8>, blocks: usize, block_size: usize) -> NonNull<Self> {
+    /// must have accepted them), aligned to it, and stay valid (and otherwise unused) for `'a`.
+    pub(crate) unsafe fn init<'a>(ptr: NonNull<u8>, blocks: usize, block_size: usize) -> &'a Self {
         let chunks_per_block = Self::chunks_per_block(block_size);
         let slab = core::ptr::slice_from_raw_parts_mut(
             ptr.as_ptr().cast::<Chunk>(),
@@ -50,7 +49,7 @@ impl TaskSlab {
         // initialization.
         unsafe {
             (&raw mut (*slab).chunks_per_block).write(chunks_per_block);
-            NonNull::new_unchecked(slab)
+            &*slab
         }
     }
 
@@ -79,7 +78,7 @@ mod tests {
         let ptr = aligned_in(memory, TaskSlab::layout(blocks, block_size));
         // SAFETY: `ptr` is aligned and valid for the layout, and `memory` stays borrowed for as
         // long as the returned slab.
-        unsafe { TaskSlab::init(ptr, blocks, block_size).as_ref() }
+        unsafe { TaskSlab::init(ptr, blocks, block_size) }
     }
 
     #[test]
