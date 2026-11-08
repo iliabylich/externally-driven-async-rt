@@ -89,8 +89,9 @@ impl<S: State> EventLoop<S> {
     }
 
     pub fn state_mut(&mut self) -> &mut S {
-        // SAFETY: the state is only accessed mutably here and in `Context::dispatch`, which runs inside tasks, i.e. only while `new`, a drain or
-        // `drop` holds exclusive access to the loop; `&mut self` rules all of those out.
+        // SAFETY: the state is only accessed mutably here and in `Context::dispatch`, which runs
+        // inside tasks, i.e. only while `new`, a drain or `drop` holds exclusive access to the
+        // loop; `&mut self` rules all of those out.
         unsafe { &mut *self.storage.state().get() }
     }
 

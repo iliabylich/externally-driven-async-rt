@@ -21,6 +21,8 @@ use crate::{
     waker::new_waker,
 };
 
+use layout::StorageLayout;
+
 // Pool values are `Cell`s (see `ObjectPool`); a vacant slot holds a stale or default value.
 #[derive(Default)]
 pub(crate) struct Timer {
@@ -127,8 +129,9 @@ pub(crate) struct Storage<S: 'static, Sel = Selector> {
     selector: Sel,
     root: Cell<Root>,
     next_timer_seq: Cell<u64>,
-    // `'static`: they live as long as the storage, which nothing that can reach it outlives. Only shared references: the pools and the queue consist of `Cell`s, the state,
-    // the slab and the root region are in `UnsafeCell`s.
+    // `'static`: they live as long as the storage, which nothing that can reach it outlives.
+    // Only shared references: the pools and the queue consist of `Cell`s, the state, the slab
+    // and the root region are in `UnsafeCell`s.
     state: &'static UnsafeCell<S>,
     timers: &'static ObjectPool<Timer>,
     io_waiters: &'static ObjectPool<IoWaiter>,
@@ -144,56 +147,11 @@ enum TaskMemory {
     Root,
 }
 
-// The layout of the runtime's single allocation and the offset of each part in it, laid out one
-// after another like the fields of a C struct, the `Storage` struct first.
-struct StorageLayout {
-    layout: Layout,
-    state: usize,
-    timers: usize,
-    io_waiters: usize,
-    tasks: usize,
-    ready: usize,
-    task_slab: usize,
-    root_region: usize,
-}
-
-impl StorageLayout {
-    fn new<S: 'static, Sel>(capacities: Capacities, root_layout: Layout) -> Self {
-        let extend = |layout: Layout, next: Layout| layout.extend(next).expect("too large");
-        let layout = Layout::new::<Storage<S, Sel>>();
-        let (layout, state) = extend(layout, Layout::new::<S>());
-        let (layout, timers) = extend(layout, ObjectPool::<Timer>::layout(capacities.max_timers));
-        let (layout, io_waiters) =
-            extend(layout, ObjectPool::<IoWaiter>::layout(capacities.max_io));
-        let (layout, tasks) = extend(
-            layout,
-            ObjectPool::<TaskEntry>::layout(capacities.max_tasks),
-        );
-        let (layout, ready) = extend(layout, ReadyQueue::layout(capacities.max_tasks));
-        let (layout, task_slab) = extend(
-            layout,
-            TaskSlab::layout(capacities.max_tasks, capacities.max_task_size),
-        );
-        let (layout, root_region) = extend(layout, root_layout);
-        Self {
-            layout: layout.pad_to_align(),
-            state,
-            timers,
-            io_waiters,
-            tasks,
-            ready,
-            task_slab,
-            root_region,
-        }
-    }
-}
-
 impl<S: 'static, Sel: 'static> Storage<S, Sel> {
     /// The size of the memory `new` needs: the storage's layout plus slack for aligning its start,
     /// so memory of this size works wherever it starts.
     pub(crate) fn required_size(capacities: Capacities, root_layout: Layout) -> usize {
-        let layout = StorageLayout::new::<S, Sel>(capacities, root_layout).layout;
-        layout.size() + (layout.align() - 1)
+        StorageLayout::required_size::<S, Sel>(capacities, root_layout)
     }
 
     /// Builds the storage inside `memory`, at its first suitably aligned address. Panics if
@@ -210,47 +168,42 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
         capacities: Capacities,
         root_layout: Layout,
     ) -> &'static Self {
-        let parts = StorageLayout::new::<S, Sel>(capacities, root_layout);
-        let start = memory
-            .cast::<u8>()
-            .as_ptr()
-            .align_offset(parts.layout.align());
-        if start.saturating_add(parts.layout.size()) > memory.len() {
-            panic!(
-                "the EventLoop memory is too small: {} bytes, {} needed",
-                memory.len(),
-                Self::required_size(capacities, root_layout),
-            );
-        }
-        // SAFETY: `start` is within `memory`, checked right above.
-        let base = unsafe { memory.cast::<u8>().byte_add(start) };
-        // SAFETY: `base` is aligned to the layout and `memory` holds the whole layout from there
-        // (checked above), valid and unused (guaranteed by the caller). `StorageLayout` placed
-        // every part inside the layout, aligned for it and not overlapping the others; each is
-        // written exactly once, the `Storage` struct last. The parts live until `destroy`, which
-        // nothing holding the storage outlives, and are only accessed through shared references
-        // (and by `destroy`), hence `'static`.
+        let StorageLayout {
+            base_ptr,
+            state_ptr,
+            timers_ptr,
+            io_waiters_ptr,
+            tasks_ptr,
+            ready_ptr,
+            task_slab_ptr,
+            root_region_ptr,
+        } = StorageLayout::new::<S, Sel>(capacities, root_layout, memory);
+        // SAFETY: `StorageLayout::new` put every part inside `memory` (it checked the size),
+        // aligned for it and not overlapping the others; `memory` is valid and unused (guaranteed
+        // by the caller). Each part is written exactly once, the `Storage` struct last. The parts
+        // live until `destroy`, which nothing holding the storage outlives, and are only accessed
+        // through shared references (and by `destroy`), hence `'static`.
         unsafe {
-            let state_ptr = base.byte_add(parts.state).cast::<UnsafeCell<S>>();
+            let state_ptr = state_ptr.cast::<UnsafeCell<S>>();
             state_ptr.write(UnsafeCell::new(state));
             let storage = Self {
-                allocation: base,
+                allocation: base_ptr,
                 selector,
                 root: Cell::new(Root::Finished),
                 next_timer_seq: Cell::new(0),
-                timers: ObjectPool::init(base.byte_add(parts.timers), capacities.max_timers),
-                io_waiters: ObjectPool::init(base.byte_add(parts.io_waiters), capacities.max_io),
-                tasks: ObjectPool::init(base.byte_add(parts.tasks), capacities.max_tasks),
-                ready: ReadyQueue::init(base.byte_add(parts.ready), capacities.max_tasks),
+                timers: ObjectPool::init(timers_ptr, capacities.max_timers),
+                io_waiters: ObjectPool::init(io_waiters_ptr, capacities.max_io),
+                tasks: ObjectPool::init(tasks_ptr, capacities.max_tasks),
+                ready: ReadyQueue::init(ready_ptr, capacities.max_tasks),
                 task_slab: TaskSlab::init(
-                    base.byte_add(parts.task_slab),
+                    task_slab_ptr,
                     capacities.max_tasks,
                     capacities.max_task_size,
                 ),
-                root_region: RootRegion::init(base.byte_add(parts.root_region), root_layout.size()),
+                root_region: RootRegion::init(root_region_ptr, root_layout.size()),
                 state: state_ptr.as_ref(),
             };
-            let ptr = base.cast::<Self>();
+            let ptr = base_ptr.cast::<Self>();
             ptr.write(storage);
             ptr.as_ref()
         }
@@ -636,6 +589,8 @@ impl<S: 'static> Storage<S, Selector> {
         Ok(())
     }
 }
+
+mod layout;
 
 #[cfg(test)]
 mod tests;

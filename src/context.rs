@@ -17,10 +17,11 @@ impl<S: State> Context<S> {
     }
 
     pub fn dispatch(&self, event: S::Event) {
-        // SAFETY: `dispatch` runs inside a task (polled, or dropped), and tasks only run while the caller of `EventLoop::new`, a drain or `drop`
-        // holds exclusive access to the loop: no `state_mut` reference can be live. `apply` gets
-        // no `Context` (and `S`, its events and everything they drop are `'static`, so they
-        // can't hold one), so it can't re-enter `dispatch`: this is the only reference.
+        // SAFETY: `dispatch` runs inside a task (polled, or dropped), and tasks only run while the
+        // caller of `EventLoop::new`, a drain or `drop` holds exclusive access to the loop: no
+        // `state_mut` reference can be live. `apply` gets no `Context` (and `S`, its events and
+        // everything they drop are `'static`, so they can't hold one), so it can't re-enter
+        // `dispatch`: this is the only reference.
         unsafe { &mut *self.storage.state().get() }.apply(event);
     }
 

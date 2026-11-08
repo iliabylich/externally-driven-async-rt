@@ -2,7 +2,7 @@ use crate::{
     Capacities,
     instant::Instant,
     selectors::{Direction, IoAction, IoChange, Token},
-    storage::{IoIndex, Storage, StorageLayout, TaskId},
+    storage::{IoIndex, Storage, TaskId, layout},
     task::JoinStatus,
     test_utils::{TEST_CAPACITIES, TestStorage, assert_yields, stack_memory},
 };
@@ -563,9 +563,8 @@ const SMALL: Capacities = Capacities {
 
 // `len` bytes of `buffer` starting at the address that wastes the most bytes on alignment.
 fn worst_aligned(buffer: &mut [MaybeUninit<u8>], len: usize) -> NonNull<[MaybeUninit<u8>]> {
-    let align = StorageLayout::new::<(), ()>(SMALL, Layout::new::<()>())
-        .layout
-        .align();
+    let (layout, _) = layout::plan::<(), ()>(SMALL, Layout::new::<()>());
+    let align = layout.align();
     let start = (0..align)
         .find(|start| buffer[*start..].as_ptr().addr() % align == 1)
         .unwrap();
