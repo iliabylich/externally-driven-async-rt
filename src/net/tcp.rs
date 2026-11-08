@@ -179,6 +179,7 @@ mod tests {
     #[test]
     fn echo_with_a_raw_peer() {
         let (listener, addr) = raw_listener();
+        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
                 static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
@@ -187,13 +188,7 @@ mod tests {
                 // reference to `QUEUE` ever created.
                 unsafe { (&raw mut QUEUE).as_mut_unchecked() }
             },
-            {
-                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
-                    [MaybeUninit::uninit(); TEST_MEMORY];
-                // SAFETY: this block runs once, on this test's thread, so this is the only
-                // reference to `MEMORY` ever created.
-                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
-            },
+            &mut memory,
             Log::default(),
             async move |ctx| {
                 let mut stream = TcpStream::connect(ctx, addr).await.unwrap();
@@ -228,6 +223,7 @@ mod tests {
     fn listener_accepts_a_raw_client() {
         let mut listener = TcpListener::bind(LOCALHOST).unwrap();
         let addr = listener.local_addr().unwrap();
+        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
                 static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
@@ -236,13 +232,7 @@ mod tests {
                 // reference to `QUEUE` ever created.
                 unsafe { (&raw mut QUEUE).as_mut_unchecked() }
             },
-            {
-                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
-                    [MaybeUninit::uninit(); TEST_MEMORY];
-                // SAFETY: this block runs once, on this test's thread, so this is the only
-                // reference to `MEMORY` ever created.
-                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
-            },
+            &mut memory,
             Log::default(),
             async move |ctx| {
                 let (mut stream, peer) = listener.accept(ctx).await.unwrap();
@@ -275,6 +265,7 @@ mod tests {
     #[test]
     fn connect_to_a_closed_port_fails() {
         let addr = TcpListener::bind(LOCALHOST).unwrap().local_addr().unwrap();
+        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
                 static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
@@ -283,13 +274,7 @@ mod tests {
                 // reference to `QUEUE` ever created.
                 unsafe { (&raw mut QUEUE).as_mut_unchecked() }
             },
-            {
-                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
-                    [MaybeUninit::uninit(); TEST_MEMORY];
-                // SAFETY: this block runs once, on this test's thread, so this is the only
-                // reference to `MEMORY` ever created.
-                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
-            },
+            &mut memory,
             Log::default(),
             async move |ctx| {
                 let errno = TcpStream::connect(ctx, addr).await.err().unwrap();
@@ -311,6 +296,7 @@ mod tests {
         const CHUNK: usize = 512;
         let mut listener = TcpListener::bind(LOCALHOST).unwrap();
         let addr = listener.local_addr().unwrap();
+        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
                 static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
@@ -319,13 +305,7 @@ mod tests {
                 // reference to `QUEUE` ever created.
                 unsafe { (&raw mut QUEUE).as_mut_unchecked() }
             },
-            {
-                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
-                    [MaybeUninit::uninit(); TEST_MEMORY];
-                // SAFETY: this block runs once, on this test's thread, so this is the only
-                // reference to `MEMORY` ever created.
-                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
-            },
+            &mut memory,
             Log::default(),
             async move |ctx| {
                 ctx.spawn(async move |ctx| {

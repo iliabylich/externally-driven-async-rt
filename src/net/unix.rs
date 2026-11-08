@@ -328,6 +328,7 @@ mod tests {
         let listener = raw_socket(AddressFamily::UNIX, SocketType::STREAM);
         rustix::net::bind(&listener, &server_addr).unwrap();
         rustix::net::listen(&listener, 1).unwrap();
+        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
                 static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
@@ -336,13 +337,7 @@ mod tests {
                 // reference to `QUEUE` ever created.
                 unsafe { (&raw mut QUEUE).as_mut_unchecked() }
             },
-            {
-                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
-                    [MaybeUninit::uninit(); TEST_MEMORY];
-                // SAFETY: this block runs once, on this test's thread, so this is the only
-                // reference to `MEMORY` ever created.
-                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
-            },
+            &mut memory,
             Log::default(),
             async move |ctx| {
                 let mut stream = UnixStream::connect(ctx, &server_addr).await.unwrap();
@@ -382,6 +377,7 @@ mod tests {
             path_of(&listener.local_addr().unwrap()),
             path_of(&listener_addr)
         );
+        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
                 static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
@@ -390,13 +386,7 @@ mod tests {
                 // reference to `QUEUE` ever created.
                 unsafe { (&raw mut QUEUE).as_mut_unchecked() }
             },
-            {
-                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
-                    [MaybeUninit::uninit(); TEST_MEMORY];
-                // SAFETY: this block runs once, on this test's thread, so this is the only
-                // reference to `MEMORY` ever created.
-                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
-            },
+            &mut memory,
             Log::default(),
             async move |ctx| {
                 let (mut stream, peer) = listener.accept(ctx).await.unwrap();
@@ -429,6 +419,7 @@ mod tests {
         let (ours_addr, theirs_addr) = (ours.addr(), theirs.addr());
         let peer = raw_socket(AddressFamily::UNIX, SocketType::DGRAM);
         rustix::net::bind(&peer, &theirs_addr).unwrap();
+        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
                 static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
@@ -437,13 +428,7 @@ mod tests {
                 // reference to `QUEUE` ever created.
                 unsafe { (&raw mut QUEUE).as_mut_unchecked() }
             },
-            {
-                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
-                    [MaybeUninit::uninit(); TEST_MEMORY];
-                // SAFETY: this block runs once, on this test's thread, so this is the only
-                // reference to `MEMORY` ever created.
-                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
-            },
+            &mut memory,
             Log::default(),
             async move |ctx| {
                 let mut socket = UnixDatagram::bind(&ours_addr).unwrap();
@@ -483,6 +468,7 @@ mod tests {
     fn unbound_datagram_sender_has_an_unnamed_address() {
         let path = TempPath::new("dgram-unbound");
         let bound_addr = path.addr();
+        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
                 static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
@@ -491,13 +477,7 @@ mod tests {
                 // reference to `QUEUE` ever created.
                 unsafe { (&raw mut QUEUE).as_mut_unchecked() }
             },
-            {
-                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
-                    [MaybeUninit::uninit(); TEST_MEMORY];
-                // SAFETY: this block runs once, on this test's thread, so this is the only
-                // reference to `MEMORY` ever created.
-                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
-            },
+            &mut memory,
             Log::default(),
             async move |ctx| {
                 let mut bound = UnixDatagram::bind(&bound_addr).unwrap();

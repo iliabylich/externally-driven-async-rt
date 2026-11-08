@@ -149,6 +149,7 @@ mod tests {
     #[test]
     fn round_trip_with_a_raw_peer() {
         let (peer, peer_addr) = raw_peer();
+        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
                 static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
@@ -157,13 +158,7 @@ mod tests {
                 // reference to `QUEUE` ever created.
                 unsafe { (&raw mut QUEUE).as_mut_unchecked() }
             },
-            {
-                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
-                    [MaybeUninit::uninit(); TEST_MEMORY];
-                // SAFETY: this block runs once, on this test's thread, so this is the only
-                // reference to `MEMORY` ever created.
-                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
-            },
+            &mut memory,
             Log::default(),
             async move |ctx| {
                 let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
