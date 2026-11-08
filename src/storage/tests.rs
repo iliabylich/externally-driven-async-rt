@@ -2,7 +2,7 @@ use crate::{
     Capacities,
     instant::Instant,
     selectors::{Direction, IoAction, IoChange, Token},
-    storage::{IoIndex, Storage, TaskId, layout},
+    storage::{IoIndex, Root, Storage, TaskId, layout},
     task::JoinStatus,
     test_utils::{TEST_CAPACITIES, TestStorage, assert_yields, stack_memory},
 };
@@ -308,22 +308,19 @@ fn removing_a_task_drops_its_future_and_returns_its_join_waiter() {
     let backing = TestStorage::new(&mut memory, 2, 1, 1);
     let storage = backing.storage();
     static mut DROPPED: bool = false;
-    let id = storage
-        .insert_task(flagged_task(&raw mut DROPPED))
-        .ok()
-        .unwrap();
-    assert!(storage.task(id).is_some());
+    let id = storage.tasks.insert(flagged_task(&raw mut DROPPED));
+    assert!(storage.tasks.get(id).is_some());
     assert_eq!(
-        storage.set_join_waiter(id, Waker::noop()),
+        storage.tasks.set_join_waiter(id, Waker::noop()),
         JoinStatus::Running
     );
-    let join_waiter = storage.remove_task(id).unwrap();
+    let join_waiter = storage.tasks.remove(id).unwrap();
     // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
     assert!(unsafe { DROPPED });
     assert!(join_waiter.is_some());
-    assert!(storage.task(id).is_none());
+    assert!(storage.tasks.get(id).is_none());
     assert_eq!(
-        storage.set_join_waiter(id, Waker::noop()),
+        storage.tasks.set_join_waiter(id, Waker::noop()),
         JoinStatus::Finished
     );
 }
@@ -333,56 +330,41 @@ fn finished_task_id_never_matches_a_reused_slot() {
     let mut memory = stack_memory();
     let backing = TestStorage::new(&mut memory, 1, 1, 1);
     let storage = backing.storage();
-    let first = storage.insert_task(async {}).ok().unwrap();
-    storage.remove_task(first);
-    let second = storage.insert_task(async {}).ok().unwrap();
+    let first = storage.tasks.insert(async {});
+    storage.tasks.remove(first);
+    let second = storage.tasks.insert(async {});
     assert_ne!(first, second);
-    assert!(storage.task(first).is_none());
+    assert!(storage.tasks.get(first).is_none());
     assert_eq!(
-        storage.set_join_waiter(first, Waker::noop()),
+        storage.tasks.set_join_waiter(first, Waker::noop()),
         JoinStatus::Finished
     );
 }
 
 #[test]
-fn full_task_pool_hands_the_future_back() {
+#[should_panic(expected = "more than 1 concurrent tasks")]
+fn full_task_pool_panics() {
     let mut memory = stack_memory();
     let backing = TestStorage::new(&mut memory, 1, 1, 1);
     let storage = backing.storage();
-    storage.insert_task(async {}).ok().unwrap();
-    static mut DROPPED: bool = false;
-    let rejected = storage
-        .insert_task(flagged_task(&raw mut DROPPED))
-        .err()
-        .unwrap();
-    // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
-    assert!(!unsafe { DROPPED });
-    drop(rejected);
-    // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
-    assert!(unsafe { DROPPED });
-    assert_eq!(storage.task_capacity(), 1);
+    storage.tasks.insert(async {});
+    storage.tasks.insert(async {});
 }
 
 #[test]
-fn drop_all_tasks_and_drop_free_the_futures() {
+fn drop_all_and_drop_free_the_futures() {
     let mut memory = stack_memory();
     let backing = TestStorage::new(&mut memory, 2, 1, 1);
     let storage = backing.storage();
     static mut DROPPED: bool = false;
     static mut LEFT_OVER: bool = false;
-    storage
-        .insert_task(flagged_task(&raw mut DROPPED))
-        .ok()
-        .unwrap();
-    storage.drop_all_tasks();
+    storage.tasks.insert(flagged_task(&raw mut DROPPED));
+    storage.tasks.drop_all();
     // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
     assert!(unsafe { DROPPED });
-    assert!(storage.tasks.iter().next().is_none());
+    assert!(storage.tasks.count() == 0);
 
-    storage
-        .insert_task(flagged_task(&raw mut LEFT_OVER))
-        .ok()
-        .unwrap();
+    storage.tasks.insert(flagged_task(&raw mut LEFT_OVER));
     drop(backing);
     // SAFETY: only this test's thread uses `LEFT_OVER`, and no reference to it exists.
     assert!(unsafe { LEFT_OVER });
@@ -400,12 +382,12 @@ impl Drop for SpawnOnDrop {
         // SAFETY: points to a `static mut` of the running test, which only that test's thread
         // uses, and no reference to it exists.
         let id = unsafe { *self.id }.unwrap();
-        assert!(self.storage.task(id).is_none());
+        assert!(self.storage.tasks.get(id).is_none());
         assert_eq!(
-            self.storage.set_join_waiter(id, Waker::noop()),
+            self.storage.tasks.set_join_waiter(id, Waker::noop()),
             JoinStatus::Finished
         );
-        let spawned = self.storage.insert_task(async {}).ok().unwrap();
+        let spawned = self.storage.tasks.insert(async {});
         // SAFETY: as above.
         unsafe { *self.spawned = Some(spawned) };
     }
@@ -423,19 +405,16 @@ fn a_task_spawned_while_one_is_dropped_gets_another_slot() {
         id: &raw mut ID,
         spawned: &raw mut SPAWNED,
     };
-    let dropping = storage
-        .insert_task(async move {
-            let _guard = guard;
-        })
-        .ok()
-        .unwrap();
+    let dropping = storage.tasks.insert(async move {
+        let _guard = guard;
+    });
     // SAFETY: only this test's thread uses `ID`, and no reference to it exists.
     unsafe { ID = Some(dropping) };
-    storage.remove_task(dropping).unwrap();
+    storage.tasks.remove(dropping).unwrap();
     // SAFETY: only this test's thread uses `SPAWNED`, and no reference to it exists.
     let spawned = unsafe { SPAWNED }.unwrap();
     assert_ne!(spawned.slot(), dropping.slot());
-    assert!(storage.task(spawned).is_some());
+    assert!(storage.tasks.get(spawned).is_some());
 }
 
 #[test]
@@ -445,17 +424,14 @@ fn full_size_futures_in_neighbouring_slots_do_not_overlap() {
     let storage = backing.storage();
     let ids = [1u8, 2].map(|byte| {
         let data = [byte; TEST_CAPACITIES.max_task_size - 16];
-        storage
-            .insert_task(async move {
-                assert!(data.iter().all(|b| *b == byte));
-            })
-            .ok()
-            .unwrap()
+        storage.tasks.insert(async move {
+            assert!(data.iter().all(|b| *b == byte));
+        })
     });
     let mut cx = core::task::Context::from_waker(Waker::noop());
     for id in ids {
         // SAFETY: the task is alive and not polled re-entrantly.
-        assert!(unsafe { storage.task(id).unwrap().poll(&mut cx) }.is_ready());
+        assert!(unsafe { storage.tasks.get(id).unwrap().poll(&mut cx) }.is_ready());
     }
 }
 
@@ -465,7 +441,7 @@ fn a_too_big_future_panics() {
     let mut memory = stack_memory();
     let backing = TestStorage::new(&mut memory, 1, 1, 1);
     let data = [0u8; 8192];
-    let _ = backing.storage().insert_task(async move {
+    backing.storage().tasks.insert(async move {
         let _data = data;
     });
 }
@@ -504,16 +480,13 @@ fn max_task_size_is_rounded_up_to_whole_16_byte_blocks() {
     let backing = small_tasks(&mut memory, 2);
     let storage = backing.storage();
     let ids = [
-        storage.insert_task(FixedFuture([1u8; 112])).ok().unwrap(),
-        storage
-            .insert_task(FixedFuture((Aligned16, [2u8; 96])))
-            .ok()
-            .unwrap(),
+        storage.tasks.insert(FixedFuture([1u8; 112])),
+        storage.tasks.insert(FixedFuture((Aligned16, [2u8; 96]))),
     ];
     let mut cx = core::task::Context::from_waker(Waker::noop());
     for id in ids {
         // SAFETY: the task is alive and not polled re-entrantly.
-        assert!(unsafe { storage.task(id).unwrap().poll(&mut cx) }.is_ready());
+        assert!(unsafe { storage.tasks.get(id).unwrap().poll(&mut cx) }.is_ready());
     }
 }
 
@@ -524,7 +497,7 @@ fn max_task_size_is_rounded_up_to_whole_16_byte_blocks() {
 fn a_future_bigger_than_the_rounded_up_block_panics() {
     let mut memory = stack_memory();
     let backing = small_tasks(&mut memory, 1);
-    let _ = backing.storage().insert_task(FixedFuture([0u8; 113]));
+    backing.storage().tasks.insert(FixedFuture([0u8; 113]));
 }
 
 #[test]
@@ -535,7 +508,7 @@ fn an_overaligned_future_panics() {
     let mut memory = stack_memory();
     let backing = TestStorage::new(&mut memory, 1, 1, 1);
     let aligned = Aligned;
-    let _ = backing.storage().insert_task(async move {
+    backing.storage().tasks.insert(async move {
         let _aligned = aligned;
     });
 }
@@ -583,19 +556,31 @@ fn root_region_holds_a_root_bigger_than_a_slab_block() {
         data: [3; 9000],
         dropped: &raw mut DROPPED,
     };
-    // SAFETY: the only root of this storage.
-    let id = unsafe { storage.spawn_root(root) };
-    let sibling = storage.insert_task(async {}).ok().unwrap();
+    storage.tasks.spawn_root(root);
+    let Root::Running(id) = storage.tasks.root() else {
+        panic!("spawning the root makes it running");
+    };
+    let sibling = storage.tasks.insert(async {});
     assert_ne!(sibling.slot(), id.slot());
     let mut cx = core::task::Context::from_waker(Waker::noop());
     // SAFETY: the task is alive and not polled re-entrantly.
-    assert!(unsafe { storage.task(id).unwrap().poll(&mut cx) }.is_pending());
+    assert!(unsafe { storage.tasks.get(id).unwrap().poll(&mut cx) }.is_pending());
     // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
     assert!(!unsafe { DROPPED });
     // SAFETY: destroyed once, no task is being polled.
     unsafe { storage.destroy() };
     // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
     assert!(unsafe { DROPPED });
+}
+
+#[test]
+#[should_panic(expected = "the root is already spawned")]
+fn spawning_a_second_root_panics() {
+    let mut memory = stack_memory();
+    let backing = TestStorage::new(&mut memory, 2, 1, 1);
+    let storage = backing.storage();
+    storage.tasks.spawn_root(core::future::pending::<()>());
+    storage.tasks.spawn_root(core::future::pending::<()>());
 }
 
 const SMALL: Capacities = Capacities {
@@ -623,8 +608,8 @@ fn required_size_is_enough_at_the_worst_aligned_start() {
     let memory = worst_aligned(&mut buffer, size);
     // SAFETY: `memory` is only used by this storage, and outlives it.
     let storage = unsafe { Storage::new(memory, (), (), SMALL, root_layout) };
-    let id = storage.insert_task(async {}).ok().unwrap();
-    assert!(storage.remove_task(id).is_some());
+    let id = storage.tasks.insert(async {});
+    assert!(storage.tasks.remove(id).is_some());
     // SAFETY: destroyed once, no task is being polled.
     unsafe { storage.destroy() };
 }

@@ -52,7 +52,7 @@ mod tests {
 
     fn storage_with_task(memory: &mut [MaybeUninit<u8>]) -> (TestStorage<'_>, TaskId) {
         let storage = TestStorage::new(memory, 2, 1, 1);
-        let task = storage.storage().insert_task(async {}).ok().unwrap();
+        let task = storage.storage().tasks.insert(async {});
         (storage, task)
     }
 
@@ -92,13 +92,13 @@ mod tests {
         let (storage, task) = storage_with_task(&mut memory);
         // SAFETY: `storage` outlives the waker.
         let waker = unsafe { new_waker(storage.ready(), task) };
-        let other = storage.storage().insert_task(async {}).ok().unwrap();
+        let other = storage.storage().tasks.insert(async {});
         storage
             .storage()
             .timers
             .alloc(crate::instant::Instant::now(), Waker::noop().clone());
         waker.wake_by_ref();
-        storage.storage().remove_task(other);
+        storage.storage().tasks.remove(other);
         waker.wake();
         assert_yields(queued(&storage), [task]);
     }

@@ -61,9 +61,10 @@ impl<S: State> EventLoop<S> {
             )
         };
         let event_loop = Self { storage };
-        // SAFETY: the future is stored in this storage right away, as its only root.
-        let root = unsafe { storage.spawn_root(task_future::<S, F>(storage, f)) };
-        match storage.run_ready_tasks(root) {
+        // SAFETY: the future is stored in this storage right away, as its root.
+        let root = unsafe { task_future::<S, F>(storage, f) };
+        storage.tasks.spawn_root(root);
+        match storage.tasks.run_ready() {
             RootStatus::Running => {}
             RootStatus::Finished => return Err(Error::RootFinished),
         }
@@ -73,15 +74,15 @@ impl<S: State> EventLoop<S> {
 
     pub fn drain_events_without_blocking(&mut self) -> Result<(), Error> {
         let storage = self.storage;
-        let Root::Running(root) = storage.root() else {
+        if let Root::Finished = storage.tasks.root() {
             return Err(Error::RootFinished);
-        };
+        }
         let status = loop {
             storage.process_selector_events().map_err(Error::Io)?;
-            if !storage.has_ready_tasks() {
+            if !storage.tasks.has_ready() {
                 break RootStatus::Running;
             }
-            if storage.run_ready_tasks(root) == RootStatus::Finished {
+            if storage.tasks.run_ready() == RootStatus::Finished {
                 break RootStatus::Finished;
             }
         };
@@ -102,8 +103,7 @@ impl<S: State> EventLoop<S> {
 
     fn finish_drain(&self, status: RootStatus) -> Result<(), Error> {
         if status == RootStatus::Finished {
-            self.storage.set_root(Root::Finished);
-            self.storage.drop_all_tasks();
+            self.storage.tasks.drop_all();
         }
         self.storage.flush().map_err(Error::Io)?;
         match status {

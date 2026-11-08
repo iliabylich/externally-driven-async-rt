@@ -30,7 +30,10 @@ impl<S: State> Context<S> {
         F: AsyncFnOnce(&Context<S>) + 'static,
     {
         // SAFETY: the future is stored in this storage right away.
-        let id = self.storage.spawn(unsafe { task_future(self.storage, f) });
+        let id = self
+            .storage
+            .tasks
+            .spawn(unsafe { task_future(self.storage, f) });
         JoinHandle::new(self.storage, id)
     }
 

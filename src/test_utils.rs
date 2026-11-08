@@ -333,7 +333,7 @@ impl<'m> TestStorage<'m> {
     }
 
     pub(crate) fn ready(&self) -> &ReadyQueue {
-        self.storage.ready()
+        self.storage.tasks.ready()
     }
 }
 

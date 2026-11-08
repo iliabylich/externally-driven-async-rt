@@ -1,7 +1,6 @@
 use core::{
     alloc::Layout,
     cell::{Cell, UnsafeCell},
-    future::Future,
     mem::MaybeUninit,
     ptr::NonNull,
     task::Waker,
@@ -10,34 +9,13 @@ use core::{
 use crate::{
     capacities::Capacities,
     instant::Instant,
-    pool::{Index, ObjectPool},
-    ready::ReadyQueue,
-    root_region::RootRegion,
     selectors::{Direction, EVENTS_PER_CALL, Selector, SelectorEvent},
-    task::{JoinStatus, OwnedTask, TaskPtr},
-    task_slab::{TASK_ALIGN, TaskSlab},
-    waker::new_waker,
 };
 
 pub(crate) use io_waiters::{IoIndex, IoWaiters};
 use layout::StorageLayout;
+pub(crate) use tasks::{Root, RootStatus, TaskId, Tasks};
 pub(crate) use timers::{TimerIndex, Timers};
-
-#[derive(Default)]
-pub(crate) struct TaskEntry {
-    // `None` while the slot is reserved: while its future is written in (`insert`) or dropped
-    // outside of the entry (`remove_task`), so a task spawned from the future's `Drop` can't take
-    // the slot (and so its memory in the task slab).
-    future: Cell<Option<OwnedTask>>,
-    join_waiter: Cell<Option<Waker>>,
-}
-
-fn is_some<T>(cell: &Cell<Option<T>>) -> bool {
-    let value = cell.take();
-    let some = value.is_some();
-    cell.set(value);
-    some
-}
 
 // `clone_from`, so storing a waker that wakes the same task as the stored one doesn't clone it.
 fn store_waker(cell: &Cell<Option<Waker>>, waker: &Waker) {
@@ -51,47 +29,19 @@ fn store_waker(cell: &Cell<Option<Waker>>, waker: &Waker) {
     cell.set(Some(stored));
 }
 
-pub(crate) type TaskId = Index<TaskEntry>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RootStatus {
-    Running,
-    Finished,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum Root {
-    Running(TaskId),
-    Finished,
-}
-
 // The runtime: one block of caller-provided memory that never moves, with this struct at its
 // start, holding the inline values and a reference to every other part of the allocation (the
 // state, each pool, the ready queue, the task slab, the root region). Reached through a
 // `&'static Storage` (in the `EventLoop` and every `Context`) and borrows of it. Objects inside
 // are addressed by typed indices.
 pub(crate) struct Storage<S: 'static, Sel = Selector> {
-    // The allocation's base, with provenance over all of it: the only pointer `destroy` may drop
-    // the pools through, since everything else reaches them through shared references.
-    allocation: NonNull<u8>,
     selector: Sel,
-    root: Cell<Root>,
     // `'static`: they live as long as the storage, which nothing that can reach it outlives.
-    // Only shared references: the pools and the queue consist of `Cell`s, the state, the slab
-    // and the root region are in `UnsafeCell`s.
+    // Only shared references: the state is in an `UnsafeCell`.
     state: &'static UnsafeCell<S>,
     pub(crate) timers: Timers,
     pub(crate) io_waiters: IoWaiters,
-    tasks: &'static ObjectPool<TaskEntry>,
-    ready: &'static ReadyQueue,
-    task_slab: &'static TaskSlab,
-    // The root's task slot still has a slab block, which stays unused.
-    root_region: &'static RootRegion,
-}
-
-enum TaskMemory {
-    Slab,
-    Root,
+    pub(crate) tasks: Tasks,
 }
 
 impl<S: 'static, Sel: 'static> Storage<S, Sel> {
@@ -134,19 +84,17 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
             let state_ptr = state_ptr.cast::<UnsafeCell<S>>();
             state_ptr.write(UnsafeCell::new(state));
             let storage = Self {
-                allocation: base_ptr,
                 selector,
-                root: Cell::new(Root::Finished),
                 timers: Timers::init(timers_ptr, capacities.max_timers),
                 io_waiters: IoWaiters::init(io_waiters_ptr, capacities.max_io),
-                tasks: ObjectPool::init(tasks_ptr, capacities.max_tasks),
-                ready: ReadyQueue::init(ready_ptr, capacities.max_tasks),
-                task_slab: TaskSlab::init(
+                tasks: Tasks::init(
+                    tasks_ptr,
+                    ready_ptr,
                     task_slab_ptr,
-                    capacities.max_tasks,
-                    capacities.max_task_size,
+                    root_region_ptr,
+                    capacities,
+                    root_layout,
                 ),
-                root_region: RootRegion::init(root_region_ptr, root_layout.size()),
                 state: state_ptr.as_ref(),
             };
             let ptr = base_ptr.cast::<Self>();
@@ -168,202 +116,19 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
     pub(crate) unsafe fn destroy(&self) {
         // Task futures hold `Context`s pointing at the storage and may use them in their `Drop`
         // impls, so they go first, while everything is intact.
-        self.drop_all_tasks();
+        self.tasks.drop_all();
         self.timers.clear();
         self.io_waiters.clear();
-        let tasks = self.writable(self.tasks);
-        // SAFETY: no task (so no `Context` and no reference into the storage) is left; every part
-        // was initialized in `new` and is dropped exactly once here (the ready queue holds only
-        // `Copy` data, the task slab and root region no live future, the timer and IO pools
-        // nothing after `clear`). The references to the pools
-        // are never used again. The selector is this struct's only field with drop glue; it's
-        // moved out (a read) rather than dropped in place, because dropping needs write access to
-        // the struct, which callers hold protected shared references to (`&self`, and e.g. an
-        // `EventLoop` given to `mem::drop`).
+        // SAFETY: no task (so no `Context` and no reference into the storage) is left; the state
+        // was initialized in `new` and is dropped exactly once here, the other parts hold nothing
+        // that needs dropping (the ready queue holds only `Copy` data, the task slab and root
+        // region no live future, the pools nothing after `drop_all` and `clear`). The selector is
+        // this struct's only field with drop glue; it's moved out (a read) rather than dropped in
+        // place, because dropping needs write access to the struct, which callers hold protected
+        // shared references to (`&self`, and e.g. an `EventLoop` given to `mem::drop`).
         unsafe {
             core::ptr::drop_in_place(self.state.get());
-            core::ptr::drop_in_place(tasks);
             drop(core::ptr::read(&self.selector));
-        }
-    }
-
-    // `pool` with the provenance of the allocation's base: one derived from a shared reference
-    // mustn't be used to drop it.
-    fn writable<T>(&self, pool: &ObjectPool<T>) -> *mut ObjectPool<T> {
-        let addr = NonNull::from(pool).cast::<u8>().addr();
-        ObjectPool::raw(self.allocation.with_addr(addr), pool.capacity())
-    }
-
-    pub(crate) fn root(&self) -> Root {
-        self.root.get()
-    }
-
-    pub(crate) fn set_root(&self, root: Root) {
-        self.root.set(root);
-    }
-
-    pub(crate) fn ready(&self) -> &ReadyQueue {
-        self.ready
-    }
-
-    pub(crate) fn task_capacity(&self) -> usize {
-        self.tasks.capacity()
-    }
-
-    /// On a full pool, the future is handed back. Panics if the future doesn't fit the task slab's
-    /// blocks.
-    pub(crate) fn insert_task<Fut>(&self, future: Fut) -> Result<TaskId, Fut>
-    where
-        Fut: Future<Output = ()> + 'static,
-    {
-        let block_size = self.task_slab.block_size();
-        let needed = Layout::new::<Fut>();
-        if needed.size() > block_size || needed.align() > TASK_ALIGN {
-            drop(future);
-            panic!(
-                "a task future of {} bytes (align {}) doesn't fit max_task_size ({} bytes after \
-                 rounding up to a multiple of {TASK_ALIGN}, align at most {TASK_ALIGN})",
-                needed.size(),
-                needed.align(),
-                block_size,
-            );
-        }
-        // SAFETY: `Fut` fits the slab's blocks (checked above).
-        unsafe { self.insert(future, TaskMemory::Slab) }
-    }
-
-    /// Inserts the root future into its own region, queues it and makes it the root.
-    ///
-    /// # Safety
-    ///
-    /// Called at most once, so the root region holds no other future.
-    pub(crate) unsafe fn spawn_root<Fut>(&self, future: Fut) -> TaskId
-    where
-        Fut: Future<Output = ()> + 'static,
-    {
-        assert!(self.root_region.fits(Layout::new::<Fut>()));
-        // SAFETY: `Fut` fits the root region (asserted above), and the caller guarantees the
-        // region is unused.
-        let Ok(id) = (unsafe { self.insert(future, TaskMemory::Root) }) else {
-            unreachable!("the root is the first task, the pool has room for it");
-        };
-        self.ready().push(id.slot());
-        self.set_root(Root::Running(id));
-        id
-    }
-
-    /// # Safety
-    ///
-    /// `Fut` must fit `memory`: the slab's blocks (size at most `block_size`, align at most
-    /// `TASK_ALIGN`), or the root region (`RootRegion::fits`), which must not hold another
-    /// future.
-    unsafe fn insert<Fut>(&self, future: Fut, memory: TaskMemory) -> Result<TaskId, Fut>
-    where
-        Fut: Future<Output = ()> + 'static,
-    {
-        let Some((id, entry)) = self.tasks.alloc() else {
-            return Err(future);
-        };
-        let memory = match memory {
-            TaskMemory::Slab => self.task_slab.block(id.slot()),
-            TaskMemory::Root => self.root_region.memory(),
-        };
-        // SAFETY: `Fut` fits `memory` (guaranteed by the caller). It's unused: a slab block
-        // belongs to the slot, which was free, and a slot is only freed after its future was
-        // dropped; the root region is used once (guaranteed by the caller). The slot stays
-        // reserved until this future is dropped.
-        let future = unsafe { OwnedTask::write(memory, future) };
-        entry.future.set(Some(future));
-        entry.join_waiter.set(None);
-        self.ready().track(id);
-        Ok(id)
-    }
-
-    pub(crate) fn task(&self, id: TaskId) -> Option<TaskPtr> {
-        let entry = self.tasks.get(id)?;
-        let future = entry.future.take()?;
-        let ptr = future.ptr();
-        entry.future.set(Some(future));
-        Some(ptr)
-    }
-
-    /// Drops the task's future and frees its slot, returning its join waiter. The future is
-    /// dropped while the slot is still reserved, since its `Drop` may use the storage.
-    pub(crate) fn remove_task(&self, id: TaskId) -> Option<Option<Waker>> {
-        let entry = self.tasks.get(id)?;
-        let future = entry.future.take()?;
-        let join_waiter = entry.join_waiter.take();
-        self.ready().untrack(id);
-        drop(future);
-        self.tasks.free(id);
-        Some(join_waiter)
-    }
-
-    pub(crate) fn set_join_waiter(&self, id: TaskId, waker: &Waker) -> JoinStatus {
-        match self.tasks.get(id) {
-            Some(entry) if is_some(&entry.future) => {
-                store_waker(&entry.join_waiter, waker);
-                JoinStatus::Running
-            }
-            _ => JoinStatus::Finished,
-        }
-    }
-
-    pub(crate) fn spawn<Fut>(&self, future: Fut) -> TaskId
-    where
-        Fut: Future<Output = ()> + 'static,
-    {
-        let result = self.insert_task(future);
-        match result {
-            Ok(id) => {
-                self.ready().push(id.slot());
-                id
-            }
-            Err(future) => {
-                drop(future);
-                panic!("more than {} concurrent tasks", self.task_capacity());
-            }
-        }
-    }
-
-    pub(crate) fn has_ready_tasks(&self) -> bool {
-        !self.ready().is_empty()
-    }
-
-    pub(crate) fn run_ready_tasks(&self, root: TaskId) -> RootStatus {
-        loop {
-            let Some(id) = self.ready().pop() else {
-                return RootStatus::Running;
-            };
-            let Some(task) = self.task(id) else {
-                continue;
-            };
-            // SAFETY: the ready queue lives in the storage's allocation, which outlives every
-            // waker except deliberately leaked ones (documented as forbidden).
-            let waker = unsafe { new_waker(self.ready(), id) };
-            let mut cx = core::task::Context::from_waker(&waker);
-            // SAFETY: tasks are removed only right below (after the poll) and by
-            // `drop_all_tasks`, which is never called from inside a task; `run_ready_tasks`
-            // isn't either, so the task isn't polled re-entrantly.
-            if unsafe { task.poll(&mut cx) }.is_pending() {
-                continue;
-            }
-            let join_waiter = self
-                .remove_task(id)
-                .expect("a finished task is still in storage");
-            if let Some(join_waiter) = join_waiter {
-                join_waiter.wake();
-            }
-            if id == root {
-                return RootStatus::Finished;
-            }
-        }
-    }
-
-    pub(crate) fn drop_all_tasks(&self) {
-        // Dropping a task may spawn new ones, they are dropped in later iterations.
-        while let Some((id, _)) = self.tasks.iter().next() {
-            self.remove_task(id);
         }
     }
 }
@@ -416,6 +181,7 @@ impl<S: 'static> Storage<S, Selector> {
 
 mod io_waiters;
 mod layout;
+mod tasks;
 mod timers;
 
 #[cfg(test)]

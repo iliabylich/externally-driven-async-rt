@@ -21,7 +21,7 @@ impl<S: State> Future for JoinHandle<'_, S> {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {
-        match self.storage.set_join_waiter(self.id, cx.waker()) {
+        match self.storage.tasks.set_join_waiter(self.id, cx.waker()) {
             JoinStatus::Running => Poll::Pending,
             JoinStatus::Finished => Poll::Ready(()),
         }

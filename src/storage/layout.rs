@@ -4,7 +4,7 @@ use crate::{
     capacities::Capacities,
     pool::ObjectPool,
     ready::ReadyQueue,
-    storage::{IoWaiters, Storage, TaskEntry, Timers},
+    storage::{IoWaiters, Storage, Timers, tasks::TaskEntry},
     task_slab::TaskSlab,
 };
 
