@@ -6,7 +6,7 @@ use core::{
     time::Duration,
 };
 
-use rustix::fd::AsFd;
+use rustix::fd::AsRawFd;
 
 use crate::{
     Capacities, Context, Error, EventLoop, State,
@@ -520,8 +520,11 @@ fn readable_event_wakes_the_reader_once() {
     let event_loop = &owned;
     let (a, b) = pair();
     let (task, waker) = parked_task(event_loop);
-    let io = event_loop.storage().register_io(a.as_fd(), Direction::Read);
-    event_loop.storage().set_io_waker(io, &waker);
+    let io = event_loop
+        .storage()
+        .io_waiters
+        .register(a.as_raw_fd(), Direction::Read);
+    event_loop.storage().io_waiters.set_waker(io, &waker);
     event_loop.storage().flush().unwrap();
     rustix::io::write(&b, b"x").unwrap();
     event_loop.storage().process_selector_events().unwrap();
@@ -538,9 +541,12 @@ fn removed_io_waker_arms_nothing() {
     let event_loop = &owned;
     let (a, b) = pair();
     let (_, waker) = parked_task(event_loop);
-    let io = event_loop.storage().register_io(a.as_fd(), Direction::Read);
-    event_loop.storage().set_io_waker(io, &waker);
-    event_loop.storage().remove_io_waker(io);
+    let io = event_loop
+        .storage()
+        .io_waiters
+        .register(a.as_raw_fd(), Direction::Read);
+    event_loop.storage().io_waiters.set_waker(io, &waker);
+    event_loop.storage().io_waiters.remove_waker(io);
     rustix::io::write(&b, b"x").unwrap();
     event_loop.storage().flush().unwrap();
     assert!(!is_readable(event_loop, 0));
@@ -552,10 +558,14 @@ fn deregistered_io_produces_no_events() {
     let event_loop = &owned;
     let (a, b) = pair();
     let (_, waker) = parked_task(event_loop);
-    let io = event_loop.storage().register_io(a.as_fd(), Direction::Read);
-    event_loop.storage().set_io_waker(io, &waker);
+    let io = event_loop
+        .storage()
+        .io_waiters
+        .register(a.as_raw_fd(), Direction::Read);
+    event_loop.storage().io_waiters.set_waker(io, &waker);
     event_loop.storage().flush().unwrap();
-    event_loop.storage().deregister_io(io).unwrap();
+    let change = event_loop.storage().io_waiters.release(io).unwrap();
+    event_loop.storage().selector().apply_now(change).unwrap();
     rustix::io::write(&b, b"x").unwrap();
     assert!(!is_readable(event_loop, 0));
 }

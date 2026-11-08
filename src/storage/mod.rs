@@ -7,63 +7,21 @@ use core::{
     task::Waker,
 };
 
-use rustix::fd::{AsRawFd, BorrowedFd, RawFd};
-
 use crate::{
     capacities::Capacities,
     instant::Instant,
     pool::{Index, ObjectPool},
     ready::ReadyQueue,
     root_region::RootRegion,
-    selectors::{Direction, EVENTS_PER_CALL, IoAction, IoChange, Selector, SelectorEvent, Token},
+    selectors::{Direction, EVENTS_PER_CALL, Selector, SelectorEvent},
     task::{JoinStatus, OwnedTask, TaskPtr},
     task_slab::{TASK_ALIGN, TaskSlab},
     waker::new_waker,
 };
 
+pub(crate) use io_waiters::{IoIndex, IoWaiters};
 use layout::StorageLayout;
 pub(crate) use timers::{TimerIndex, Timers};
-
-pub(crate) struct IoWaiter {
-    fd: Cell<RawFd>,
-    direction: Cell<Direction>,
-    waker: Cell<Option<Waker>>,
-    // Whether the kernel filter is currently armed; the desired state is `is_waiting()`.
-    armed: Cell<bool>,
-}
-
-impl Default for IoWaiter {
-    fn default() -> Self {
-        Self {
-            fd: Cell::new(-1),
-            direction: Cell::new(Direction::Read),
-            waker: Cell::new(None),
-            armed: Cell::new(false),
-        }
-    }
-}
-
-impl IoWaiter {
-    fn is_waiting(&self) -> bool {
-        is_some(&self.waker)
-    }
-
-    fn pending_change(&self, index: IoIndex) -> Option<IoChange> {
-        let action = match (self.is_waiting(), self.armed.get()) {
-            (true, false) => IoAction::Arm,
-            (false, true) => IoAction::Disarm,
-            (true, true) | (false, false) => return None,
-        };
-        Some(IoChange {
-            token: Token(index.to_bits()),
-            fd: self.fd.get(),
-            direction: self.direction.get(),
-            action,
-        })
-    }
-}
-
-pub(crate) type IoIndex = Index<IoWaiter>;
 
 #[derive(Default)]
 pub(crate) struct TaskEntry {
@@ -82,7 +40,7 @@ fn is_some<T>(cell: &Cell<Option<T>>) -> bool {
 }
 
 // `clone_from`, so storing a waker that wakes the same task as the stored one doesn't clone it.
-pub(crate) fn store_waker(cell: &Cell<Option<Waker>>, waker: &Waker) {
+fn store_waker(cell: &Cell<Option<Waker>>, waker: &Waker) {
     let stored = match cell.take() {
         Some(mut stored) => {
             stored.clone_from(waker);
@@ -123,7 +81,7 @@ pub(crate) struct Storage<S: 'static, Sel = Selector> {
     // and the root region are in `UnsafeCell`s.
     state: &'static UnsafeCell<S>,
     pub(crate) timers: Timers,
-    io_waiters: &'static ObjectPool<IoWaiter>,
+    pub(crate) io_waiters: IoWaiters,
     tasks: &'static ObjectPool<TaskEntry>,
     ready: &'static ReadyQueue,
     task_slab: &'static TaskSlab,
@@ -180,7 +138,7 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
                 selector,
                 root: Cell::new(Root::Finished),
                 timers: Timers::init(timers_ptr, capacities.max_timers),
-                io_waiters: ObjectPool::init(io_waiters_ptr, capacities.max_io),
+                io_waiters: IoWaiters::init(io_waiters_ptr, capacities.max_io),
                 tasks: ObjectPool::init(tasks_ptr, capacities.max_tasks),
                 ready: ReadyQueue::init(ready_ptr, capacities.max_tasks),
                 task_slab: TaskSlab::init(
@@ -212,19 +170,19 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
         // impls, so they go first, while everything is intact.
         self.drop_all_tasks();
         self.timers.clear();
-        let pools = (self.writable(self.io_waiters), self.writable(self.tasks));
+        self.io_waiters.clear();
+        let tasks = self.writable(self.tasks);
         // SAFETY: no task (so no `Context` and no reference into the storage) is left; every part
         // was initialized in `new` and is dropped exactly once here (the ready queue holds only
-        // `Copy` data, the task slab and root region no live future, the timer pool nothing
-        // after `clear`). The references to the pools
+        // `Copy` data, the task slab and root region no live future, the timer and IO pools
+        // nothing after `clear`). The references to the pools
         // are never used again. The selector is this struct's only field with drop glue; it's
         // moved out (a read) rather than dropped in place, because dropping needs write access to
         // the struct, which callers hold protected shared references to (`&self`, and e.g. an
         // `EventLoop` given to `mem::drop`).
         unsafe {
             core::ptr::drop_in_place(self.state.get());
-            core::ptr::drop_in_place(pools.0);
-            core::ptr::drop_in_place(pools.1);
+            core::ptr::drop_in_place(tasks);
             drop(core::ptr::read(&self.selector));
         }
     }
@@ -351,25 +309,6 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
         }
     }
 
-    pub(crate) fn alloc_io(&self, fd: RawFd, direction: Direction) -> IoIndex {
-        let Some((index, io)) = self.io_waiters.alloc() else {
-            panic!(
-                "more than {} concurrent IO operations",
-                self.io_waiters.capacity()
-            );
-        };
-        io.fd.set(fd);
-        io.direction.set(direction);
-        io.waker.set(None);
-        io.armed.set(false);
-        index
-    }
-
-    #[cfg(test)]
-    pub(crate) fn io_count(&self) -> usize {
-        self.io_waiters.iter().count()
-    }
-
     pub(crate) fn spawn<Fut>(&self, future: Fut) -> TaskId
     where
         Fut: Future<Output = ()> + 'static,
@@ -385,35 +324,6 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
                 panic!("more than {} concurrent tasks", self.task_capacity());
             }
         }
-    }
-
-    pub(crate) fn register_io(&self, fd: BorrowedFd<'_>, direction: Direction) -> IoIndex {
-        self.alloc_io(fd.as_raw_fd(), direction)
-    }
-
-    pub(crate) fn set_io_waker(&self, index: IoIndex, waker: &Waker) {
-        let io = self.io_waiters.get(index).expect("IO is not registered");
-        store_waker(&io.waker, waker);
-    }
-
-    pub(crate) fn remove_io_waker(&self, index: IoIndex) {
-        if let Some(io) = self.io_waiters.get(index) {
-            io.waker.take();
-        }
-    }
-
-    pub(crate) fn has_io_waker(&self, index: IoIndex) -> bool {
-        self.io_waiters.get(index).is_some_and(IoWaiter::is_waiting)
-    }
-
-    fn take_io_waker(&self, token: Token, direction: Direction) -> Option<Waker> {
-        let io = self.io_waiters.get(IoIndex::from_bits(token.0))?;
-        if io.direction.get() != direction {
-            return None;
-        }
-        // The filter is one-shot: delivering the event disarmed it.
-        io.armed.set(false);
-        io.waker.take()
     }
 
     pub(crate) fn has_ready_tasks(&self) -> bool {
@@ -463,26 +373,6 @@ impl<S: 'static> Storage<S, Selector> {
         &self.selector
     }
 
-    /// Must be called while the fd is still open (see `Selector::apply_now`).
-    pub(crate) fn deregister_io(&self, index: IoIndex) -> rustix::io::Result<()> {
-        let Some(io) = self.io_waiters.get(index) else {
-            return Ok(());
-        };
-        io.waker.take();
-        let armed = io.armed.get();
-        let change = IoChange {
-            token: Token(index.to_bits()),
-            fd: io.fd.get(),
-            direction: io.direction.get(),
-            action: IoAction::Disarm,
-        };
-        self.io_waiters.free(index);
-        if !armed {
-            return Ok(());
-        }
-        self.selector().apply_now(change)
-    }
-
     pub(crate) fn process_selector_events(&self) -> rustix::io::Result<()> {
         let mut events = [None; EVENTS_PER_CALL];
         loop {
@@ -490,12 +380,12 @@ impl<S: 'static> Storage<S, Selector> {
             for event in events.iter().map_while(|event| *event) {
                 match event {
                     SelectorEvent::Readable(token) => {
-                        if let Some(waker) = self.take_io_waker(token, Direction::Read) {
+                        if let Some(waker) = self.io_waiters.take_waker(token, Direction::Read) {
                             waker.wake();
                         }
                     }
                     SelectorEvent::Writable(token) => {
-                        if let Some(waker) = self.take_io_waker(token, Direction::Write) {
+                        if let Some(waker) = self.io_waiters.take_waker(token, Direction::Write) {
                             waker.wake();
                         }
                     }
@@ -518,18 +408,13 @@ impl<S: 'static> Storage<S, Selector> {
             Some(deadline) => self.selector().arm_timer(deadline),
             None => self.selector().disarm_timer(),
         }
-        let changes = self
-            .io_waiters
-            .iter()
-            .filter_map(|(index, io)| io.pending_change(index));
-        self.selector().flush(changes)?;
-        for (_, io) in self.io_waiters.iter() {
-            io.armed.set(io.is_waiting());
-        }
+        self.selector().flush(self.io_waiters.pending_changes())?;
+        self.io_waiters.mark_flushed();
         Ok(())
     }
 }
 
+mod io_waiters;
 mod layout;
 mod timers;
 

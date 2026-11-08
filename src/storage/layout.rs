@@ -4,7 +4,7 @@ use crate::{
     capacities::Capacities,
     pool::ObjectPool,
     ready::ReadyQueue,
-    storage::{IoWaiter, Storage, TaskEntry, timers::Timers},
+    storage::{IoWaiters, Storage, TaskEntry, Timers},
     task_slab::TaskSlab,
 };
 
@@ -83,7 +83,7 @@ pub(crate) fn plan<S: 'static, Sel>(
         Layout::new::<Storage<S, Sel>>(),
         Layout::new::<S>(),
         Timers::layout(capacities.max_timers),
-        ObjectPool::<IoWaiter>::layout(capacities.max_io),
+        IoWaiters::layout(capacities.max_io),
         ObjectPool::<TaskEntry>::layout(capacities.max_tasks),
         ReadyQueue::layout(capacities.max_tasks),
         TaskSlab::layout(capacities.max_tasks, capacities.max_task_size),

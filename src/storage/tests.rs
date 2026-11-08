@@ -49,11 +49,7 @@ fn assert_expires(storage: &Storage<(), ()>, now: Instant, ids: impl IntoIterato
 
 #[track_caller]
 fn assert_pending_changes(storage: &Storage<(), ()>, expected: impl IntoIterator<Item = IoChange>) {
-    let pending = storage
-        .io_waiters
-        .iter()
-        .filter_map(|(index, io)| io.pending_change(index));
-    assert_yields(pending, expected);
+    assert_yields(storage.io_waiters.pending_changes(), expected);
 }
 
 fn noop_waker() -> Waker {
@@ -152,19 +148,18 @@ fn replaced_waker_is_the_one_woken() {
 }
 
 #[test]
-fn io_alloc_get_release() {
+fn io_register_wait_release() {
     let mut memory = stack_memory();
     let backing = TestStorage::new(&mut memory, 1, 1, 1);
     let storage = backing.storage();
-    let index = storage.alloc_io(3, Direction::Write);
-    let io = storage.io_waiters.get(index).unwrap();
-    assert_eq!(io.direction.get(), Direction::Write);
-    storage.set_io_waker(index, &noop_waker());
-    assert!(storage.has_io_waker(index));
-    storage.io_waiters.free(index);
-    assert!(storage.io_waiters.get(index).is_none());
-    assert!(!storage.has_io_waker(index));
-    let reused = storage.alloc_io(3, Direction::Read);
+    let index = storage.io_waiters.register(3, Direction::Write);
+    assert!(!storage.io_waiters.has_waker(index));
+    storage.io_waiters.set_waker(index, &noop_waker());
+    assert!(storage.io_waiters.has_waker(index));
+    assert_eq!(storage.io_waiters.release(index), None);
+    assert!(!storage.io_waiters.has_waker(index));
+    assert_eq!(storage.io_waiters.count(), 0);
+    let reused = storage.io_waiters.register(3, Direction::Read);
     assert_ne!(reused, index);
 }
 
@@ -173,8 +168,8 @@ fn io_changes_follow_the_stored_waker() {
     let mut memory = stack_memory();
     let backing = TestStorage::new(&mut memory, 1, 1, 2);
     let storage = backing.storage();
-    let reader = storage.alloc_io(3, Direction::Read);
-    let writer = storage.alloc_io(4, Direction::Write);
+    let reader = storage.io_waiters.register(3, Direction::Read);
+    let writer = storage.io_waiters.register(4, Direction::Write);
     assert_pending_changes(storage, []);
 
     let change = |action| IoChange {
@@ -183,15 +178,56 @@ fn io_changes_follow_the_stored_waker() {
         direction: Direction::Read,
         action,
     };
-    storage.set_io_waker(reader, &noop_waker());
+    storage.io_waiters.set_waker(reader, &noop_waker());
     assert_pending_changes(storage, [change(IoAction::Arm)]);
-    storage.io_waiters.get(reader).unwrap().armed.set(true);
+    storage.io_waiters.mark_flushed();
     assert_pending_changes(storage, []);
 
-    storage.remove_io_waker(reader);
+    storage.io_waiters.remove_waker(reader);
     assert_pending_changes(storage, [change(IoAction::Disarm)]);
     assert_eq!(IoIndex::from_bits(reader.to_bits()), reader);
-    assert!(storage.io_waiters.get(writer).is_some());
+    assert!(!storage.io_waiters.has_waker(writer));
+    assert_eq!(storage.io_waiters.count(), 2);
+}
+
+#[test]
+fn releasing_an_armed_registration_returns_its_disarm() {
+    let mut memory = stack_memory();
+    let backing = TestStorage::new(&mut memory, 1, 1, 1);
+    let storage = backing.storage();
+    let index = storage.io_waiters.register(3, Direction::Read);
+    storage.io_waiters.set_waker(index, &noop_waker());
+    storage.io_waiters.mark_flushed();
+    let disarm = IoChange {
+        token: Token(index.to_bits()),
+        fd: 3,
+        direction: Direction::Read,
+        action: IoAction::Disarm,
+    };
+    assert_eq!(storage.io_waiters.release(index), Some(disarm));
+    assert_eq!(storage.io_waiters.release(index), None);
+}
+
+#[test]
+fn an_event_takes_the_waker_of_its_direction_only() {
+    let mut memory = stack_memory();
+    let backing = TestStorage::new(&mut memory, 1, 1, 1);
+    let storage = backing.storage();
+    let index = storage.io_waiters.register(3, Direction::Read);
+    storage.io_waiters.set_waker(index, &waker(1));
+    let token = Token(index.to_bits());
+    assert!(
+        storage
+            .io_waiters
+            .take_waker(token, Direction::Write)
+            .is_none()
+    );
+    let woken = storage
+        .io_waiters
+        .take_waker(token, Direction::Read)
+        .unwrap();
+    assert_eq!(woken.data().addr(), 1);
+    assert!(!storage.io_waiters.has_waker(index));
 }
 
 #[test]
@@ -200,8 +236,8 @@ fn io_capacity_is_bounded() {
     let mut memory = stack_memory();
     let backing = TestStorage::new(&mut memory, 1, 1, 1);
     let storage = backing.storage();
-    storage.alloc_io(3, Direction::Read);
-    storage.alloc_io(3, Direction::Write);
+    storage.io_waiters.register(3, Direction::Read);
+    storage.io_waiters.register(3, Direction::Write);
 }
 
 #[test]
@@ -211,9 +247,9 @@ fn dropping_the_storage_drops_live_wakers() {
     let backing = TestStorage::new(&mut memory, 1, 2, 2);
     let storage = backing.storage();
     storage.timers.alloc(Instant::now(), counting_waker(&drops));
-    let io = storage.alloc_io(3, Direction::Read);
+    let io = storage.io_waiters.register(3, Direction::Read);
     let io_waker = counting_waker(&drops);
-    storage.set_io_waker(io, &io_waker);
+    storage.io_waiters.set_waker(io, &io_waker);
     drop(io_waker);
     assert_eq!(drops.get(), 1);
     drop(backing);
