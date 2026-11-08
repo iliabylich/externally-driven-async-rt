@@ -52,8 +52,9 @@ mod tests {
     use crate::{
         ready::{ReadyLinks, ReadyQueue},
         storage::TaskId,
-        test_utils::{assert_yields, static_within_current_test},
+        test_utils::assert_yields,
     };
+    use core::mem::MaybeUninit;
 
     fn tracked<const N: usize>(queue: ReadyQueue<N>, slot: u32, generation: u32) -> TaskId {
         let id = TaskId::from_parts(slot, generation);
@@ -67,7 +68,12 @@ mod tests {
 
     #[test]
     fn pushing_an_empty_slot_is_ignored() {
-        let queue = ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<1>)));
+        let queue = ReadyQueue::new(ReadyLinks::init({
+            static mut PLACE: MaybeUninit<ReadyLinks<1>> = MaybeUninit::uninit();
+            // SAFETY: this block runs once, on this test's thread, so this is the only reference to
+            // `PLACE` ever created.
+            unsafe { (&raw mut PLACE).as_mut_unchecked() }
+        }));
         queue.push(0);
         assert!(queue.is_empty());
         let old = tracked(queue, 0, 0);
@@ -78,7 +84,12 @@ mod tests {
 
     #[test]
     fn a_reused_slot_pops_its_new_task() {
-        let queue = ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<1>)));
+        let queue = ReadyQueue::new(ReadyLinks::init({
+            static mut PLACE: MaybeUninit<ReadyLinks<1>> = MaybeUninit::uninit();
+            // SAFETY: this block runs once, on this test's thread, so this is the only reference to
+            // `PLACE` ever created.
+            unsafe { (&raw mut PLACE).as_mut_unchecked() }
+        }));
         let old = tracked(queue, 0, 0);
         queue.untrack(old);
         let new = tracked(queue, 0, 1);
@@ -88,7 +99,12 @@ mod tests {
 
     #[test]
     fn a_task_finished_while_queued_is_skipped() {
-        let queue = ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<2>)));
+        let queue = ReadyQueue::new(ReadyLinks::init({
+            static mut PLACE: MaybeUninit<ReadyLinks<2>> = MaybeUninit::uninit();
+            // SAFETY: this block runs once, on this test's thread, so this is the only reference to
+            // `PLACE` ever created.
+            unsafe { (&raw mut PLACE).as_mut_unchecked() }
+        }));
         let a = tracked(queue, 0, 0);
         let b = tracked(queue, 1, 0);
         queue.push(a.slot());
@@ -100,7 +116,12 @@ mod tests {
 
     #[test]
     fn untracking_a_newer_task_is_ignored() {
-        let queue = ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<1>)));
+        let queue = ReadyQueue::new(ReadyLinks::init({
+            static mut PLACE: MaybeUninit<ReadyLinks<1>> = MaybeUninit::uninit();
+            // SAFETY: this block runs once, on this test's thread, so this is the only reference to
+            // `PLACE` ever created.
+            unsafe { (&raw mut PLACE).as_mut_unchecked() }
+        }));
         let old = TaskId::from_parts(0, 0);
         let new = tracked(queue, 0, 1);
         queue.untrack(old);

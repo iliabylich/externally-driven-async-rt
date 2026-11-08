@@ -15,12 +15,7 @@ use rustix::{
     },
 };
 
-use crate::{
-    context::Context,
-    io::{IoRegistration, io_loop},
-    selectors::Direction,
-    state::State,
-};
+use crate::{context::Context, io::IoRegistration, selectors::Direction, state::State};
 
 pub use self::{
     halves::{ReadHalf, WriteHalf},
@@ -157,12 +152,16 @@ async fn accept<
     >,
     fd: &OwnedFd,
 ) -> rustix::io::Result<(OwnedFd, A)> {
-    let (stream, addr) = io_loop!(
-        ctx,
-        fd.as_fd(),
-        Direction::Read,
-        rustix::net::acceptfrom(fd)
-    )?;
+    let (stream, addr) = {
+        let mut registration = IoRegistration::new(ctx.storage(), fd.as_fd(), Direction::Read);
+        loop {
+            match rustix::net::acceptfrom(fd) {
+                Err(Errno::INTR) => {}
+                Err(Errno::AGAIN) => registration.wait().await,
+                result => break result,
+            }
+        }
+    }?;
     configure(&stream, SocketType::STREAM)?;
     Ok((stream, A::from_any(addr)?))
 }
@@ -187,12 +186,16 @@ async fn read<
     fd: &OwnedFd,
     buf: &mut [u8],
 ) -> rustix::io::Result<usize> {
-    io_loop!(
-        ctx,
-        fd.as_fd(),
-        Direction::Read,
-        rustix::io::read(fd, &mut *buf)
-    )
+    {
+        let mut registration = IoRegistration::new(ctx.storage(), fd.as_fd(), Direction::Read);
+        loop {
+            match rustix::io::read(fd, &mut *buf) {
+                Err(Errno::INTR) => {}
+                Err(Errno::AGAIN) => registration.wait().await,
+                result => break result,
+            }
+        }
+    }
 }
 
 async fn write<
@@ -215,12 +218,16 @@ async fn write<
     fd: &OwnedFd,
     buf: &[u8],
 ) -> rustix::io::Result<usize> {
-    io_loop!(
-        ctx,
-        fd.as_fd(),
-        Direction::Write,
-        rustix::io::write(fd, buf)
-    )
+    {
+        let mut registration = IoRegistration::new(ctx.storage(), fd.as_fd(), Direction::Write);
+        loop {
+            match rustix::io::write(fd, buf) {
+                Err(Errno::INTR) => {}
+                Err(Errno::AGAIN) => registration.wait().await,
+                result => break result,
+            }
+        }
+    }
 }
 
 async fn send<
@@ -243,12 +250,16 @@ async fn send<
     fd: &OwnedFd,
     buf: &[u8],
 ) -> rustix::io::Result<usize> {
-    io_loop!(
-        ctx,
-        fd.as_fd(),
-        Direction::Write,
-        rustix::net::send(fd, buf, SendFlags::empty())
-    )
+    {
+        let mut registration = IoRegistration::new(ctx.storage(), fd.as_fd(), Direction::Write);
+        loop {
+            match rustix::net::send(fd, buf, SendFlags::empty()) {
+                Err(Errno::INTR) => {}
+                Err(Errno::AGAIN) => registration.wait().await,
+                result => break result,
+            }
+        }
+    }
 }
 
 async fn recv<
@@ -271,12 +282,16 @@ async fn recv<
     fd: &OwnedFd,
     buf: &mut [u8],
 ) -> rustix::io::Result<usize> {
-    let (len, _) = io_loop!(
-        ctx,
-        fd.as_fd(),
-        Direction::Read,
-        rustix::net::recv(fd, &mut *buf, RecvFlags::empty())
-    )?;
+    let (len, _) = {
+        let mut registration = IoRegistration::new(ctx.storage(), fd.as_fd(), Direction::Read);
+        loop {
+            match rustix::net::recv(fd, &mut *buf, RecvFlags::empty()) {
+                Err(Errno::INTR) => {}
+                Err(Errno::AGAIN) => registration.wait().await,
+                result => break result,
+            }
+        }
+    }?;
     Ok(len)
 }
 
@@ -302,12 +317,16 @@ async fn send_to<
     buf: &[u8],
     addr: &A,
 ) -> rustix::io::Result<usize> {
-    io_loop!(
-        ctx,
-        fd.as_fd(),
-        Direction::Write,
-        rustix::net::sendto(fd, buf, SendFlags::empty(), addr)
-    )
+    {
+        let mut registration = IoRegistration::new(ctx.storage(), fd.as_fd(), Direction::Write);
+        loop {
+            match rustix::net::sendto(fd, buf, SendFlags::empty(), addr) {
+                Err(Errno::INTR) => {}
+                Err(Errno::AGAIN) => registration.wait().await,
+                result => break result,
+            }
+        }
+    }
 }
 
 async fn recv_from<
@@ -331,12 +350,16 @@ async fn recv_from<
     fd: &OwnedFd,
     buf: &mut [u8],
 ) -> rustix::io::Result<(usize, A)> {
-    let (len, _, addr) = io_loop!(
-        ctx,
-        fd.as_fd(),
-        Direction::Read,
-        rustix::net::recvfrom(fd, &mut *buf, RecvFlags::empty())
-    )?;
+    let (len, _, addr) = {
+        let mut registration = IoRegistration::new(ctx.storage(), fd.as_fd(), Direction::Read);
+        loop {
+            match rustix::net::recvfrom(fd, &mut *buf, RecvFlags::empty()) {
+                Err(Errno::INTR) => {}
+                Err(Errno::AGAIN) => registration.wait().await,
+                result => break result,
+            }
+        }
+    }?;
     Ok((len, A::from_any(addr)?))
 }
 

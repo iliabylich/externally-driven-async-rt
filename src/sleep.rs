@@ -50,24 +50,42 @@ impl<const MAX_TIMERS_COUNT: usize> Drop for Sleep<'_, MAX_TIMERS_COUNT> {
 
 #[cfg(test)]
 mod tests {
-    use core::{future::pending, pin::pin, time::Duration};
+    use core::{future::pending, mem::MaybeUninit, pin::pin, time::Duration};
 
     use crate::{
+        EventLoop,
         instant::Instant,
         test_utils::{
             First, Log, TEST_MAX_IO_COUNT, TEST_MAX_ROOT_TASK_SIZE, TEST_MAX_TASK_SIZE,
-            TEST_MAX_TASKS_COUNT, Winner, has_timers, is_readable, run_until_root_finishes,
-            socketpair, test_loop, wait_readable, wake_by_writing,
+            TEST_MAX_TASKS_COUNT, TEST_MEMORY, TEST_QUEUE_MEMORY, TestLoop, Winner, has_timers,
+            is_readable, run_until_root_finishes, socketpair, wait_readable, wake_by_writing,
         },
     };
 
     #[test]
     fn zero_sleep_completes_immediately() {
-        let event_loop = test_loop!(Log::default(), async |ctx| {
-            ctx.sleep(Duration::ZERO).await;
-            ctx.dispatch(1);
-            pending::<()>().await;
-        },);
+        let event_loop = TestLoop::new(
+            {
+                static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `QUEUE` ever created.
+                unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            },
+            {
+                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `MEMORY` ever created.
+                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
+            },
+            Log::default(),
+            async |ctx| {
+                ctx.sleep(Duration::ZERO).await;
+                ctx.dispatch(1);
+                pending::<()>().await;
+            },
+        );
         let mut event_loop = event_loop.unwrap();
         assert_eq!(event_loop.state_mut().events(), [1]);
         assert!(!has_timers(&event_loop));
@@ -76,10 +94,27 @@ mod tests {
     #[test]
     fn sleep_waits_at_least_its_duration() {
         let start = Instant::now();
-        let mut event_loop = test_loop!(Log::default(), async |ctx| {
-            ctx.sleep(Duration::from_millis(20)).await;
-            ctx.dispatch(1);
-        },)
+        let mut event_loop = TestLoop::new(
+            {
+                static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `QUEUE` ever created.
+                unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            },
+            {
+                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `MEMORY` ever created.
+                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
+            },
+            Log::default(),
+            async |ctx| {
+                ctx.sleep(Duration::from_millis(20)).await;
+                ctx.dispatch(1);
+            },
+        )
         .unwrap();
         assert!(event_loop.state_mut().events().is_empty());
         run_until_root_finishes(&mut event_loop);
@@ -89,17 +124,34 @@ mod tests {
 
     #[test]
     fn sleeps_complete_in_deadline_order() {
-        let mut event_loop = test_loop!(Log::default(), async |ctx| {
-            let handles = [30, 10, 20].map(|ms| {
-                ctx.spawn(async move |ctx| {
-                    ctx.sleep(Duration::from_millis(ms)).await;
-                    ctx.dispatch(ms as u32);
-                })
-            });
-            for handle in handles {
-                handle.await;
-            }
-        },)
+        let mut event_loop = TestLoop::new(
+            {
+                static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `QUEUE` ever created.
+                unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            },
+            {
+                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `MEMORY` ever created.
+                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
+            },
+            Log::default(),
+            async |ctx| {
+                let handles = [30, 10, 20].map(|ms| {
+                    ctx.spawn(async move |ctx| {
+                        ctx.sleep(Duration::from_millis(ms)).await;
+                        ctx.dispatch(ms as u32);
+                    })
+                });
+                for handle in handles {
+                    handle.await;
+                }
+            },
+        )
         .unwrap();
         run_until_root_finishes(&mut event_loop);
         assert_eq!(event_loop.state_mut().events(), [10, 20, 30]);
@@ -108,17 +160,34 @@ mod tests {
 
     #[test]
     fn many_concurrent_sleeps() {
-        let mut event_loop = test_loop!(Log::default(), async |ctx| {
-            let handles: [_; 12] = core::array::from_fn(|i| {
-                ctx.spawn(async move |ctx| {
-                    ctx.sleep(Duration::from_millis(1 + i as u64 % 10)).await;
-                    ctx.dispatch(1);
-                })
-            });
-            for handle in handles {
-                handle.await;
-            }
-        },)
+        let mut event_loop = TestLoop::new(
+            {
+                static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `QUEUE` ever created.
+                unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            },
+            {
+                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `MEMORY` ever created.
+                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
+            },
+            Log::default(),
+            async |ctx| {
+                let handles: [_; 12] = core::array::from_fn(|i| {
+                    ctx.spawn(async move |ctx| {
+                        ctx.sleep(Duration::from_millis(1 + i as u64 % 10)).await;
+                        ctx.dispatch(1);
+                    })
+                });
+                for handle in handles {
+                    handle.await;
+                }
+            },
+        )
         .unwrap();
         run_until_root_finishes(&mut event_loop);
         assert_eq!(event_loop.state_mut().events().len(), 12);
@@ -127,16 +196,33 @@ mod tests {
     #[test]
     fn losing_sleep_leaves_no_timer_behind() {
         let (a, b) = socketpair();
-        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
-            let winner = First(
-                pin!(wait_readable(ctx, &a)),
-                ctx.sleep(Duration::from_millis(50)),
-            )
-            .await;
-            assert_eq!(winner, Winner::A);
-            ctx.dispatch(1);
-            pending::<()>().await;
-        },)
+        let mut event_loop = TestLoop::new(
+            {
+                static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `QUEUE` ever created.
+                unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            },
+            {
+                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `MEMORY` ever created.
+                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
+            },
+            Log::default(),
+            async move |ctx| {
+                let winner = First(
+                    pin!(wait_readable(ctx, &a)),
+                    ctx.sleep(Duration::from_millis(50)),
+                )
+                .await;
+                assert_eq!(winner, Winner::A);
+                ctx.dispatch(1);
+                pending::<()>().await;
+            },
+        )
         .unwrap();
         assert!(has_timers(&event_loop));
         wake_by_writing(&event_loop, &b);
@@ -153,16 +239,33 @@ mod tests {
     fn winning_sleep_drops_the_other_future() {
         let (a, b) = socketpair();
         let a_outside = rustix::io::dup(&a).unwrap();
-        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
-            let winner = First(
-                pin!(wait_readable(ctx, &a)),
-                ctx.sleep(Duration::from_millis(10)),
-            )
-            .await;
-            assert_eq!(winner, Winner::B);
-            ctx.dispatch(1);
-            pending::<()>().await;
-        },)
+        let mut event_loop = TestLoop::new(
+            {
+                static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `QUEUE` ever created.
+                unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            },
+            {
+                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `MEMORY` ever created.
+                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
+            },
+            Log::default(),
+            async move |ctx| {
+                let winner = First(
+                    pin!(wait_readable(ctx, &a)),
+                    ctx.sleep(Duration::from_millis(10)),
+                )
+                .await;
+                assert_eq!(winner, Winner::B);
+                ctx.dispatch(1);
+                pending::<()>().await;
+            },
+        )
         .unwrap();
         while event_loop.state_mut().events().is_empty() {
             assert!(is_readable(&event_loop, 2000));
@@ -177,15 +280,32 @@ mod tests {
     fn drift_free_interval_from_relative_sleeps() {
         let period = Duration::from_millis(10);
         let start = Instant::now();
-        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
-            let mut next = Instant::now();
-            for i in 0..5 {
-                next = next + period;
-                ctx.sleep(next.saturating_duration_since(Instant::now()))
-                    .await;
-                ctx.dispatch(i);
-            }
-        },)
+        let mut event_loop = TestLoop::new(
+            {
+                static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `QUEUE` ever created.
+                unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            },
+            {
+                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `MEMORY` ever created.
+                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
+            },
+            Log::default(),
+            async move |ctx| {
+                let mut next = Instant::now();
+                for i in 0..5 {
+                    next = next + period;
+                    ctx.sleep(next.saturating_duration_since(Instant::now()))
+                        .await;
+                    ctx.dispatch(i);
+                }
+            },
+        )
         .unwrap();
         run_until_root_finishes(&mut event_loop);
         assert_eq!(event_loop.state_mut().events(), [0, 1, 2, 3, 4]);
@@ -195,14 +315,29 @@ mod tests {
     #[test]
     #[should_panic(expected = "more than 1 concurrent sleeps")]
     fn exceeding_max_timers_count_panics() {
-        let _ = test_loop!(
-            [
-                TEST_MAX_TASKS_COUNT,
-                TEST_MAX_TASK_SIZE,
-                TEST_MAX_ROOT_TASK_SIZE,
-                1,
-                TEST_MAX_IO_COUNT
-            ],
+        let _ = EventLoop::<
+            '_,
+            _,
+            TEST_MAX_TASKS_COUNT,
+            TEST_MAX_TASK_SIZE,
+            TEST_MAX_ROOT_TASK_SIZE,
+            1,
+            TEST_MAX_IO_COUNT,
+        >::new(
+            {
+                static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `QUEUE` ever created.
+                unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            },
+            {
+                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `MEMORY` ever created.
+                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
+            },
             Log::default(),
             async |ctx| {
                 let long = Duration::from_secs(60);
@@ -213,14 +348,29 @@ mod tests {
 
     #[test]
     fn sequential_sleeps_reuse_the_timer_slot() {
-        let mut event_loop = test_loop!(
-            [
-                TEST_MAX_TASKS_COUNT,
-                TEST_MAX_TASK_SIZE,
-                TEST_MAX_ROOT_TASK_SIZE,
-                1,
-                TEST_MAX_IO_COUNT
-            ],
+        let mut event_loop = EventLoop::<
+            '_,
+            _,
+            TEST_MAX_TASKS_COUNT,
+            TEST_MAX_TASK_SIZE,
+            TEST_MAX_ROOT_TASK_SIZE,
+            1,
+            TEST_MAX_IO_COUNT,
+        >::new(
+            {
+                static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `QUEUE` ever created.
+                unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            },
+            {
+                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `MEMORY` ever created.
+                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
+            },
             Log::default(),
             async |ctx| {
                 for i in 0..3 {

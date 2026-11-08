@@ -284,7 +284,7 @@ mod tests {
         ready::{ReadyLinks, ReadyQueue},
         storage::{Root, RootStatus, TaskId, Tasks},
         task::JoinStatus,
-        test_utils::{DropFlag, flagged_task, static_within_current_test},
+        test_utils::{DropFlag, flagged_task},
     };
 
     const MAX_TASK_SIZE: usize = 1024;
@@ -297,7 +297,12 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<2>::init(
             &mut place,
-            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<2>))),
+            ReadyQueue::new(ReadyLinks::init({
+                static mut PLACE: MaybeUninit<ReadyLinks<2>> = MaybeUninit::uninit();
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `PLACE` ever created.
+                unsafe { (&raw mut PLACE).as_mut_unchecked() }
+            })),
         );
         let id = tasks.insert(flagged_task(&dropped));
         assert!(tasks.contains(id));
@@ -320,7 +325,12 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<1>::init(
             &mut place,
-            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<1>))),
+            ReadyQueue::new(ReadyLinks::init({
+                static mut PLACE: MaybeUninit<ReadyLinks<1>> = MaybeUninit::uninit();
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `PLACE` ever created.
+                unsafe { (&raw mut PLACE).as_mut_unchecked() }
+            })),
         );
         let first = tasks.insert(async {});
         tasks.remove(first);
@@ -339,7 +349,12 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<1>::init(
             &mut place,
-            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<1>))),
+            ReadyQueue::new(ReadyLinks::init({
+                static mut PLACE: MaybeUninit<ReadyLinks<1>> = MaybeUninit::uninit();
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `PLACE` ever created.
+                unsafe { (&raw mut PLACE).as_mut_unchecked() }
+            })),
         );
         tasks.insert(async {});
         tasks.insert(async {});
@@ -351,7 +366,12 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<2>::init(
             &mut place,
-            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<2>))),
+            ReadyQueue::new(ReadyLinks::init({
+                static mut PLACE: MaybeUninit<ReadyLinks<2>> = MaybeUninit::uninit();
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `PLACE` ever created.
+                unsafe { (&raw mut PLACE).as_mut_unchecked() }
+            })),
         );
         tasks.insert(flagged_task(&dropped));
         tasks.drop_all();
@@ -385,7 +405,12 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<2>::init(
             &mut place,
-            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<2>))),
+            ReadyQueue::new(ReadyLinks::init({
+                static mut PLACE: MaybeUninit<ReadyLinks<2>> = MaybeUninit::uninit();
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `PLACE` ever created.
+                unsafe { (&raw mut PLACE).as_mut_unchecked() }
+            })),
         );
         let guard = SpawnOnDrop {
             tasks,
@@ -407,7 +432,12 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<2>::init(
             &mut place,
-            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<2>))),
+            ReadyQueue::new(ReadyLinks::init({
+                static mut PLACE: MaybeUninit<ReadyLinks<2>> = MaybeUninit::uninit();
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `PLACE` ever created.
+                unsafe { (&raw mut PLACE).as_mut_unchecked() }
+            })),
         );
         let ids = [1u8, 2].map(|byte| {
             let data = [byte; MAX_TASK_SIZE - 16];
@@ -425,7 +455,12 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<1>::init(
             &mut place,
-            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<1>))),
+            ReadyQueue::new(ReadyLinks::init({
+                static mut PLACE: MaybeUninit<ReadyLinks<1>> = MaybeUninit::uninit();
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `PLACE` ever created.
+                unsafe { (&raw mut PLACE).as_mut_unchecked() }
+            })),
         );
         let data = [0u8; 8192];
         tasks.insert(async move {
@@ -454,7 +489,12 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = Tasks::<2, 100, 0>::init(
             &mut place,
-            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<2>))),
+            ReadyQueue::new(ReadyLinks::init({
+                static mut PLACE: MaybeUninit<ReadyLinks<2>> = MaybeUninit::uninit();
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `PLACE` ever created.
+                unsafe { (&raw mut PLACE).as_mut_unchecked() }
+            })),
         );
         let ids = [
             tasks.spawn(FixedFuture([1u8; 100])),
@@ -470,7 +510,12 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = Tasks::<1, 100, 0>::init(
             &mut place,
-            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<1>))),
+            ReadyQueue::new(ReadyLinks::init({
+                static mut PLACE: MaybeUninit<ReadyLinks<1>> = MaybeUninit::uninit();
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `PLACE` ever created.
+                unsafe { (&raw mut PLACE).as_mut_unchecked() }
+            })),
         );
         tasks.insert(FixedFuture([0u8; 101]));
     }
@@ -483,7 +528,12 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<1>::init(
             &mut place,
-            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<1>))),
+            ReadyQueue::new(ReadyLinks::init({
+                static mut PLACE: MaybeUninit<ReadyLinks<1>> = MaybeUninit::uninit();
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `PLACE` ever created.
+                unsafe { (&raw mut PLACE).as_mut_unchecked() }
+            })),
         );
         let aligned = Aligned;
         tasks.insert(async move {
@@ -514,7 +564,12 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = Tasks::<2, MAX_TASK_SIZE, { size_of::<BigRoot>() }>::init(
             &mut place,
-            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<2>))),
+            ReadyQueue::new(ReadyLinks::init({
+                static mut PLACE: MaybeUninit<ReadyLinks<2>> = MaybeUninit::uninit();
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `PLACE` ever created.
+                unsafe { (&raw mut PLACE).as_mut_unchecked() }
+            })),
         );
         let root = BigRoot {
             data: [3; 9000],
@@ -541,7 +596,12 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<1>::init(
             &mut place,
-            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<1>))),
+            ReadyQueue::new(ReadyLinks::init({
+                static mut PLACE: MaybeUninit<ReadyLinks<1>> = MaybeUninit::uninit();
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `PLACE` ever created.
+                unsafe { (&raw mut PLACE).as_mut_unchecked() }
+            })),
         );
         tasks.spawn_root(FixedFuture(0u8));
     }
@@ -552,7 +612,12 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<2>::init(
             &mut place,
-            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<2>))),
+            ReadyQueue::new(ReadyLinks::init({
+                static mut PLACE: MaybeUninit<ReadyLinks<2>> = MaybeUninit::uninit();
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `PLACE` ever created.
+                unsafe { (&raw mut PLACE).as_mut_unchecked() }
+            })),
         );
         tasks.spawn_root(core::future::pending::<()>());
         tasks.spawn_root(core::future::pending::<()>());

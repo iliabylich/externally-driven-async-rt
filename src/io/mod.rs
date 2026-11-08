@@ -8,21 +8,6 @@ use crate::{
     storage::{IoIndex, IoWaiters, Storage},
 };
 
-macro_rules! io_loop {
-    ($ctx:expr, $fd:expr, $direction:expr, $syscall:expr) => {{
-        let mut registration = $crate::io::IoRegistration::new($ctx.storage(), $fd, $direction);
-        loop {
-            match $syscall {
-                Err(rustix::io::Errno::INTR) => {}
-                Err(rustix::io::Errno::AGAIN) => registration.wait().await,
-                result => break result,
-            }
-        }
-    }};
-}
-
-pub(crate) use io_loop;
-
 pub(crate) struct IoRegistration<'a, const MAX_IO_COUNT: usize> {
     io_waiters: &'a IoWaiters<MAX_IO_COUNT>,
     selector: &'a Selector,

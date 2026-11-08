@@ -1,7 +1,6 @@
 use core::{
     cell::Cell,
     future::Future,
-    mem::MaybeUninit,
     pin::Pin,
     task::{Poll, RawWaker, RawWakerVTable, Waker},
     time::Duration,
@@ -367,96 +366,3 @@ pub(crate) fn run_until_events<
 
 pub(crate) const TEST_QUEUE_MEMORY: usize = 4 * 1024;
 pub(crate) const TEST_MEMORY: usize = 64 * 1024;
-
-macro_rules! static_within_current_test {
-    ($ty:ty = $init:expr) => {{
-        static mut STATIC: $ty = $init;
-        // SAFETY: expanded directly in a test, so this runs once, on that test's thread: this is
-        // the only reference to `STATIC` ever created.
-        unsafe { &mut *&raw mut STATIC }
-    }};
-    ($ty:ty) => {
-        $crate::test_utils::static_within_current_test!(
-            core::mem::MaybeUninit<$ty> = core::mem::MaybeUninit::uninit()
-        )
-    };
-}
-pub(crate) use static_within_current_test;
-
-macro_rules! test_memory_within_current_test {
-    ($size:expr) => {
-        $crate::test_utils::static_within_current_test!(
-            [core::mem::MaybeUninit<u8>; $size] = [core::mem::MaybeUninit::uninit(); $size]
-        )
-    };
-}
-pub(crate) use test_memory_within_current_test;
-
-macro_rules! test_loop {
-    ([$($capacity:expr),+ $(,)?], $state:expr, $f:expr $(,)?) => {
-        $crate::test_utils::test_loop_in::<'_, _, $({ $capacity }),+, _>(
-            $crate::test_utils::test_memory_within_current_test!(
-                $crate::test_utils::TEST_QUEUE_MEMORY
-            ),
-            $crate::test_utils::test_memory_within_current_test!($crate::test_utils::TEST_MEMORY),
-            $state,
-            $f,
-        )
-    };
-    ($state:expr, $f:expr $(,)?) => {
-        $crate::test_utils::test_loop!(
-            [
-                $crate::test_utils::TEST_MAX_TASKS_COUNT,
-                $crate::test_utils::TEST_MAX_TASK_SIZE,
-                $crate::test_utils::TEST_MAX_ROOT_TASK_SIZE,
-                $crate::test_utils::TEST_MAX_TIMERS_COUNT,
-                $crate::test_utils::TEST_MAX_IO_COUNT,
-            ],
-            $state,
-            $f,
-        )
-    };
-}
-pub(crate) use test_loop;
-
-pub(crate) fn test_loop_in<
-    'a,
-    S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
-    F,
->(
-    queue: &'static mut [MaybeUninit<u8>; TEST_QUEUE_MEMORY],
-    memory: &'a mut [MaybeUninit<u8>; TEST_MEMORY],
-    state: S,
-    f: F,
-) -> Result<
-    EventLoop<
-        'a,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >,
-    Error,
->
-where
-    F: AsyncFnOnce(
-            &Context<
-                'a,
-                S,
-                MAX_TASKS_COUNT,
-                MAX_TASK_SIZE,
-                MAX_ROOT_TASK_SIZE,
-                MAX_TIMERS_COUNT,
-                MAX_IO_COUNT,
-            >,
-        ) + 'a,
-{
-    EventLoop::new(queue, memory, state, f)
-}

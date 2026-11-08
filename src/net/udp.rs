@@ -120,6 +120,7 @@ impl UdpSocket {
 mod tests {
     use core::{
         future::pending,
+        mem::MaybeUninit,
         net::{IpAddr, Ipv4Addr, SocketAddr},
     };
 
@@ -130,7 +131,10 @@ mod tests {
 
     use crate::{
         net::UdpSocket,
-        test_utils::{Log, drain_until_readable, raw_socket, run_until_events, test_loop},
+        test_utils::{
+            Log, TEST_MEMORY, TEST_QUEUE_MEMORY, TestLoop, drain_until_readable, raw_socket,
+            run_until_events,
+        },
     };
 
     const LOCALHOST: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
@@ -145,23 +149,40 @@ mod tests {
     #[test]
     fn round_trip_with_a_raw_peer() {
         let (peer, peer_addr) = raw_peer();
-        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
-            let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
-            assert!(socket.local_addr().unwrap().port() != 0);
-            let mut buf = [0; 64];
+        let mut event_loop = TestLoop::new(
+            {
+                static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `QUEUE` ever created.
+                unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            },
+            {
+                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `MEMORY` ever created.
+                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
+            },
+            Log::default(),
+            async move |ctx| {
+                let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
+                assert!(socket.local_addr().unwrap().port() != 0);
+                let mut buf = [0; 64];
 
-            assert_eq!(socket.send_to(ctx, b"ping", peer_addr).await.unwrap(), 4);
-            let (len, from) = socket.recv_from(ctx, &mut buf).await.unwrap();
-            assert_eq!((&buf[..len], from), (&b"ping"[..], peer_addr));
+                assert_eq!(socket.send_to(ctx, b"ping", peer_addr).await.unwrap(), 4);
+                let (len, from) = socket.recv_from(ctx, &mut buf).await.unwrap();
+                assert_eq!((&buf[..len], from), (&b"ping"[..], peer_addr));
 
-            socket.connect(peer_addr).unwrap();
-            assert_eq!(socket.send(ctx, b"hello").await.unwrap(), 5);
-            let len = socket.recv(ctx, &mut buf).await.unwrap();
-            assert_eq!(&buf[..len], b"hello");
+                socket.connect(peer_addr).unwrap();
+                assert_eq!(socket.send(ctx, b"hello").await.unwrap(), 5);
+                let len = socket.recv(ctx, &mut buf).await.unwrap();
+                assert_eq!(&buf[..len], b"hello");
 
-            ctx.dispatch(1);
-            pending::<()>().await;
-        },)
+                ctx.dispatch(1);
+                pending::<()>().await;
+            },
+        )
         .unwrap();
         let mut buf = [0; 64];
         for expected in [&b"ping"[..], b"hello"] {

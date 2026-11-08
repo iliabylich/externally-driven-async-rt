@@ -47,24 +47,44 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
 
 #[cfg(test)]
 mod tests {
-    use core::future::pending;
+    use core::{future::pending, mem::MaybeUninit};
 
     use crate::{
         Error,
-        test_utils::{Log, socketpair, test_loop, wait_readable, wake_by_writing},
+        test_utils::{
+            Log, TEST_MEMORY, TEST_QUEUE_MEMORY, TestLoop, socketpair, wait_readable,
+            wake_by_writing,
+        },
     };
 
     #[test]
     fn joining_a_running_task_waits_for_it() {
         let (a, b) = socketpair();
-        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
-            ctx.spawn(async move |ctx| {
-                wait_readable(ctx, &a).await;
-                ctx.dispatch(1);
-            })
-            .await;
-            ctx.dispatch(2);
-        },)
+        let mut event_loop = TestLoop::new(
+            {
+                static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `QUEUE` ever created.
+                unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            },
+            {
+                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `MEMORY` ever created.
+                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
+            },
+            Log::default(),
+            async move |ctx| {
+                ctx.spawn(async move |ctx| {
+                    wait_readable(ctx, &a).await;
+                    ctx.dispatch(1);
+                })
+                .await;
+                ctx.dispatch(2);
+            },
+        )
         .unwrap();
         assert!(event_loop.state_mut().events().is_empty());
         wake_by_writing(&event_loop, &b);
@@ -78,12 +98,29 @@ mod tests {
     #[test]
     fn joining_a_finished_task_resolves_immediately() {
         let (a, b) = socketpair();
-        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
-            let handle = ctx.spawn(async |ctx| ctx.dispatch(1));
-            wait_readable(ctx, &a).await;
-            handle.await;
-            ctx.dispatch(2);
-        },)
+        let mut event_loop = TestLoop::new(
+            {
+                static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `QUEUE` ever created.
+                unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            },
+            {
+                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `MEMORY` ever created.
+                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
+            },
+            Log::default(),
+            async move |ctx| {
+                let handle = ctx.spawn(async |ctx| ctx.dispatch(1));
+                wait_readable(ctx, &a).await;
+                handle.await;
+                ctx.dispatch(2);
+            },
+        )
         .unwrap();
         assert_eq!(event_loop.state_mut().events(), [1]);
         wake_by_writing(&event_loop, &b);
@@ -97,13 +134,30 @@ mod tests {
     #[test]
     fn dropped_handle_detaches_the_task() {
         let (a, b) = socketpair();
-        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
-            ctx.spawn(async move |ctx| {
-                wait_readable(ctx, &a).await;
-                ctx.dispatch(1);
-            });
-            pending::<()>().await;
-        },)
+        let mut event_loop = TestLoop::new(
+            {
+                static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `QUEUE` ever created.
+                unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            },
+            {
+                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `MEMORY` ever created.
+                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
+            },
+            Log::default(),
+            async move |ctx| {
+                ctx.spawn(async move |ctx| {
+                    wait_readable(ctx, &a).await;
+                    ctx.dispatch(1);
+                });
+                pending::<()>().await;
+            },
+        )
         .unwrap();
         wake_by_writing(&event_loop, &b);
         assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
@@ -112,15 +166,32 @@ mod tests {
 
     #[test]
     fn spawned_task_can_spawn_and_join() {
-        let event_loop = test_loop!(Log::default(), async |ctx| {
-            ctx.spawn(async |ctx| {
-                ctx.spawn(async |ctx| ctx.dispatch(1)).await;
-                ctx.dispatch(2);
-            })
-            .await;
-            ctx.dispatch(3);
-            pending::<()>().await;
-        },);
+        let event_loop = TestLoop::new(
+            {
+                static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `QUEUE` ever created.
+                unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            },
+            {
+                static mut MEMORY: [MaybeUninit<u8>; TEST_MEMORY] =
+                    [MaybeUninit::uninit(); TEST_MEMORY];
+                // SAFETY: this block runs once, on this test's thread, so this is the only
+                // reference to `MEMORY` ever created.
+                unsafe { (&raw mut MEMORY).as_mut_unchecked() }
+            },
+            Log::default(),
+            async |ctx| {
+                ctx.spawn(async |ctx| {
+                    ctx.spawn(async |ctx| ctx.dispatch(1)).await;
+                    ctx.dispatch(2);
+                })
+                .await;
+                ctx.dispatch(3);
+                pending::<()>().await;
+            },
+        );
         assert_eq!(event_loop.unwrap().state_mut().events(), [1, 2, 3]);
     }
 }

@@ -40,8 +40,8 @@ impl Task {
 
     pub(crate) fn poll(&mut self, cx: &mut Context<'_>) -> Poll<()> {
         // SAFETY: the future was written by `write` and stays valid until `self` is dropped
-        // (guaranteed by `write`'s caller, as is everything it borrows being alive). Only `self` moves, never
-        // the future, so pinning holds, and `&mut self` rules out any other access to it.
+        // (guaranteed by `write`'s caller, as is everything it borrows being alive). Only `self`
+        // moves, never the future, so pinning holds, and `&mut self` rules out any other access.
         unsafe { Pin::new_unchecked(self.0.as_mut()) }.poll(cx)
     }
 }

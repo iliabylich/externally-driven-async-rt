@@ -158,10 +158,7 @@ fn drop_waker(_: *const ()) {}
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        current_thread_queue::CurrentThreadQueue,
-        test_utils::{assert_yields, static_within_current_test},
-    };
+    use crate::{current_thread_queue::CurrentThreadQueue, test_utils::assert_yields};
     use core::{cell::Cell, mem::MaybeUninit};
 
     fn drain<T: Default, const N: usize>(
@@ -216,8 +213,12 @@ mod tests {
 
     #[test]
     fn waking_pushes_the_slot() {
-        let queue =
-            CurrentThreadQueue::init(static_within_current_test!(CurrentThreadQueue<(), 2>));
+        let queue = CurrentThreadQueue::init({
+            static mut PLACE: MaybeUninit<CurrentThreadQueue<(), 2>> = MaybeUninit::uninit();
+            // SAFETY: this block runs once, on this test's thread, so this is the only reference to
+            // `PLACE` ever created.
+            unsafe { (&raw mut PLACE).as_mut_unchecked() }
+        });
         let waker = queue.waker(1);
         waker.wake_by_ref();
         assert_yields(drain(queue), [1]);
@@ -229,8 +230,12 @@ mod tests {
 
     #[test]
     fn duplicate_wakes_queue_the_slot_once() {
-        let queue =
-            CurrentThreadQueue::init(static_within_current_test!(CurrentThreadQueue<(), 2>));
+        let queue = CurrentThreadQueue::init({
+            static mut PLACE: MaybeUninit<CurrentThreadQueue<(), 2>> = MaybeUninit::uninit();
+            // SAFETY: this block runs once, on this test's thread, so this is the only reference to
+            // `PLACE` ever created.
+            unsafe { (&raw mut PLACE).as_mut_unchecked() }
+        });
         let waker = queue.waker(0);
         waker.wake_by_ref();
         waker.wake_by_ref();
@@ -240,8 +245,12 @@ mod tests {
 
     #[test]
     fn waking_after_the_queue_was_mutated() {
-        let queue =
-            CurrentThreadQueue::init(static_within_current_test!(CurrentThreadQueue<(), 2>));
+        let queue = CurrentThreadQueue::init({
+            static mut PLACE: MaybeUninit<CurrentThreadQueue<(), 2>> = MaybeUninit::uninit();
+            // SAFETY: this block runs once, on this test's thread, so this is the only reference to
+            // `PLACE` ever created.
+            unsafe { (&raw mut PLACE).as_mut_unchecked() }
+        });
         let waker = queue.waker(0);
         queue.push(1);
         waker.wake_by_ref();
@@ -252,8 +261,12 @@ mod tests {
 
     #[test]
     fn dropping_does_not_wake() {
-        let queue =
-            CurrentThreadQueue::init(static_within_current_test!(CurrentThreadQueue<(), 2>));
+        let queue = CurrentThreadQueue::init({
+            static mut PLACE: MaybeUninit<CurrentThreadQueue<(), 2>> = MaybeUninit::uninit();
+            // SAFETY: this block runs once, on this test's thread, so this is the only reference to
+            // `PLACE` ever created.
+            unsafe { (&raw mut PLACE).as_mut_unchecked() }
+        });
         let waker = queue.waker(0);
         drop(waker.clone());
         drop(waker);
