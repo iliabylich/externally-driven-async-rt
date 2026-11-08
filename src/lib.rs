@@ -22,7 +22,6 @@ mod task;
 #[cfg(test)]
 mod test_utils;
 mod thread_id;
-mod waker;
 
 pub use context::Context;
 pub use event_loop::{Error, EventLoop};

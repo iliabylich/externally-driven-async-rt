@@ -11,6 +11,7 @@ use rustix::fd::AsRawFd;
 
 use crate::{
     Error, State,
+    current_thread_queue::CurrentThreadQueue,
     instant::Instant,
     selectors::Direction,
     storage::{Root, RootStatus, Storage, TaskId},
@@ -20,7 +21,6 @@ use crate::{
         assert_yields, is_readable, socketpair, test_loop, test_loop_in,
         test_memory_within_current_test, wait_readable, wake_by_writing,
     },
-    waker::new_waker,
 };
 
 #[test]
@@ -413,7 +413,11 @@ fn ready_tasks<'a>(event_loop: &'a TestLoop<'_, Log>) -> impl Iterator<Item = Ta
 fn parked_task(event_loop: &TestLoop<Log>) -> (TaskId, Waker) {
     let id = event_loop.storage.tasks.insert(pending());
     // SAFETY: `event_loop` outlives the waker.
-    let waker = unsafe { new_waker(event_loop.storage.tasks.ready(), id) };
+    let waker = unsafe {
+        CurrentThreadQueue::<_, TEST_MAX_TASKS_COUNT>::waker(
+            event_loop.storage.tasks.ready().link(id.slot()),
+        )
+    };
     (id, waker)
 }
 
@@ -464,7 +468,11 @@ fn join_waiter_is_woken_when_the_task_finishes() {
     let waiter = event_loop.storage.tasks.spawn(counting(&polls));
     let task = event_loop.storage.tasks.spawn(async {});
     // SAFETY: `event_loop` outlives the waker.
-    let waker = unsafe { new_waker(event_loop.storage.tasks.ready(), waiter) };
+    let waker = unsafe {
+        CurrentThreadQueue::<_, TEST_MAX_TASKS_COUNT>::waker(
+            event_loop.storage.tasks.ready().link(waiter.slot()),
+        )
+    };
     event_loop.storage.tasks.set_join_waiter(task, &waker);
     event_loop.storage.tasks.run_ready();
     assert_eq!(polls.get(), 2);

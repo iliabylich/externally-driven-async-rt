@@ -8,11 +8,11 @@ use core::{
 };
 
 use crate::{
+    current_thread_queue::CurrentThreadQueue,
     pool::{Index, ObjectPool},
     ready::ReadyQueue,
     storage::store_waker,
     task::{JoinStatus, OwnedTask, TaskPtr},
-    waker::new_waker,
 };
 
 #[derive(Default)]
@@ -214,7 +214,9 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
             };
             // SAFETY: the ready queue lives in the storage, which outlives every waker except
             // deliberately leaked ones (documented as forbidden).
-            let waker = unsafe { new_waker(&self.ready, id) };
+            let waker = unsafe {
+                CurrentThreadQueue::<_, MAX_TASKS_COUNT>::waker(self.ready.link(id.slot()))
+            };
             let mut cx = core::task::Context::from_waker(&waker);
             // SAFETY: tasks are removed only right below (after the poll) and by `drop_all`,
             // which is never called from inside a task; `run_ready` isn't either, so the task

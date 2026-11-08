@@ -3,10 +3,8 @@ use core::{cell::Cell, mem::MaybeUninit, ptr::NonNull};
 use crate::{
     current_thread_queue::{CurrentThreadQueue, Link},
     storage::TaskId,
-    thread_id::ThreadId,
 };
 
-#[repr(transparent)]
 pub(crate) struct ReadyQueue<const N: usize>(CurrentThreadQueue<Cell<Option<u32>>, N>);
 
 impl<const N: usize> ReadyQueue<N> {
@@ -23,18 +21,6 @@ impl<const N: usize> ReadyQueue<N> {
 
     pub(crate) fn link(&self, slot: u32) -> NonNull<Link<Cell<Option<u32>>>> {
         self.0.link(slot)
-    }
-
-    /// # Safety
-    ///
-    /// Same as `CurrentThreadQueue::of_link`, for a `link` from `Self::link`.
-    pub(crate) unsafe fn of_link<'a>(link: NonNull<Link<Cell<Option<u32>>>>) -> (&'a Self, u32) {
-        // SAFETY: the caller upholds `of_link`'s contract; `Self` is a `repr(transparent)` wrapper
-        // around the queue `link` belongs to, so the queue's reference is a valid one to `Self`.
-        unsafe {
-            let (queue, slot) = CurrentThreadQueue::<_, N>::of_link(link);
-            (NonNull::from(queue).cast::<Self>().as_ref(), slot)
-        }
     }
 
     pub(crate) fn track(&self, id: TaskId) {
@@ -65,10 +51,6 @@ impl<const N: usize> ReadyQueue<N> {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.0.is_empty()
-    }
-
-    pub(crate) fn initial_thread_id(&self) -> ThreadId {
-        self.0.thread
     }
 }
 

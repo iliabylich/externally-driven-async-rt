@@ -2,6 +2,7 @@ use core::{
     cell::Cell,
     mem::{MaybeUninit, offset_of},
     ptr::NonNull,
+    task::{RawWaker, RawWakerVTable, Waker},
 };
 
 use crate::thread_id::ThreadId;
@@ -14,7 +15,7 @@ pub(crate) struct Link<T> {
 }
 
 pub(crate) struct CurrentThreadQueue<T: Default, const N: usize> {
-    pub(crate) thread: ThreadId,
+    thread: ThreadId,
     head: Cell<Option<u32>>,
     tail: Cell<Option<u32>>,
     links: [Link<T>; N],
@@ -60,7 +61,7 @@ impl<T: Default, const N: usize> CurrentThreadQueue<T, N> {
     pub(crate) fn link(&self, slot: u32) -> NonNull<Link<T>> {
         assert!((slot as usize) < N, "slot {slot} is out of bounds");
         // SAFETY: `links[slot]` is inside `self`; the pointer is derived from all of `self` (not
-        // just the link) so that `of_link` may step back to the queue from it.
+        // just the link) so that `wake` may step back to the queue from it.
         unsafe {
             NonNull::from(self)
                 .byte_add(offset_of!(Self, links))
@@ -71,23 +72,17 @@ impl<T: Default, const N: usize> CurrentThreadQueue<T, N> {
 
     /// # Safety
     ///
-    /// `link` must come from `Self::link` of a queue that stays alive for `'a`. Until `thread` is
-    /// checked to be the current thread, nothing but `thread` may be accessed through the queue.
-    pub(crate) unsafe fn of_link<'a>(link: NonNull<Link<T>>) -> (&'a Self, u32) {
-        // SAFETY: the caller guarantees the queue is alive; `slot` isn't written after `init`, and
-        // it's read through a raw pointer, so no reference to the link's `Cell`s is created.
-        let slot = unsafe { (*link.as_ptr()).slot };
-        // SAFETY: `link` points to `links[slot]` of the queue and carries the provenance of the
-        // whole queue (see `link`), so stepping back by its offset stays inside the queue, which
-        // the caller keeps alive for `'a`. After `init` the queue is only ever accessed through
-        // shared references, so creating one reads only bytes outside `UnsafeCell`s, which are
-        // never written again, and doesn't race with the queue's thread.
-        let queue = unsafe {
-            link.byte_sub(offset_of!(Self, links) + slot as usize * size_of::<Link<T>>())
-                .cast::<Self>()
-                .as_ref()
-        };
-        (queue, slot)
+    /// `link` must come from `Self::link` of a queue that stays valid for as long as the waker (or
+    /// any of its clones) may be woken. Clones may be dropped at any time, from any thread.
+    pub(crate) unsafe fn waker(link: NonNull<Link<T>>) -> Waker {
+        // SAFETY: the vtable functions below uphold the `RawWaker` contract for a pointer from
+        // `Self::link`, which the caller keeps valid while the waker may be woken.
+        unsafe {
+            Waker::from_raw(RawWaker::new(
+                link.as_ptr().cast_const().cast(),
+                vtable::<T, N>(),
+            ))
+        }
     }
 
     pub(crate) fn get(&self, slot: u32) -> &T {
@@ -125,11 +120,45 @@ impl<T: Default, const N: usize> CurrentThreadQueue<T, N> {
     }
 }
 
+fn vtable<T: Default, const N: usize>() -> &'static RawWakerVTable {
+    const { &RawWakerVTable::new(clone::<T, N>, wake::<T, N>, wake::<T, N>, drop_waker) }
+}
+
+fn clone<T: Default, const N: usize>(ptr: *const ()) -> RawWaker {
+    RawWaker::new(ptr, vtable::<T, N>())
+}
+
+unsafe fn wake<T: Default, const N: usize>(ptr: *const ()) {
+    let link = ptr.cast::<Link<T>>();
+    // SAFETY: `ptr` comes from `CurrentThreadQueue::link` in `CurrentThreadQueue::waker`, whose
+    // caller keeps the queue alive while wakers may be woken. `slot` isn't written after `init`,
+    // and it's read through a raw pointer, so no reference to the link's `Cell`s is created.
+    let slot = unsafe { (*link).slot };
+    // SAFETY: `link` points to `links[slot]` of the queue and carries the provenance of the whole
+    // queue (see `CurrentThreadQueue::link`), so stepping back by its offset stays inside the live
+    // queue. After `init` the queue is only ever accessed through shared references, so creating
+    // one reads only bytes outside `UnsafeCell`s, which are never written again, and doesn't race
+    // with the queue's thread; nothing else is accessed before `thread` is checked below.
+    let queue = unsafe {
+        &*link
+            .byte_sub(
+                offset_of!(CurrentThreadQueue<T, N>, links) + slot as usize * size_of::<Link<T>>(),
+            )
+            .cast::<CurrentThreadQueue<T, N>>()
+    };
+    assert_eq!(
+        queue.thread,
+        ThreadId::current(),
+        "a Waker must only be woken on the thread of its EventLoop"
+    );
+    queue.push(slot);
+}
+
+fn drop_waker(_: *const ()) {}
+
 #[cfg(test)]
 mod tests {
-    use crate::{
-        current_thread_queue::CurrentThreadQueue, test_utils::assert_yields, thread_id::ThreadId,
-    };
+    use crate::{current_thread_queue::CurrentThreadQueue, test_utils::assert_yields};
     use core::{cell::Cell, mem::MaybeUninit};
 
     fn drain<T: Default, const N: usize>(
@@ -183,16 +212,53 @@ mod tests {
     }
 
     #[test]
-    fn of_link_finds_the_queue_and_the_slot() {
+    fn waking_pushes_the_slot() {
         let mut place = MaybeUninit::uninit();
-        let queue = CurrentThreadQueue::<Cell<u32>, 3>::init(&mut place);
-        // SAFETY: `queue` outlives the call.
-        let (found, slot) = unsafe { CurrentThreadQueue::of_link(queue.link(2)) };
-        assert!(core::ptr::eq(found, queue));
-        assert_eq!(slot, 2);
-        assert_eq!(found.thread, ThreadId::current());
-        found.push(slot);
-        assert_yields(drain(queue), [2]);
+        let queue = CurrentThreadQueue::<(), 2>::init(&mut place);
+        // SAFETY: `queue` outlives the waker.
+        let waker = unsafe { CurrentThreadQueue::<(), 2>::waker(queue.link(1)) };
+        waker.wake_by_ref();
+        assert_yields(drain(queue), [1]);
+        let clone = waker.clone();
+        drop(waker);
+        clone.wake();
+        assert_yields(drain(queue), [1]);
+    }
+
+    #[test]
+    fn duplicate_wakes_queue_the_slot_once() {
+        let mut place = MaybeUninit::uninit();
+        let queue = CurrentThreadQueue::<(), 2>::init(&mut place);
+        // SAFETY: `queue` outlives the waker.
+        let waker = unsafe { CurrentThreadQueue::<(), 2>::waker(queue.link(0)) };
+        waker.wake_by_ref();
+        waker.wake_by_ref();
+        waker.wake();
+        assert_yields(drain(queue), [0]);
+    }
+
+    #[test]
+    fn waking_after_the_queue_was_mutated() {
+        let mut place = MaybeUninit::uninit();
+        let queue = CurrentThreadQueue::<(), 2>::init(&mut place);
+        // SAFETY: `queue` outlives the waker.
+        let waker = unsafe { CurrentThreadQueue::<(), 2>::waker(queue.link(0)) };
+        queue.push(1);
+        waker.wake_by_ref();
+        assert_eq!(queue.pop(), Some(1));
+        waker.wake();
+        assert_yields(drain(queue), [0]);
+    }
+
+    #[test]
+    fn dropping_does_not_wake() {
+        let mut place = MaybeUninit::uninit();
+        let queue = CurrentThreadQueue::<(), 2>::init(&mut place);
+        // SAFETY: `queue` outlives the waker.
+        let waker = unsafe { CurrentThreadQueue::<(), 2>::waker(queue.link(0)) };
+        drop(waker.clone());
+        drop(waker);
+        assert!(queue.is_empty());
     }
 
     #[test]
