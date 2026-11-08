@@ -105,6 +105,32 @@ impl<
                 >,
             ) + 'a,
     {
+        // SAFETY: `memory` is never freed, so wakers pointing into it stay valid forever.
+        unsafe { Self::new_in(memory, state, f) }
+    }
+
+    /// # Safety
+    ///
+    /// No `Waker` handed to a task may be woken after the loop is dropped (or forgotten), because
+    /// wakers point into `memory`.
+    pub unsafe fn new_in<const MEMORY: usize, F>(
+        memory: &'a mut [MaybeUninit<u8>; MEMORY],
+        state: S,
+        f: F,
+    ) -> Result<Self, Error>
+    where
+        F: AsyncFnOnce(
+                &Context<
+                    'a,
+                    S,
+                    MAX_TASKS_COUNT,
+                    MAX_TASK_SIZE,
+                    MAX_ROOT_TASK_SIZE,
+                    MAX_TIMERS_COUNT,
+                    MAX_IO_COUNT,
+                >,
+            ) + 'a,
+    {
         const {
             assert!(
                 MEMORY >= Self::REQUIRED_SIZE,
@@ -127,7 +153,7 @@ impl<
         let start = addr.next_multiple_of(align) - addr;
         // SAFETY: `start` is less than `align`, so the storage fits in `memory` from there
         // (`REQUIRED_SIZE`, asserted above), aligned. `MaybeUninit` needs no initialized contents,
-        // and `memory` is borrowed exclusively forever.
+        // and `memory` is borrowed exclusively for `'a`.
         let place = unsafe { &mut *memory.as_mut_ptr().add(start).cast() };
         let storage = Storage::init(place, selector, state);
         let event_loop = Self { storage };

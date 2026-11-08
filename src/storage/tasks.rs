@@ -212,8 +212,9 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
             let Some(task) = self.get(id) else {
                 continue;
             };
-            // SAFETY: the ready queue lives in the storage, which outlives every waker except
-            // deliberately leaked ones (documented as forbidden).
+            // SAFETY: the ready queue lives in the loop's memory, which is either never freed
+            // (`EventLoop::new`) or guaranteed by the caller of `EventLoop::new_in` to outlive
+            // every waker that may be woken.
             let waker = unsafe {
                 CurrentThreadQueue::<_, MAX_TASKS_COUNT>::waker(self.ready.link(id.slot()))
             };
