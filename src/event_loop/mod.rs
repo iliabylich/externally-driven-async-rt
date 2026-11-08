@@ -27,6 +27,7 @@ impl core::fmt::Display for Error {
 impl core::error::Error for Error {}
 
 pub struct EventLoop<
+    'a,
     S: State,
     const MAX_TASKS_COUNT: usize,
     const MAX_TASK_SIZE: usize,
@@ -34,7 +35,8 @@ pub struct EventLoop<
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
 > {
-    pub(crate) storage: &'static Storage<
+    pub(crate) storage: &'a Storage<
+        'a,
         S,
         MAX_TASKS_COUNT,
         MAX_TASK_SIZE,
@@ -45,16 +47,27 @@ pub struct EventLoop<
 }
 
 impl<
+    'a,
     S: State,
     const MAX_TASKS_COUNT: usize,
     const MAX_TASK_SIZE: usize,
     const MAX_ROOT_TASK_SIZE: usize,
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
-> EventLoop<S, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE, MAX_TIMERS_COUNT, MAX_IO_COUNT>
+>
+    EventLoop<
+        'a,
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >
 {
     pub const REQUIRED_SIZE: usize = size_of::<
         Storage<
+            'a,
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,
@@ -64,6 +77,7 @@ impl<
         >,
     >() + align_of::<
         Storage<
+            'a,
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,
@@ -81,6 +95,7 @@ impl<
     where
         F: AsyncFnOnce(
                 &Context<
+                    'a,
                     S,
                     MAX_TASKS_COUNT,
                     MAX_TASK_SIZE,
@@ -88,7 +103,7 @@ impl<
                     MAX_TIMERS_COUNT,
                     MAX_IO_COUNT,
                 >,
-            ) + 'static,
+            ) + 'a,
     {
         const {
             assert!(
@@ -99,6 +114,7 @@ impl<
         let selector = Selector::new().map_err(Error::Io)?;
         let align = align_of::<
             Storage<
+                'a,
                 S,
                 MAX_TASKS_COUNT,
                 MAX_TASK_SIZE,
@@ -163,6 +179,7 @@ impl<
 }
 
 impl<
+    'a,
     S: State,
     const MAX_TASKS_COUNT: usize,
     const MAX_TASK_SIZE: usize,
@@ -171,6 +188,7 @@ impl<
     const MAX_IO_COUNT: usize,
 > Drop
     for EventLoop<
+        'a,
         S,
         MAX_TASKS_COUNT,
         MAX_TASK_SIZE,
@@ -187,6 +205,7 @@ impl<
 }
 
 impl<
+    'a,
     S: State,
     const MAX_TASKS_COUNT: usize,
     const MAX_TASK_SIZE: usize,
@@ -195,6 +214,7 @@ impl<
     const MAX_IO_COUNT: usize,
 > AsFd
     for EventLoop<
+        'a,
         S,
         MAX_TASKS_COUNT,
         MAX_TASK_SIZE,
@@ -209,6 +229,7 @@ impl<
 }
 
 impl<
+    'a,
     S: State,
     const MAX_TASKS_COUNT: usize,
     const MAX_TASK_SIZE: usize,
@@ -217,6 +238,7 @@ impl<
     const MAX_IO_COUNT: usize,
 > AsRawFd
     for EventLoop<
+        'a,
         S,
         MAX_TASKS_COUNT,
         MAX_TASK_SIZE,

@@ -16,8 +16,8 @@ use crate::{
     selectors::Direction,
     test_utils::{
         First, Log, TEST_MAX_ROOT_TASK_SIZE, TEST_MAX_TASK_SIZE, TEST_MAX_TASKS_COUNT,
-        TEST_MAX_TIMERS_COUNT, TestContext, TestLoop, Winner, is_readable, socketpair,
-        run_until_root_finishes, test_loop,
+        TEST_MAX_TIMERS_COUNT, TestContext, TestLoop, Winner, is_readable, run_until_root_finishes,
+        socketpair, test_loop,
     },
 };
 
@@ -30,6 +30,7 @@ async fn read_some<
     const MAX_IO_COUNT: usize,
 >(
     ctx: &Context<
+        '_,
         S,
         MAX_TASKS_COUNT,
         MAX_TASK_SIZE,
@@ -49,7 +50,7 @@ async fn read_some<
     }
 }
 
-async fn write_some(ctx: &TestContext, fd: &OwnedFd) -> rustix::io::Result<usize> {
+async fn write_some(ctx: &TestContext<'_>, fd: &OwnedFd) -> rustix::io::Result<usize> {
     let mut registration = IoRegistration::new(ctx.storage(), fd.as_fd(), Direction::Write);
     loop {
         match rustix::io::write(fd, b"x") {

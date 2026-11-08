@@ -113,6 +113,7 @@ async fn connect<
     A: Address,
 >(
     ctx: &Context<
+        '_,
         S,
         MAX_TASKS_COUNT,
         MAX_TASK_SIZE,
@@ -146,6 +147,7 @@ async fn accept<
     A: Address,
 >(
     ctx: &Context<
+        '_,
         S,
         MAX_TASKS_COUNT,
         MAX_TASK_SIZE,
@@ -174,6 +176,7 @@ async fn read<
     const MAX_IO_COUNT: usize,
 >(
     ctx: &Context<
+        '_,
         S,
         MAX_TASKS_COUNT,
         MAX_TASK_SIZE,
@@ -201,6 +204,7 @@ async fn write<
     const MAX_IO_COUNT: usize,
 >(
     ctx: &Context<
+        '_,
         S,
         MAX_TASKS_COUNT,
         MAX_TASK_SIZE,
@@ -228,6 +232,7 @@ async fn send<
     const MAX_IO_COUNT: usize,
 >(
     ctx: &Context<
+        '_,
         S,
         MAX_TASKS_COUNT,
         MAX_TASK_SIZE,
@@ -255,6 +260,7 @@ async fn recv<
     const MAX_IO_COUNT: usize,
 >(
     ctx: &Context<
+        '_,
         S,
         MAX_TASKS_COUNT,
         MAX_TASK_SIZE,
@@ -284,6 +290,7 @@ async fn send_to<
     A: Address,
 >(
     ctx: &Context<
+        '_,
         S,
         MAX_TASKS_COUNT,
         MAX_TASK_SIZE,
@@ -313,6 +320,7 @@ async fn recv_from<
     A: Address,
 >(
     ctx: &Context<
+        '_,
         S,
         MAX_TASKS_COUNT,
         MAX_TASK_SIZE,

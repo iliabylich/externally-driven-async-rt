@@ -1,6 +1,7 @@
 use core::{
     cell::{Cell, UnsafeCell},
     future::Future,
+    marker::PhantomData,
     mem::MaybeUninit,
     ptr::NonNull,
     task::Waker,
@@ -46,6 +47,7 @@ pub(crate) enum Root {
 }
 
 pub(crate) struct Tasks<
+    'a,
     const MAX_TASKS_COUNT: usize,
     const MAX_TASK_SIZE: usize,
     const MAX_ROOT_TASK_SIZE: usize,
@@ -55,26 +57,29 @@ pub(crate) struct Tasks<
     slab: [Aligned16<MAX_TASK_SIZE>; MAX_TASKS_COUNT],
     root_region: Aligned16<MAX_ROOT_TASK_SIZE>,
     root: Cell<Root>,
+    futures: PhantomData<Cell<&'a ()>>,
 }
 
-impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize>
-    Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize>
+    Tasks<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
 {
     pub(crate) fn init(place: &mut MaybeUninit<Self>) -> &Self {
         let ptr = place.as_mut_ptr();
         // SAFETY: `ptr` points to `place`, borrowed exclusively until the end; the fields are
         // disjoint, `&raw mut` creates no reference to them while they're uninitialized, and
         // `MaybeUninit<T>` has `T`'s layout.
-        let (pool, ready, root) = unsafe {
+        let (pool, ready, root, futures) = unsafe {
             (
                 &mut *(&raw mut (*ptr).pool).cast::<MaybeUninit<_>>(),
                 &mut *(&raw mut (*ptr).ready).cast::<MaybeUninit<_>>(),
                 &mut *(&raw mut (*ptr).root).cast::<MaybeUninit<_>>(),
+                &mut *(&raw mut (*ptr).futures).cast::<MaybeUninit<_>>(),
             )
         };
         ObjectPool::<TaskEntry, MAX_TASKS_COUNT>::init(pool);
         ReadyQueue::<MAX_TASKS_COUNT>::init(ready);
         root.write(Cell::new(Root::Unset));
+        futures.write(PhantomData::<Cell<&'a ()>>);
         // SAFETY: every field was written above, except the blocks, which are `MaybeUninit`.
         unsafe { place.assume_init_ref() }
     }
@@ -95,7 +100,7 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
 
     pub(crate) fn insert<Fut>(&self, future: Fut) -> TaskId
     where
-        Fut: Future<Output = ()> + 'static,
+        Fut: Future<Output = ()> + 'a,
     {
         assert!(
             size_of::<Fut>() <= MAX_TASK_SIZE,
@@ -113,7 +118,9 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
         let memory = NonNull::from(&self.slab[id.slot() as usize].0).cast();
         // SAFETY: `Fut` fits the slab's blocks (checked above). The slot's block is unused: the
         // slot was free, and a slot is only freed after its future was dropped. The slot stays
-        // reserved until this future is dropped.
+        // reserved until this future is dropped. Futures are only polled and dropped through
+        // `&self`, which can't outlive `'a`, and `Tasks` is invariant in `'a`, so `'a` can't be
+        // shortened to accept futures that live less than the other ones.
         let future = unsafe { OwnedTask::write(memory, future) };
         self.occupy(id, entry, future);
         id
@@ -121,7 +128,7 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
 
     pub(crate) fn spawn_root<Fut>(&self, future: Fut)
     where
-        Fut: Future<Output = ()> + 'static,
+        Fut: Future<Output = ()> + 'a,
     {
         assert!(
             matches!(self.root.get(), Root::Unset),
@@ -143,7 +150,7 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
         };
         // SAFETY: `Fut` fits the root region (asserted above), and the region is unused: the root
         // is still `Unset` (asserted above), and leaves that state below, so this is the only
-        // call that gets here.
+        // call that gets here. `'a` holds as in `insert`.
         let future = unsafe { OwnedTask::write(NonNull::from(&self.root_region.0).cast(), future) };
         self.occupy(id, entry, future);
         self.ready.push(id.slot());
@@ -186,7 +193,7 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
 
     pub(crate) fn spawn<Fut>(&self, future: Fut) -> TaskId
     where
-        Fut: Future<Output = ()> + 'static,
+        Fut: Future<Output = ()> + 'a,
     {
         let id = self.insert(future);
         self.ready.push(id.slot());
@@ -211,7 +218,8 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
             let mut cx = core::task::Context::from_waker(&waker);
             // SAFETY: tasks are removed only right below (after the poll) and by `drop_all`,
             // which is never called from inside a task; `run_ready` isn't either, so the task
-            // isn't polled re-entrantly.
+            // isn't polled re-entrantly. `&self` can't outlive `'a`, which the task was written
+            // for.
             if unsafe { task.poll(&mut cx) }.is_pending() {
                 continue;
             }
@@ -244,32 +252,31 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
 
 #[cfg(test)]
 mod tests {
-    use core::{mem::MaybeUninit, task::Waker};
+    use core::{cell::Cell, mem::MaybeUninit, task::Waker};
 
     use crate::{
         storage::{Root, TaskId, Tasks},
         task::JoinStatus,
-        test_utils::flagged_task,
+        test_utils::{DropFlag, flagged_task},
     };
 
     const MAX_TASK_SIZE: usize = 1024;
 
-    type TestTasks<const MAX_TASKS_COUNT: usize> = Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, 0>;
+    type TestTasks<'a, const MAX_TASKS_COUNT: usize> = Tasks<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, 0>;
 
     #[test]
     fn removing_a_task_drops_its_future_and_returns_its_join_waiter() {
+        let dropped = Cell::new(false);
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<2>::init(&mut place);
-        static mut DROPPED: bool = false;
-        let id = tasks.insert(flagged_task(&raw mut DROPPED));
+        let id = tasks.insert(flagged_task(&dropped));
         assert!(tasks.get(id).is_some());
         assert_eq!(
             tasks.set_join_waiter(id, Waker::noop()),
             JoinStatus::Running
         );
         let join_waiter = tasks.remove(id).unwrap();
-        // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
-        assert!(unsafe { DROPPED });
+        assert!(dropped.get());
         assert!(join_waiter.is_some());
         assert!(tasks.get(id).is_none());
         assert_eq!(
@@ -304,60 +311,51 @@ mod tests {
 
     #[test]
     fn drop_all_drops_every_future() {
+        let dropped = Cell::new(false);
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<2>::init(&mut place);
-        static mut DROPPED: bool = false;
-        tasks.insert(flagged_task(&raw mut DROPPED));
+        tasks.insert(flagged_task(&dropped));
         tasks.drop_all();
-        // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
-        assert!(unsafe { DROPPED });
+        assert!(dropped.get());
         assert_eq!(tasks.count(), 0);
     }
 
-    struct SpawnOnDrop {
-        tasks: *const TestTasks<2>,
-        id: *mut Option<TaskId>,
-        spawned: *mut Option<TaskId>,
+    struct SpawnOnDrop<'a> {
+        tasks: &'a TestTasks<'a, 2>,
+        id: &'a Cell<Option<TaskId>>,
+        spawned: &'a Cell<Option<TaskId>>,
     }
 
-    impl Drop for SpawnOnDrop {
+    impl Drop for SpawnOnDrop<'_> {
         fn drop(&mut self) {
-            // SAFETY: points to a `static mut` of the running test, which only that test's thread
-            // uses, and no reference to it exists.
-            let id = unsafe { *self.id }.unwrap();
-            // SAFETY: the test's `Tasks` outlive the task, and are only accessed through shared
-            // references.
-            let tasks = unsafe { &*self.tasks };
+            let id = self.id.get().unwrap();
+            let tasks = self.tasks;
             assert!(tasks.get(id).is_none());
             assert_eq!(
                 tasks.set_join_waiter(id, Waker::noop()),
                 JoinStatus::Finished
             );
-            let spawned = tasks.insert(async {});
-            // SAFETY: as above.
-            unsafe { *self.spawned = Some(spawned) };
+            self.spawned.set(Some(tasks.insert(async {})));
         }
     }
 
     #[test]
     fn a_task_spawned_while_one_is_dropped_gets_another_slot() {
+        let id = Cell::new(None);
+        let spawned = Cell::new(None);
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<2>::init(&mut place);
-        static mut ID: Option<TaskId> = None;
-        static mut SPAWNED: Option<TaskId> = None;
         let guard = SpawnOnDrop {
             tasks,
-            id: &raw mut ID,
-            spawned: &raw mut SPAWNED,
+            id: &id,
+            spawned: &spawned,
         };
         let dropping = tasks.insert(async move {
             let _guard = guard;
         });
-        // SAFETY: only this test's thread uses `ID`, and no reference to it exists.
-        unsafe { ID = Some(dropping) };
+        id.set(Some(dropping));
         tasks.remove(dropping).unwrap();
-        // SAFETY: only this test's thread uses `SPAWNED`, and no reference to it exists.
-        let spawned = unsafe { SPAWNED }.unwrap();
+        let spawned = spawned.get().unwrap();
         assert_ne!(spawned.slot(), dropping.slot());
         assert!(tasks.get(spawned).is_some());
     }
@@ -442,12 +440,12 @@ mod tests {
         });
     }
 
-    struct BigRoot {
+    struct BigRoot<'a> {
         data: [u8; 9000],
-        dropped: *mut bool,
+        _flag: DropFlag<'a>,
     }
 
-    impl Future for BigRoot {
+    impl Future for BigRoot<'_> {
         type Output = ();
 
         fn poll(
@@ -459,22 +457,14 @@ mod tests {
         }
     }
 
-    impl Drop for BigRoot {
-        fn drop(&mut self) {
-            // SAFETY: points to a `static mut` of the running test, which only that test's thread
-            // uses, and no reference to it exists.
-            unsafe { *self.dropped = true };
-        }
-    }
-
     #[test]
     fn root_region_holds_a_root_bigger_than_a_slab_block() {
-        static mut DROPPED: bool = false;
+        let dropped = Cell::new(false);
         let mut place = MaybeUninit::uninit();
         let tasks = Tasks::<2, MAX_TASK_SIZE, { size_of::<BigRoot>() }>::init(&mut place);
         let root = BigRoot {
             data: [3; 9000],
-            dropped: &raw mut DROPPED,
+            _flag: DropFlag(&dropped),
         };
         tasks.spawn_root(root);
         let Root::Running(id) = tasks.root() else {
@@ -485,11 +475,9 @@ mod tests {
         let mut cx = core::task::Context::from_waker(Waker::noop());
         // SAFETY: the task is alive and not polled re-entrantly.
         assert!(unsafe { tasks.get(id).unwrap().poll(&mut cx) }.is_pending());
-        // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
-        assert!(!unsafe { DROPPED });
+        assert!(!dropped.get());
         tasks.drop_all();
-        // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
-        assert!(unsafe { DROPPED });
+        assert!(dropped.get());
     }
 
     #[test]

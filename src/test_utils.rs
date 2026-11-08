@@ -21,7 +21,8 @@ pub(crate) const TEST_MAX_ROOT_TASK_SIZE: usize = 2048;
 pub(crate) const TEST_MAX_TIMERS_COUNT: usize = 16;
 pub(crate) const TEST_MAX_IO_COUNT: usize = 8;
 
-pub(crate) type TestLoop<S> = EventLoop<
+pub(crate) type TestLoop<'a, S> = EventLoop<
+    'a,
     S,
     TEST_MAX_TASKS_COUNT,
     TEST_MAX_TASK_SIZE,
@@ -29,7 +30,8 @@ pub(crate) type TestLoop<S> = EventLoop<
     TEST_MAX_TIMERS_COUNT,
     TEST_MAX_IO_COUNT,
 >;
-pub(crate) type TestContext<S = Log> = Context<
+pub(crate) type TestContext<'a, S = Log> = Context<
+    'a,
     S,
     TEST_MAX_TASKS_COUNT,
     TEST_MAX_TASK_SIZE,
@@ -111,6 +113,7 @@ pub(crate) async fn wait_readable<
     const MAX_IO_COUNT: usize,
 >(
     ctx: &Context<
+        '_,
         S,
         MAX_TASKS_COUNT,
         MAX_TASK_SIZE,
@@ -164,17 +167,15 @@ pub(crate) fn counting_waker(drops: &Cell<u32>) -> Waker {
     unsafe { Waker::new(core::ptr::from_ref(drops).cast(), &VTABLE) }
 }
 
-pub(crate) struct DropFlag(pub(crate) *mut bool);
+pub(crate) struct DropFlag<'a>(pub(crate) &'a Cell<bool>);
 
-impl Drop for DropFlag {
+impl Drop for DropFlag<'_> {
     fn drop(&mut self) {
-        // SAFETY: points to a `static mut` of the running test, which only that test's thread
-        // uses, and no reference to it exists.
-        unsafe { *self.0 = true };
+        self.0.set(true);
     }
 }
 
-pub(crate) fn flagged_task(dropped: *mut bool) -> impl Future<Output = ()> {
+pub(crate) fn flagged_task(dropped: &Cell<bool>) -> impl Future<Output = ()> {
     let flag = DropFlag(dropped);
     async move {
         let _flag = flag;
@@ -379,7 +380,7 @@ pub(crate) use test_memory_within_current_test;
 
 macro_rules! test_loop {
     ([$($capacity:expr),+ $(,)?], $state:expr, $f:expr $(,)?) => {
-        $crate::test_utils::test_loop_in::<_, $({ $capacity }),+, _>(
+        $crate::test_utils::test_loop_in::<'_, _, $({ $capacity }),+, _>(
             $crate::test_utils::test_memory_within_current_test!(),
             $state,
             $f,
@@ -402,6 +403,7 @@ macro_rules! test_loop {
 pub(crate) use test_loop;
 
 pub(crate) fn test_loop_in<
+    'a,
     S: State,
     const MAX_TASKS_COUNT: usize,
     const MAX_TASK_SIZE: usize,
@@ -415,6 +417,7 @@ pub(crate) fn test_loop_in<
     f: F,
 ) -> Result<
     EventLoop<
+        'a,
         S,
         MAX_TASKS_COUNT,
         MAX_TASK_SIZE,
@@ -427,6 +430,7 @@ pub(crate) fn test_loop_in<
 where
     F: AsyncFnOnce(
             &Context<
+                'a,
                 S,
                 MAX_TASKS_COUNT,
                 MAX_TASK_SIZE,
@@ -434,7 +438,7 @@ where
                 MAX_TIMERS_COUNT,
                 MAX_IO_COUNT,
             >,
-        ) + 'static,
+        ) + 'a,
 {
     EventLoop::new(memory, state, f)
 }

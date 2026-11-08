@@ -17,8 +17,8 @@ pub(crate) struct TaskPtr(NonNull<dyn Future<Output = ()>>);
 impl TaskPtr {
     /// # Safety
     ///
-    /// The `OwnedTask` this pointer came from must not be dropped while this runs, and the same
-    /// task must not be polled re-entrantly.
+    /// The `OwnedTask` this pointer came from must not be dropped while this runs, the lifetime
+    /// it was written for must not have ended, and the same task must not be polled re-entrantly.
     pub(crate) unsafe fn poll(self, cx: &mut Context<'_>) -> Poll<()> {
         // SAFETY: the pointer comes from `OwnedTask::write` and stays valid until the
         // `OwnedTask` is dropped, which the caller rules out for the duration of the poll; the
@@ -34,15 +34,24 @@ impl OwnedTask {
     /// # Safety
     ///
     /// `memory` must be valid for writes of `Fut`, aligned for it, and stay valid and otherwise
-    /// unused until the returned `OwnedTask` is dropped.
-    pub(crate) unsafe fn write<Fut>(memory: NonNull<u8>, future: Fut) -> Self
+    /// unused until the returned `OwnedTask` is dropped. The returned `OwnedTask` must be dropped
+    /// (if at all) before `'a` ends.
+    pub(crate) unsafe fn write<'a, Fut>(memory: NonNull<u8>, future: Fut) -> Self
     where
-        Fut: Future<Output = ()> + 'static,
+        Fut: Future<Output = ()> + 'a,
     {
         let memory = memory.cast::<Fut>();
-        // SAFETY: guaranteed by the caller.
-        unsafe { memory.write(future) };
-        Self(TaskPtr(memory))
+        let task: NonNull<dyn Future<Output = ()> + 'a> = memory;
+        // SAFETY: guaranteed by the caller. Erasing `'a` (the two pointer types differ only in it,
+        // so have the same layout) is fine because the future is only polled while `'a` lasts
+        // (see `TaskPtr::poll`) and dropped before it ends.
+        unsafe {
+            memory.write(future);
+            Self(TaskPtr(core::mem::transmute::<
+                NonNull<dyn Future<Output = ()> + 'a>,
+                NonNull<dyn Future<Output = ()>>,
+            >(task)))
+        }
     }
 
     pub(crate) fn ptr(&self) -> TaskPtr {
@@ -61,6 +70,7 @@ impl Drop for OwnedTask {
 #[cfg(test)]
 mod tests {
     use core::{
+        cell::Cell,
         mem::MaybeUninit,
         ptr::NonNull,
         task::{Context, Poll, Waker},
@@ -70,9 +80,10 @@ mod tests {
 
     fn owned<Fut>(memory: &mut MaybeUninit<Fut>, future: Fut) -> OwnedTask
     where
-        Fut: Future<Output = ()> + 'static,
+        Fut: Future<Output = ()>,
     {
-        // SAFETY: `memory` fits `Fut` and outlives the returned task in every test.
+        // SAFETY: `memory` fits `Fut`, and it and everything `future` borrows outlive the returned
+        // task in every test.
         unsafe { OwnedTask::write(NonNull::from(memory).cast(), future) }
     }
 
@@ -102,11 +113,10 @@ mod tests {
 
     #[test]
     fn dropping_drops_the_future_in_place() {
-        static mut DROPPED: bool = false;
+        let dropped = Cell::new(false);
         let mut memory = MaybeUninit::uninit();
-        let task = owned(&mut memory, flagged_task(&raw mut DROPPED));
+        let task = owned(&mut memory, flagged_task(&dropped));
         drop(task);
-        // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
-        assert!(unsafe { DROPPED });
+        assert!(dropped.get());
     }
 }

@@ -6,7 +6,7 @@ use crate::{
 };
 use core::{cell::Cell, mem::MaybeUninit};
 
-type TestStorage<S> = Storage<S, 1, 64, 0, 2, 2, ()>;
+type TestStorage<'a, S> = Storage<'a, S, 1, 64, 0, 2, 2, ()>;
 
 #[test]
 fn destroying_drops_live_wakers() {
@@ -26,26 +26,25 @@ fn destroying_drops_live_wakers() {
 
 #[test]
 fn destroying_drops_live_tasks() {
-    static mut DROPPED: bool = false;
+    let dropped = Cell::new(false);
     let mut place = MaybeUninit::uninit();
     let storage = TestStorage::init(&mut place, (), ());
-    storage.tasks.insert(flagged_task(&raw mut DROPPED));
+    storage.tasks.insert(flagged_task(&dropped));
     // SAFETY: destroyed once, no task is being polled, and the storage isn't used afterwards.
     unsafe { storage.destroy() };
-    // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
-    assert!(unsafe { DROPPED });
+    assert!(dropped.get());
 }
 
 #[test]
 fn state_is_usable_and_dropped_by_destroy() {
-    struct State {
+    struct State<'a> {
         value: u32,
-        _flag: DropFlag,
+        _flag: DropFlag<'a>,
     }
-    static mut DROPPED: bool = false;
+    let dropped = Cell::new(false);
     let state = State {
         value: 7,
-        _flag: DropFlag(&raw mut DROPPED),
+        _flag: DropFlag(&dropped),
     };
     let mut place = MaybeUninit::uninit();
     let storage = TestStorage::init(&mut place, (), state);
@@ -55,10 +54,8 @@ fn state_is_usable_and_dropped_by_destroy() {
     state.value = 8;
     // SAFETY: as above.
     assert_eq!(unsafe { &*storage.state.get() }.value, 8);
-    // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
-    assert!(!unsafe { DROPPED });
+    assert!(!dropped.get());
     // SAFETY: destroyed once, no task is being polled, and the storage isn't used afterwards.
     unsafe { storage.destroy() };
-    // SAFETY: as above.
-    assert!(unsafe { DROPPED });
+    assert!(dropped.get());
 }

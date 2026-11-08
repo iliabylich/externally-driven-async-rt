@@ -56,8 +56,8 @@ mod tests {
         instant::Instant,
         test_utils::{
             First, Log, TEST_MAX_IO_COUNT, TEST_MAX_ROOT_TASK_SIZE, TEST_MAX_TASK_SIZE,
-            TEST_MAX_TASKS_COUNT, Winner, has_timers, is_readable, socketpair, wait_readable,
-            run_until_root_finishes, test_loop, wake_by_writing,
+            TEST_MAX_TASKS_COUNT, Winner, has_timers, is_readable, run_until_root_finishes,
+            socketpair, test_loop, wait_readable, wake_by_writing,
         },
     };
 

@@ -25,6 +25,7 @@ impl ReadHalf {
     >(
         &mut self,
         ctx: &Context<
+            '_,
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,
@@ -57,6 +58,7 @@ impl WriteHalf {
     >(
         &mut self,
         ctx: &Context<
+            '_,
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,

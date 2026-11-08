@@ -7,23 +7,25 @@ use crate::{
 
 pub struct JoinHandle<
     'ctx,
+    'a,
     const MAX_TASKS_COUNT: usize,
     const MAX_TASK_SIZE: usize,
     const MAX_ROOT_TASK_SIZE: usize,
 > {
-    tasks: &'ctx Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
+    tasks: &'ctx Tasks<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
     id: TaskId,
 }
 
 impl<
     'ctx,
+    'a,
     const MAX_TASKS_COUNT: usize,
     const MAX_TASK_SIZE: usize,
     const MAX_ROOT_TASK_SIZE: usize,
-> JoinHandle<'ctx, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+> JoinHandle<'ctx, 'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
 {
     pub(crate) fn new(
-        tasks: &'ctx Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
+        tasks: &'ctx Tasks<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
         id: TaskId,
     ) -> Self {
         Self { tasks, id }
@@ -31,7 +33,7 @@ impl<
 }
 
 impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize>
-    Future for JoinHandle<'_, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+    Future for JoinHandle<'_, '_, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
 {
     type Output = ();
 

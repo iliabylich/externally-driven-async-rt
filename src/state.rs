@@ -1,5 +1,5 @@
-pub trait State: 'static {
-    type Event: 'static;
+pub trait State {
+    type Event;
 
     fn apply(&mut self, event: Self::Event);
 }

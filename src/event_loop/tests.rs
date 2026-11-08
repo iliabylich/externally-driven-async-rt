@@ -1,4 +1,5 @@
 use core::{
+    cell::Cell,
     future::{Future, pending, poll_fn},
     mem::MaybeUninit,
     pin::Pin,
@@ -14,9 +15,10 @@ use crate::{
     selectors::Direction,
     storage::{Root, RootStatus, Storage, TaskId},
     test_utils::{
-        Log, TEST_MAX_IO_COUNT, TEST_MAX_ROOT_TASK_SIZE, TEST_MAX_TASK_SIZE, TEST_MAX_TASKS_COUNT,
-        TEST_MAX_TIMERS_COUNT, TEST_MEMORY, TestContext, TestLoop, assert_yields, is_readable,
-        socketpair, wait_readable, test_loop, test_loop_in, test_memory_within_current_test, wake_by_writing,
+        DropFlag, Log, TEST_MAX_IO_COUNT, TEST_MAX_ROOT_TASK_SIZE, TEST_MAX_TASK_SIZE,
+        TEST_MAX_TASKS_COUNT, TEST_MAX_TIMERS_COUNT, TEST_MEMORY, TestContext, TestLoop,
+        assert_yields, is_readable, socketpair, test_loop, test_loop_in,
+        test_memory_within_current_test, wait_readable, wake_by_writing,
     },
     waker::new_waker,
 };
@@ -178,9 +180,9 @@ fn panic_in_apply_propagates() {
     },);
 }
 
-struct DispatchOnDrop<'a>(&'a TestContext, u32);
+struct DispatchOnDrop<'c, 'a>(&'c TestContext<'a>, u32);
 
-impl Drop for DispatchOnDrop<'_> {
+impl Drop for DispatchOnDrop<'_, '_> {
     fn drop(&mut self) {
         self.0.dispatch(self.1);
     }
@@ -285,9 +287,9 @@ fn tasks_are_dropped_when_the_root_finishes() {
     assert_eq!(log[1..], [10, 20]);
 }
 
-struct SpawnOnDrop<'a>(&'a TestContext);
+struct SpawnOnDrop<'c, 'a>(&'c TestContext<'a>);
 
-impl Drop for SpawnOnDrop<'_> {
+impl Drop for SpawnOnDrop<'_, '_> {
     fn drop(&mut self) {
         self.0.spawn(async |ctx| ctx.dispatch(100));
         self.0.dispatch(3);
@@ -314,31 +316,19 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
     assert_eq!(event_loop.state_mut().events(), [1, 3]);
 }
 
-struct Flag(*mut bool);
+struct LastEvent<'a>(&'a Cell<u32>);
 
-impl Drop for Flag {
-    fn drop(&mut self) {
-        // SAFETY: points to a `static mut` of the running test, which only that test's thread
-        // uses, and no reference to it exists.
-        unsafe { *self.0 = true };
-    }
-}
-
-struct LastEvent(*mut u32);
-
-impl State for LastEvent {
+impl State for LastEvent<'_> {
     type Event = u32;
 
     fn apply(&mut self, event: u32) {
-        // SAFETY: points to a `static mut` of the running test, which only that test's thread
-        // uses, and no reference to it exists.
-        unsafe { *self.0 = event };
+        self.0.set(event);
     }
 }
 
-struct DispatchOnDropShared<'a>(&'a TestContext<LastEvent>, u32);
+struct DispatchOnDropShared<'c, 'a>(&'c TestContext<'a, LastEvent<'a>>, u32);
 
-impl Drop for DispatchOnDropShared<'_> {
+impl Drop for DispatchOnDropShared<'_, '_> {
     fn drop(&mut self) {
         self.0.dispatch(self.1);
     }
@@ -346,8 +336,8 @@ impl Drop for DispatchOnDropShared<'_> {
 
 #[test]
 fn events_dispatched_while_dropping_the_loop_are_applied() {
-    static mut LAST: u32 = 0;
-    let event_loop = test_loop!(LastEvent(&raw mut LAST), async |ctx| {
+    let last = Cell::new(0);
+    let event_loop = test_loop!(LastEvent(&last), async |ctx| {
         ctx.dispatch(1);
         ctx.spawn(async |ctx| {
             let _guard = DispatchOnDropShared(ctx, 2);
@@ -356,17 +346,15 @@ fn events_dispatched_while_dropping_the_loop_are_applied() {
         pending::<()>().await;
     },)
     .unwrap();
-    // SAFETY: only this test's thread uses `LAST`, and no reference to it exists.
-    assert_eq!(unsafe { LAST }, 1);
+    assert_eq!(last.get(), 1);
     drop(event_loop);
-    // SAFETY: only this test's thread uses `LAST`, and no reference to it exists.
-    assert_eq!(unsafe { LAST }, 2);
+    assert_eq!(last.get(), 2);
 }
 
 #[test]
 fn dropping_the_loop_drops_its_tasks() {
-    static mut DROPPED: bool = false;
-    let flag = Flag(&raw mut DROPPED);
+    let dropped = Cell::new(false);
+    let flag = DropFlag(&dropped);
     let event_loop = test_loop!(Log::default(), async move |ctx| {
         ctx.spawn(async move |_| {
             let _flag = flag;
@@ -375,27 +363,23 @@ fn dropping_the_loop_drops_its_tasks() {
         pending::<()>().await;
     },)
     .unwrap();
-    // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
-    assert!(!unsafe { DROPPED });
+    assert!(!dropped.get());
     drop(event_loop);
-    // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
-    assert!(unsafe { DROPPED });
+    assert!(dropped.get());
 }
 
-fn parked_loop(memory: &'static mut [MaybeUninit<u8>; TEST_MEMORY]) -> TestLoop<Log> {
+fn parked_loop<'a>(memory: &'static mut [MaybeUninit<u8>; TEST_MEMORY]) -> TestLoop<'a, Log> {
     test_loop_in(memory, Log::default(), async |_| pending().await).unwrap()
 }
 
-fn counting(polls: *mut u32) -> impl Future<Output = ()> {
+fn counting(polls: &Cell<u32>) -> impl Future<Output = ()> {
     poll_fn(move |_| {
-        // SAFETY: points to a `static mut` of the running test, which only that test's thread
-        // uses, and no reference to it exists.
-        unsafe { *polls += 1 };
+        polls.set(polls.get() + 1);
         Poll::<()>::Pending
     })
 }
 
-fn ready_tasks(event_loop: &TestLoop<Log>) -> impl Iterator<Item = TaskId> + '_ {
+fn ready_tasks<'a>(event_loop: &'a TestLoop<'_, Log>) -> impl Iterator<Item = TaskId> + 'a {
     core::iter::from_fn(|| event_loop.storage.tasks.ready().pop())
 }
 
@@ -417,70 +401,63 @@ fn finished_task_is_removed() {
 
 #[test]
 fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
+    let polls = Cell::new(0);
     let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
-    static mut POLLS: u32 = 0;
-    event_loop.storage.tasks.spawn(poll_fn(move |cx| {
-        // SAFETY: only this test's thread uses `POLLS`, and no reference to it exists.
-        let polls = unsafe {
-            POLLS += 1;
-            POLLS
-        };
-        if polls < 3 {
+    event_loop.storage.tasks.spawn(poll_fn(|cx| {
+        polls.set(polls.get() + 1);
+        if polls.get() < 3 {
             cx.waker().wake_by_ref();
         }
         Poll::<()>::Pending
     }));
     event_loop.storage.tasks.run_ready();
-    // SAFETY: only this test's thread uses `POLLS`, and no reference to it exists.
-    assert_eq!(unsafe { POLLS }, 3);
+    assert_eq!(polls.get(), 3);
 }
 
 #[test]
 fn task_spawned_during_a_poll_runs_in_the_same_run() {
+    let polls = Cell::new(0);
     let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
     let storage = event_loop.storage;
-    static mut POLLS: u32 = 0;
-    let child = counting(&raw mut POLLS);
+    let child = counting(&polls);
     event_loop.storage.tasks.spawn(async move {
         storage.tasks.spawn(child);
     });
     event_loop.storage.tasks.run_ready();
-    // SAFETY: only this test's thread uses `POLLS`, and no reference to it exists.
-    assert_eq!(unsafe { POLLS }, 1);
+    assert_eq!(polls.get(), 1);
 }
 
 #[test]
 fn join_waiter_is_woken_when_the_task_finishes() {
+    let polls = Cell::new(0);
     let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
-    static mut POLLS: u32 = 0;
-    let waiter = event_loop.storage.tasks.spawn(counting(&raw mut POLLS));
+    let waiter = event_loop.storage.tasks.spawn(counting(&polls));
     let task = event_loop.storage.tasks.spawn(async {});
     // SAFETY: `event_loop` outlives the waker.
     let waker = unsafe { new_waker(event_loop.storage.tasks.ready(), waiter) };
     event_loop.storage.tasks.set_join_waiter(task, &waker);
     event_loop.storage.tasks.run_ready();
-    // SAFETY: only this test's thread uses `POLLS`, and no reference to it exists.
-    assert_eq!(unsafe { POLLS }, 2);
+    assert_eq!(polls.get(), 2);
 }
 
 #[test]
 fn root_finishing_stops_the_run() {
+    let polls = Cell::new(0);
     let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
     let root = event_loop.storage.tasks.spawn(async {});
     event_loop.storage.tasks.set_root(Root::Running(root));
-    static mut POLLS: u32 = 0;
-    event_loop.storage.tasks.spawn(counting(&raw mut POLLS));
+    event_loop.storage.tasks.spawn(counting(&polls));
     assert_eq!(event_loop.storage.tasks.run_ready(), RootStatus::Finished);
-    // SAFETY: only this test's thread uses `POLLS`, and no reference to it exists.
-    assert_eq!(unsafe { POLLS }, 0);
+    assert_eq!(polls.get(), 0);
 }
 
-struct SpawnRawOnDrop {
-    storage: &'static Storage<
+struct SpawnRawOnDrop<'a> {
+    storage: &'a Storage<
+        'a,
         Log,
         TEST_MAX_TASKS_COUNT,
         TEST_MAX_TASK_SIZE,
@@ -488,10 +465,10 @@ struct SpawnRawOnDrop {
         TEST_MAX_TIMERS_COUNT,
         TEST_MAX_IO_COUNT,
     >,
-    spawned_dropped: *mut bool,
+    spawned_dropped: &'a Cell<bool>,
 }
 
-impl Future for SpawnRawOnDrop {
+impl Future for SpawnRawOnDrop<'_> {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, _: &mut core::task::Context<'_>) -> Poll<()> {
@@ -499,9 +476,9 @@ impl Future for SpawnRawOnDrop {
     }
 }
 
-impl Drop for SpawnRawOnDrop {
+impl Drop for SpawnRawOnDrop<'_> {
     fn drop(&mut self) {
-        let guard = Flag(self.spawned_dropped);
+        let guard = DropFlag(self.spawned_dropped);
         self.storage.tasks.spawn(async move {
             let _guard = guard;
         });
@@ -510,15 +487,14 @@ impl Drop for SpawnRawOnDrop {
 
 #[test]
 fn dropping_the_loop_drops_tasks_spawned_from_drop() {
+    let spawned_dropped = Cell::new(false);
     let owned = parked_loop(test_memory_within_current_test!());
-    static mut SPAWNED_DROPPED: bool = false;
     owned.storage.tasks.spawn(SpawnRawOnDrop {
         storage: owned.storage,
-        spawned_dropped: &raw mut SPAWNED_DROPPED,
+        spawned_dropped: &spawned_dropped,
     });
     drop(owned);
-    // SAFETY: only this test's thread uses `SPAWNED_DROPPED`, and no reference to it exists.
-    assert!(unsafe { SPAWNED_DROPPED });
+    assert!(spawned_dropped.get());
 }
 
 #[test]

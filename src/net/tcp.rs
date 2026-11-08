@@ -34,6 +34,7 @@ impl TcpListener {
     >(
         &mut self,
         ctx: &Context<
+            '_,
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,
@@ -65,6 +66,7 @@ impl TcpStream {
         const MAX_IO_COUNT: usize,
     >(
         ctx: &Context<
+            '_,
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,
@@ -88,6 +90,7 @@ impl TcpStream {
     >(
         &mut self,
         ctx: &Context<
+            '_,
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,
@@ -110,6 +113,7 @@ impl TcpStream {
     >(
         &mut self,
         ctx: &Context<
+            '_,
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,

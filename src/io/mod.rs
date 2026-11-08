@@ -38,6 +38,7 @@ impl<'a, const MAX_IO_COUNT: usize> IoRegistration<'a, MAX_IO_COUNT> {
         const MAX_TIMERS_COUNT: usize,
     >(
         storage: &'a Storage<
+            '_,
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,

@@ -25,7 +25,8 @@ fn store_waker(cell: &Cell<Option<Waker>>, waker: &Waker) {
 }
 
 pub(crate) struct Storage<
-    S: 'static,
+    'a,
+    S,
     const MAX_TASKS_COUNT: usize,
     const MAX_TASK_SIZE: usize,
     const MAX_ROOT_TASK_SIZE: usize,
@@ -37,19 +38,21 @@ pub(crate) struct Storage<
     pub(crate) state: UnsafeCell<S>,
     pub(crate) timers: Timers<MAX_TIMERS_COUNT>,
     pub(crate) io_waiters: IoWaiters<MAX_IO_COUNT>,
-    pub(crate) tasks: Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
+    pub(crate) tasks: Tasks<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
 }
 
 impl<
-    S: 'static,
+    'a,
+    S,
     const MAX_TASKS_COUNT: usize,
     const MAX_TASK_SIZE: usize,
     const MAX_ROOT_TASK_SIZE: usize,
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
-    Sel: 'static,
+    Sel,
 >
     Storage<
+        'a,
         S,
         MAX_TASKS_COUNT,
         MAX_TASK_SIZE,
@@ -77,7 +80,7 @@ impl<
         state_place.write(UnsafeCell::new(state));
         Timers::<MAX_TIMERS_COUNT>::init(timers);
         IoWaiters::<MAX_IO_COUNT>::init(io_waiters);
-        Tasks::<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>::init(tasks);
+        Tasks::<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>::init(tasks);
         // SAFETY: every field was written above.
         unsafe { place.assume_init_ref() }
     }
@@ -104,13 +107,22 @@ impl<
 }
 
 impl<
-    S: 'static,
+    S,
     const MAX_TASKS_COUNT: usize,
     const MAX_TASK_SIZE: usize,
     const MAX_ROOT_TASK_SIZE: usize,
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
-> Storage<S, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE, MAX_TIMERS_COUNT, MAX_IO_COUNT>
+>
+    Storage<
+        '_,
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >
 {
     pub(crate) fn process_selector_events(&self) -> rustix::io::Result<()> {
         let mut events = [None; EVENTS_PER_CALL];

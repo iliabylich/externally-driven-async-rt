@@ -18,6 +18,7 @@ const MAX_TIMERS_COUNT: usize = 4;
 const MAX_IO_COUNT: usize = 1024;
 
 type ServerLoop = EventLoop<
+    'static,
     Server,
     MAX_TASKS_COUNT,
     MAX_TASK_SIZE,
@@ -26,6 +27,7 @@ type ServerLoop = EventLoop<
     MAX_IO_COUNT,
 >;
 type ServerContext = Context<
+    'static,
     Server,
     MAX_TASKS_COUNT,
     MAX_TASK_SIZE,
