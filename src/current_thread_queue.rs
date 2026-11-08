@@ -70,13 +70,13 @@ impl<T: Default, const N: usize> CurrentThreadQueue<T, N> {
         }
     }
 
-    /// # Safety
-    ///
-    /// `link` must come from `Self::link` of a queue that stays valid for as long as the waker (or
-    /// any of its clones) may be woken. Clones may be dropped at any time, from any thread.
-    pub(crate) unsafe fn waker(link: NonNull<Link<T>>) -> Waker {
+    pub(crate) fn waker(&'static self, slot: u32) -> Waker
+    where
+        T: 'static,
+    {
+        let link = self.link(slot);
         // SAFETY: the vtable functions below uphold the `RawWaker` contract for a pointer from
-        // `Self::link`, which the caller keeps valid while the waker may be woken.
+        // `Self::link` of a queue that is never freed.
         unsafe {
             Waker::from_raw(RawWaker::new(
                 link.as_ptr().cast_const().cast(),
@@ -130,8 +130,8 @@ fn clone<T: Default, const N: usize>(ptr: *const ()) -> RawWaker {
 
 unsafe fn wake<T: Default, const N: usize>(ptr: *const ()) {
     let link = ptr.cast::<Link<T>>();
-    // SAFETY: `ptr` comes from `CurrentThreadQueue::link` in `CurrentThreadQueue::waker`, whose
-    // caller keeps the queue alive while wakers may be woken. `slot` isn't written after `init`,
+    // SAFETY: `ptr` comes from `CurrentThreadQueue::link` in `CurrentThreadQueue::waker`, of a
+    // queue that is never freed. `slot` isn't written after `init`,
     // and it's read through a raw pointer, so no reference to the link's `Cell`s is created.
     let slot = unsafe { (*link).slot };
     // SAFETY: `link` points to `links[slot]` of the queue and carries the provenance of the whole
@@ -158,7 +158,10 @@ fn drop_waker(_: *const ()) {}
 
 #[cfg(test)]
 mod tests {
-    use crate::{current_thread_queue::CurrentThreadQueue, test_utils::assert_yields};
+    use crate::{
+        current_thread_queue::CurrentThreadQueue,
+        test_utils::{assert_yields, static_within_current_test},
+    };
     use core::{cell::Cell, mem::MaybeUninit};
 
     fn drain<T: Default, const N: usize>(
@@ -213,10 +216,9 @@ mod tests {
 
     #[test]
     fn waking_pushes_the_slot() {
-        let mut place = MaybeUninit::uninit();
-        let queue = CurrentThreadQueue::<(), 2>::init(&mut place);
-        // SAFETY: `queue` outlives the waker.
-        let waker = unsafe { CurrentThreadQueue::<(), 2>::waker(queue.link(1)) };
+        let queue =
+            CurrentThreadQueue::init(static_within_current_test!(CurrentThreadQueue<(), 2>));
+        let waker = queue.waker(1);
         waker.wake_by_ref();
         assert_yields(drain(queue), [1]);
         let clone = waker.clone();
@@ -227,10 +229,9 @@ mod tests {
 
     #[test]
     fn duplicate_wakes_queue_the_slot_once() {
-        let mut place = MaybeUninit::uninit();
-        let queue = CurrentThreadQueue::<(), 2>::init(&mut place);
-        // SAFETY: `queue` outlives the waker.
-        let waker = unsafe { CurrentThreadQueue::<(), 2>::waker(queue.link(0)) };
+        let queue =
+            CurrentThreadQueue::init(static_within_current_test!(CurrentThreadQueue<(), 2>));
+        let waker = queue.waker(0);
         waker.wake_by_ref();
         waker.wake_by_ref();
         waker.wake();
@@ -239,10 +240,9 @@ mod tests {
 
     #[test]
     fn waking_after_the_queue_was_mutated() {
-        let mut place = MaybeUninit::uninit();
-        let queue = CurrentThreadQueue::<(), 2>::init(&mut place);
-        // SAFETY: `queue` outlives the waker.
-        let waker = unsafe { CurrentThreadQueue::<(), 2>::waker(queue.link(0)) };
+        let queue =
+            CurrentThreadQueue::init(static_within_current_test!(CurrentThreadQueue<(), 2>));
+        let waker = queue.waker(0);
         queue.push(1);
         waker.wake_by_ref();
         assert_eq!(queue.pop(), Some(1));
@@ -252,10 +252,9 @@ mod tests {
 
     #[test]
     fn dropping_does_not_wake() {
-        let mut place = MaybeUninit::uninit();
-        let queue = CurrentThreadQueue::<(), 2>::init(&mut place);
-        // SAFETY: `queue` outlives the waker.
-        let waker = unsafe { CurrentThreadQueue::<(), 2>::waker(queue.link(0)) };
+        let queue =
+            CurrentThreadQueue::init(static_within_current_test!(CurrentThreadQueue<(), 2>));
+        let waker = queue.waker(0);
         drop(waker.clone());
         drop(waker);
         assert!(queue.is_empty());

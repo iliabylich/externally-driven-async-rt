@@ -365,23 +365,40 @@ pub(crate) fn run_until_events<
     }
 }
 
+pub(crate) const TEST_QUEUE_MEMORY: usize = 4 * 1024;
 pub(crate) const TEST_MEMORY: usize = 64 * 1024;
 
-macro_rules! test_memory_within_current_test {
-    () => {{
-        static mut MEMORY: [core::mem::MaybeUninit<u8>; $crate::test_utils::TEST_MEMORY] =
-            [core::mem::MaybeUninit::uninit(); $crate::test_utils::TEST_MEMORY];
+macro_rules! static_within_current_test {
+    ($ty:ty = $init:expr) => {{
+        static mut STATIC: $ty = $init;
         // SAFETY: expanded directly in a test, so this runs once, on that test's thread: this is
-        // the only reference to `MEMORY` ever created.
-        unsafe { &mut *&raw mut MEMORY }
+        // the only reference to `STATIC` ever created.
+        unsafe { &mut *&raw mut STATIC }
     }};
+    ($ty:ty) => {
+        $crate::test_utils::static_within_current_test!(
+            core::mem::MaybeUninit<$ty> = core::mem::MaybeUninit::uninit()
+        )
+    };
+}
+pub(crate) use static_within_current_test;
+
+macro_rules! test_memory_within_current_test {
+    ($size:expr) => {
+        $crate::test_utils::static_within_current_test!(
+            [core::mem::MaybeUninit<u8>; $size] = [core::mem::MaybeUninit::uninit(); $size]
+        )
+    };
 }
 pub(crate) use test_memory_within_current_test;
 
 macro_rules! test_loop {
     ([$($capacity:expr),+ $(,)?], $state:expr, $f:expr $(,)?) => {
         $crate::test_utils::test_loop_in::<'_, _, $({ $capacity }),+, _>(
-            $crate::test_utils::test_memory_within_current_test!(),
+            $crate::test_utils::test_memory_within_current_test!(
+                $crate::test_utils::TEST_QUEUE_MEMORY
+            ),
+            $crate::test_utils::test_memory_within_current_test!($crate::test_utils::TEST_MEMORY),
             $state,
             $f,
         )
@@ -412,7 +429,8 @@ pub(crate) fn test_loop_in<
     const MAX_IO_COUNT: usize,
     F,
 >(
-    memory: &'static mut [MaybeUninit<u8>; TEST_MEMORY],
+    queue: &'static mut [MaybeUninit<u8>; TEST_QUEUE_MEMORY],
+    memory: &'a mut [MaybeUninit<u8>; TEST_MEMORY],
     state: S,
     f: F,
 ) -> Result<
@@ -440,5 +458,5 @@ where
             >,
         ) + 'a,
 {
-    EventLoop::new(memory, state, f)
+    EventLoop::new(queue, memory, state, f)
 }

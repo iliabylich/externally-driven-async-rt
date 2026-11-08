@@ -4,6 +4,7 @@ use rustix::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
 use crate::{
     context::Context,
+    ready::ReadyQueue,
     selectors::Selector,
     state::State,
     storage::{Root, RootStatus, Storage},
@@ -65,6 +66,9 @@ impl<
         MAX_IO_COUNT,
     >
 {
+    pub const QUEUE_REQUIRED_SIZE: usize =
+        size_of::<ReadyQueue<MAX_TASKS_COUNT>>() + align_of::<ReadyQueue<MAX_TASKS_COUNT>>() - 1;
+
     pub const REQUIRED_SIZE: usize = size_of::<
         Storage<
             'a,
@@ -87,33 +91,8 @@ impl<
         >,
     >() - 1;
 
-    pub fn new<const MEMORY: usize, F>(
-        memory: &'static mut [MaybeUninit<u8>; MEMORY],
-        state: S,
-        f: F,
-    ) -> Result<Self, Error>
-    where
-        F: AsyncFnOnce(
-                &Context<
-                    'a,
-                    S,
-                    MAX_TASKS_COUNT,
-                    MAX_TASK_SIZE,
-                    MAX_ROOT_TASK_SIZE,
-                    MAX_TIMERS_COUNT,
-                    MAX_IO_COUNT,
-                >,
-            ) + 'a,
-    {
-        // SAFETY: `memory` is never freed, so wakers pointing into it stay valid forever.
-        unsafe { Self::new_in(memory, state, f) }
-    }
-
-    /// # Safety
-    ///
-    /// No `Waker` handed to a task may be woken after the loop is dropped (or forgotten), because
-    /// wakers point into `memory`.
-    pub unsafe fn new_in<const MEMORY: usize, F>(
+    pub fn new<const QUEUE: usize, const MEMORY: usize, F>(
+        queue: &'static mut [MaybeUninit<u8>; QUEUE],
         memory: &'a mut [MaybeUninit<u8>; MEMORY],
         state: S,
         f: F,
@@ -131,31 +110,9 @@ impl<
                 >,
             ) + 'a,
     {
-        const {
-            assert!(
-                MEMORY >= Self::REQUIRED_SIZE,
-                "the EventLoop memory is smaller than REQUIRED_SIZE"
-            );
-        }
         let selector = Selector::new().map_err(Error::Io)?;
-        let align = align_of::<
-            Storage<
-                'a,
-                S,
-                MAX_TASKS_COUNT,
-                MAX_TASK_SIZE,
-                MAX_ROOT_TASK_SIZE,
-                MAX_TIMERS_COUNT,
-                MAX_IO_COUNT,
-            >,
-        >();
-        let addr = memory.as_ptr().addr();
-        let start = addr.next_multiple_of(align) - addr;
-        // SAFETY: `start` is less than `align`, so the storage fits in `memory` from there
-        // (`REQUIRED_SIZE`, asserted above), aligned. `MaybeUninit` needs no initialized contents,
-        // and `memory` is borrowed exclusively for `'a`.
-        let place = unsafe { &mut *memory.as_mut_ptr().add(start).cast() };
-        let storage = Storage::init(place, selector, state);
+        let ready = ReadyQueue::init(place(queue));
+        let storage = Storage::init(place(memory), ready, selector, state);
         let event_loop = Self { storage };
         Context::spawn_root(storage, f);
         match storage.tasks.run_ready() {
@@ -284,6 +241,21 @@ impl<
     fn as_raw_fd(&self) -> RawFd {
         self.as_fd().as_raw_fd()
     }
+}
+
+fn place<T, const SIZE: usize>(memory: &mut [MaybeUninit<u8>; SIZE]) -> &mut MaybeUninit<T> {
+    const {
+        assert!(
+            SIZE >= size_of::<T>() + align_of::<T>() - 1,
+            "an EventLoop memory is smaller than its REQUIRED_SIZE (or QUEUE_REQUIRED_SIZE)"
+        );
+    }
+    let addr = memory.as_ptr().addr();
+    let start = addr.next_multiple_of(align_of::<T>()) - addr;
+    // SAFETY: `start` is less than `T`'s alignment, so a `T` fits in `memory` from there (asserted
+    // above), aligned. `MaybeUninit` needs no initialized contents, and `memory` is borrowed
+    // exclusively for as long as the result.
+    unsafe { &mut *memory.as_mut_ptr().add(start).cast() }
 }
 
 #[cfg(test)]

@@ -1,9 +1,6 @@
-use core::{cell::Cell, mem::MaybeUninit, ptr::NonNull};
+use core::{cell::Cell, mem::MaybeUninit, task::Waker};
 
-use crate::{
-    current_thread_queue::{CurrentThreadQueue, Link},
-    storage::TaskId,
-};
+use crate::{current_thread_queue::CurrentThreadQueue, storage::TaskId};
 
 pub(crate) struct ReadyQueue<const N: usize>(CurrentThreadQueue<Cell<Option<u32>>, N>);
 
@@ -19,8 +16,8 @@ impl<const N: usize> ReadyQueue<N> {
         unsafe { place.assume_init_ref() }
     }
 
-    pub(crate) fn link(&self, slot: u32) -> NonNull<Link<Cell<Option<u32>>>> {
-        self.0.link(slot)
+    pub(crate) fn waker(&'static self, slot: u32) -> Waker {
+        self.0.waker(slot)
     }
 
     pub(crate) fn track(&self, id: TaskId) {

@@ -1,4 +1,4 @@
-use core::{net::SocketAddr, time::Duration};
+use core::{mem::MaybeUninit, net::SocketAddr, time::Duration};
 
 use externally_driven_async_rt::{
     Context, Error, EventLoop, State,
@@ -12,13 +12,13 @@ use rustix::{
 };
 
 const MAX_TASKS_COUNT: usize = 1024;
-const MAX_TASK_SIZE: usize = 4096;
+const MAX_TASK_SIZE: usize = 1024;
 const MAX_ROOT_TASK_SIZE: usize = 4096;
 const MAX_TIMERS_COUNT: usize = 4;
 const MAX_IO_COUNT: usize = 1024;
 
-type ServerLoop = EventLoop<
-    'static,
+type ServerLoop<'a> = EventLoop<
+    'a,
     Server,
     MAX_TASKS_COUNT,
     MAX_TASK_SIZE,
@@ -26,8 +26,8 @@ type ServerLoop = EventLoop<
     MAX_TIMERS_COUNT,
     MAX_IO_COUNT,
 >;
-type ServerContext = Context<
-    'static,
+type ServerContext<'a> = Context<
+    'a,
     Server,
     MAX_TASKS_COUNT,
     MAX_TASK_SIZE,
@@ -35,6 +35,9 @@ type ServerContext = Context<
     MAX_TIMERS_COUNT,
     MAX_IO_COUNT,
 >;
+
+const QSIZE: usize = ServerLoop::QUEUE_REQUIRED_SIZE;
+const MEMSIZE: usize = ServerLoop::REQUIRED_SIZE;
 
 #[derive(Default)]
 struct Server {
@@ -97,7 +100,7 @@ impl Server {
     }
 }
 
-async fn accept_loop(ctx: &ServerContext, addr: SocketAddr) {
+async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
     let mut listener = TcpListener::bind(addr).unwrap();
     ctx.dispatch(Event::Listening(listener.local_addr().unwrap()));
     ctx.spawn(async |ctx| {
@@ -124,11 +127,11 @@ async fn accept_loop(ctx: &ServerContext, addr: SocketAddr) {
 }
 
 async fn echo(
-    ctx: &ServerContext,
+    ctx: &ServerContext<'_>,
     mut stream: TcpStream,
     peer: SocketAddr,
 ) -> rustix::io::Result<()> {
-    let mut buf = [0; 4096];
+    let mut buf = [0; 512];
     loop {
         let len = stream.read(ctx, &mut buf).await?;
         if len == 0 {
@@ -176,14 +179,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(arg) => arg.parse()?,
         None => "127.0.0.1:7878".parse()?,
     };
-    let root = async move |ctx: &ServerContext| {
+    let queue: Box<[_; QSIZE]> = Box::new_uninit_slice(QSIZE).try_into().unwrap();
+    let queue = Box::into_raw(queue);
+    let mut memory = [MaybeUninit::uninit(); MEMSIZE];
+    // SAFETY: `queue` comes from `Box::into_raw`, and is only freed below, after `run` returns.
+    let result = run(addr, unsafe { &mut *queue }, &mut memory);
+    // SAFETY: `run` has dropped the loop, and with it every task and the state, the only holders
+    // of its wakers (nothing sends one to another thread or a global), so nothing can wake into
+    // the queue anymore.
+    drop(unsafe { Box::from_raw(queue) });
+    result
+}
+
+fn run(
+    addr: SocketAddr,
+    queue: &'static mut [MaybeUninit<u8>; QSIZE],
+    memory: &mut [MaybeUninit<u8>; MEMSIZE],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let root = async move |ctx: &ServerContext<'_>| {
         accept_loop(ctx, addr).await;
     };
-    let memory = Box::new_uninit_slice(ServerLoop::REQUIRED_SIZE)
-        .try_into()
-        .unwrap();
-    let memory = Box::<[_; ServerLoop::REQUIRED_SIZE]>::leak(memory);
-    let mut event_loop = ServerLoop::new(memory, Server::default(), root)?;
+    let mut event_loop = ServerLoop::new(queue, memory, Server::default(), root)?;
     for line in core::mem::take(&mut event_loop.state_mut().log) {
         println!("{line}");
     }

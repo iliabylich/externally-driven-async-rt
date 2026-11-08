@@ -11,14 +11,13 @@ use rustix::fd::AsRawFd;
 
 use crate::{
     Error, State,
-    current_thread_queue::CurrentThreadQueue,
     instant::Instant,
     selectors::Direction,
     storage::{Root, RootStatus, Storage, TaskId},
     test_utils::{
         DropFlag, Log, TEST_MAX_IO_COUNT, TEST_MAX_ROOT_TASK_SIZE, TEST_MAX_TASK_SIZE,
-        TEST_MAX_TASKS_COUNT, TEST_MAX_TIMERS_COUNT, TEST_MEMORY, TestContext, TestLoop,
-        assert_yields, is_readable, socketpair, test_loop, test_loop_in,
+        TEST_MAX_TASKS_COUNT, TEST_MAX_TIMERS_COUNT, TEST_MEMORY, TEST_QUEUE_MEMORY, TestContext,
+        TestLoop, assert_yields, is_readable, socketpair, test_loop,
         test_memory_within_current_test, wait_readable, wake_by_writing,
     },
 };
@@ -395,8 +394,47 @@ fn dropping_the_loop_drops_its_state() {
     assert!(dropped.get());
 }
 
-fn parked_loop<'a>(memory: &'static mut [MaybeUninit<u8>; TEST_MEMORY]) -> TestLoop<'a, Log> {
-    test_loop_in(memory, Log::default(), async |_| pending().await).unwrap()
+#[test]
+fn the_loop_runs_in_stack_memory() {
+    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
+    let event_loop = TestLoop::new(
+        test_memory_within_current_test!(TEST_QUEUE_MEMORY),
+        &mut memory,
+        Log::default(),
+        async |ctx| {
+            ctx.dispatch(1);
+            pending::<()>().await;
+        },
+    );
+    assert_eq!(event_loop.unwrap().state_mut().events(), [1]);
+}
+
+#[test]
+fn waking_after_the_loop_and_its_stack_memory_are_gone_is_harmless() {
+    let escaped = Cell::new(None);
+    {
+        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
+        let event_loop = TestLoop::new(
+            test_memory_within_current_test!(TEST_QUEUE_MEMORY),
+            &mut memory,
+            Log::default(),
+            async |_| {
+                poll_fn(|cx| {
+                    escaped.set(Some(cx.waker().clone()));
+                    Poll::<()>::Pending
+                })
+                .await;
+            },
+        );
+        drop(event_loop);
+    }
+    escaped.take().unwrap().wake();
+}
+
+macro_rules! parked_loop {
+    () => {
+        test_loop!(Log::default(), async |_| pending().await).unwrap()
+    };
 }
 
 fn counting(polls: &Cell<u32>) -> impl Future<Output = ()> {
@@ -412,18 +450,13 @@ fn ready_tasks<'a>(event_loop: &'a TestLoop<'_, Log>) -> impl Iterator<Item = Ta
 
 fn parked_task(event_loop: &TestLoop<Log>) -> (TaskId, Waker) {
     let id = event_loop.storage.tasks.insert(pending());
-    // SAFETY: `event_loop` outlives the waker.
-    let waker = unsafe {
-        CurrentThreadQueue::<_, TEST_MAX_TASKS_COUNT>::waker(
-            event_loop.storage.tasks.ready().link(id.slot()),
-        )
-    };
+    let waker = event_loop.storage.tasks.ready().waker(id.slot());
     (id, waker)
 }
 
 #[test]
 fn finished_task_is_removed() {
-    let owned = parked_loop(test_memory_within_current_test!());
+    let owned = parked_loop!();
     let event_loop = &owned;
     let id = event_loop.storage.tasks.spawn(async {});
     assert_eq!(event_loop.storage.tasks.run_ready(), RootStatus::Running);
@@ -433,7 +466,7 @@ fn finished_task_is_removed() {
 #[test]
 fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
     let polls = Cell::new(0);
-    let owned = parked_loop(test_memory_within_current_test!());
+    let owned = parked_loop!();
     let event_loop = &owned;
     event_loop.storage.tasks.spawn(poll_fn(|cx| {
         polls.set(polls.get() + 1);
@@ -449,7 +482,7 @@ fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
 #[test]
 fn task_spawned_during_a_poll_runs_in_the_same_run() {
     let polls = Cell::new(0);
-    let owned = parked_loop(test_memory_within_current_test!());
+    let owned = parked_loop!();
     let event_loop = &owned;
     let storage = event_loop.storage;
     let child = counting(&polls);
@@ -463,16 +496,11 @@ fn task_spawned_during_a_poll_runs_in_the_same_run() {
 #[test]
 fn join_waiter_is_woken_when_the_task_finishes() {
     let polls = Cell::new(0);
-    let owned = parked_loop(test_memory_within_current_test!());
+    let owned = parked_loop!();
     let event_loop = &owned;
     let waiter = event_loop.storage.tasks.spawn(counting(&polls));
     let task = event_loop.storage.tasks.spawn(async {});
-    // SAFETY: `event_loop` outlives the waker.
-    let waker = unsafe {
-        CurrentThreadQueue::<_, TEST_MAX_TASKS_COUNT>::waker(
-            event_loop.storage.tasks.ready().link(waiter.slot()),
-        )
-    };
+    let waker = event_loop.storage.tasks.ready().waker(waiter.slot());
     event_loop.storage.tasks.set_join_waiter(task, &waker);
     event_loop.storage.tasks.run_ready();
     assert_eq!(polls.get(), 2);
@@ -481,7 +509,7 @@ fn join_waiter_is_woken_when_the_task_finishes() {
 #[test]
 fn root_finishing_stops_the_run() {
     let polls = Cell::new(0);
-    let owned = parked_loop(test_memory_within_current_test!());
+    let owned = parked_loop!();
     let event_loop = &owned;
     let root = event_loop.storage.tasks.spawn(async {});
     event_loop.storage.tasks.set_root(Root::Running(root));
@@ -523,7 +551,7 @@ impl Drop for SpawnRawOnDrop<'_> {
 #[test]
 fn dropping_the_loop_drops_tasks_spawned_from_drop() {
     let spawned_dropped = Cell::new(false);
-    let owned = parked_loop(test_memory_within_current_test!());
+    let owned = parked_loop!();
     owned.storage.tasks.spawn(SpawnRawOnDrop {
         storage: owned.storage,
         spawned_dropped: &spawned_dropped,
@@ -534,7 +562,7 @@ fn dropping_the_loop_drops_tasks_spawned_from_drop() {
 
 #[test]
 fn readable_event_wakes_the_reader_once() {
-    let owned = parked_loop(test_memory_within_current_test!());
+    let owned = parked_loop!();
     let event_loop = &owned;
     let (a, b) = socketpair();
     let (task, waker) = parked_task(event_loop);
@@ -555,7 +583,7 @@ fn readable_event_wakes_the_reader_once() {
 
 #[test]
 fn removed_io_waker_arms_nothing() {
-    let owned = parked_loop(test_memory_within_current_test!());
+    let owned = parked_loop!();
     let event_loop = &owned;
     let (a, b) = socketpair();
     let (_, waker) = parked_task(event_loop);
@@ -572,7 +600,7 @@ fn removed_io_waker_arms_nothing() {
 
 #[test]
 fn deregistered_io_produces_no_events() {
-    let owned = parked_loop(test_memory_within_current_test!());
+    let owned = parked_loop!();
     let event_loop = &owned;
     let (a, b) = socketpair();
     let (_, waker) = parked_task(event_loop);
@@ -590,7 +618,7 @@ fn deregistered_io_produces_no_events() {
 
 #[test]
 fn expired_timer_wakes_its_task() {
-    let owned = parked_loop(test_memory_within_current_test!());
+    let owned = parked_loop!();
     let event_loop = &owned;
     let (task, waker) = parked_task(event_loop);
     let (_, later_waker) = parked_task(event_loop);

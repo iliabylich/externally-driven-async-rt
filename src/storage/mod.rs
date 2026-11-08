@@ -6,6 +6,7 @@ use core::{
 
 use crate::{
     instant::Instant,
+    ready::ReadyQueue,
     selectors::{Direction, EVENTS_PER_CALL, Selector, SelectorEvent},
 };
 
@@ -62,7 +63,12 @@ impl<
         Sel,
     >
 {
-    pub(crate) fn init(place: &mut MaybeUninit<Self>, selector: Sel, state: S) -> &Self {
+    pub(crate) fn init<'p>(
+        place: &'p mut MaybeUninit<Self>,
+        ready: &'static ReadyQueue<MAX_TASKS_COUNT>,
+        selector: Sel,
+        state: S,
+    ) -> &'p Self {
         let ptr = place.as_mut_ptr();
         // SAFETY: `ptr` points to `place`, borrowed exclusively until the end; the fields are
         // disjoint, `&raw mut` creates no reference to them while they're uninitialized, and
@@ -80,7 +86,7 @@ impl<
         state_place.write(UnsafeCell::new(state));
         Timers::<MAX_TIMERS_COUNT>::init(timers);
         IoWaiters::<MAX_IO_COUNT>::init(io_waiters);
-        Tasks::<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>::init(tasks);
+        Tasks::<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>::init(tasks, ready);
         // SAFETY: every field was written above.
         unsafe { place.assume_init_ref() }
     }
