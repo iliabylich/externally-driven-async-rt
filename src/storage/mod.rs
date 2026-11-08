@@ -35,10 +35,10 @@ fn store_waker(cell: &Cell<Option<Waker>>, waker: &Waker) {
 // `&'static Storage` (in the `EventLoop` and every `Context`) and borrows of it. Objects inside
 // are addressed by typed indices.
 pub(crate) struct Storage<S: 'static, Sel = Selector> {
-    selector: Sel,
+    pub(crate) selector: Sel,
     // `'static`: they live as long as the storage, which nothing that can reach it outlives.
     // Only shared references: the state is in an `UnsafeCell`.
-    state: &'static UnsafeCell<S>,
+    pub(crate) state: &'static UnsafeCell<S>,
     pub(crate) timers: Timers,
     pub(crate) io_waiters: IoWaiters,
     pub(crate) tasks: Tasks,
@@ -103,10 +103,6 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
         }
     }
 
-    pub(crate) fn state(&self) -> &UnsafeCell<S> {
-        self.state
-    }
-
     /// Drops every task, the state, the pools and the selector. The memory isn't freed: it's the
     /// caller's.
     ///
@@ -134,14 +130,10 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
 }
 
 impl<S: 'static> Storage<S, Selector> {
-    pub(crate) fn selector(&self) -> &Selector {
-        &self.selector
-    }
-
     pub(crate) fn process_selector_events(&self) -> rustix::io::Result<()> {
         let mut events = [None; EVENTS_PER_CALL];
         loop {
-            let full = self.selector().poll_nonblocking(&mut events)?;
+            let full = self.selector.poll_nonblocking(&mut events)?;
             for event in events.iter().map_while(|event| *event) {
                 match event {
                     SelectorEvent::Readable(token) => {
@@ -170,10 +162,10 @@ impl<S: 'static> Storage<S, Selector> {
 
     pub(crate) fn flush(&self) -> rustix::io::Result<()> {
         match self.timers.next_deadline() {
-            Some(deadline) => self.selector().arm_timer(deadline),
-            None => self.selector().disarm_timer(),
+            Some(deadline) => self.selector.arm_timer(deadline),
+            None => self.selector.disarm_timer(),
         }
-        self.selector().flush(self.io_waiters.pending_changes())?;
+        self.selector.flush(self.io_waiters.pending_changes())?;
         self.io_waiters.mark_flushed();
         Ok(())
     }

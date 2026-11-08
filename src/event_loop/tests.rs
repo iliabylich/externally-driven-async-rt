@@ -387,13 +387,13 @@ fn counting(polls: *mut u32) -> impl Future<Output = ()> {
 }
 
 fn ready_tasks(event_loop: &EventLoop<Log>) -> impl Iterator<Item = TaskId> + '_ {
-    core::iter::from_fn(|| event_loop.storage().tasks.ready().pop())
+    core::iter::from_fn(|| event_loop.storage.tasks.ready().pop())
 }
 
 fn parked_task(event_loop: &EventLoop<Log>) -> (TaskId, Waker) {
-    let id = event_loop.storage().tasks.insert(pending());
+    let id = event_loop.storage.tasks.insert(pending());
     // SAFETY: `event_loop` outlives the waker.
-    let waker = unsafe { new_waker(event_loop.storage().tasks.ready(), id) };
+    let waker = unsafe { new_waker(event_loop.storage.tasks.ready(), id) };
     (id, waker)
 }
 
@@ -401,9 +401,9 @@ fn parked_task(event_loop: &EventLoop<Log>) -> (TaskId, Waker) {
 fn finished_task_is_removed() {
     let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
-    let id = event_loop.storage().tasks.spawn(async {});
-    assert_eq!(event_loop.storage().tasks.run_ready(), RootStatus::Running);
-    assert!(event_loop.storage().tasks.get(id).is_none());
+    let id = event_loop.storage.tasks.spawn(async {});
+    assert_eq!(event_loop.storage.tasks.run_ready(), RootStatus::Running);
+    assert!(event_loop.storage.tasks.get(id).is_none());
 }
 
 #[test]
@@ -411,7 +411,7 @@ fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
     let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
     static mut POLLS: u32 = 0;
-    event_loop.storage().tasks.spawn(poll_fn(move |cx| {
+    event_loop.storage.tasks.spawn(poll_fn(move |cx| {
         // SAFETY: only this test's thread uses `POLLS`, and no reference to it exists.
         let polls = unsafe {
             POLLS += 1;
@@ -422,7 +422,7 @@ fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
         }
         Poll::<()>::Pending
     }));
-    event_loop.storage().tasks.run_ready();
+    event_loop.storage.tasks.run_ready();
     // SAFETY: only this test's thread uses `POLLS`, and no reference to it exists.
     assert_eq!(unsafe { POLLS }, 3);
 }
@@ -431,13 +431,13 @@ fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
 fn task_spawned_during_a_poll_runs_in_the_same_run() {
     let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
-    let storage = event_loop.storage();
+    let storage = event_loop.storage;
     static mut POLLS: u32 = 0;
     let child = counting(&raw mut POLLS);
-    event_loop.storage().tasks.spawn(async move {
+    event_loop.storage.tasks.spawn(async move {
         storage.tasks.spawn(child);
     });
-    event_loop.storage().tasks.run_ready();
+    event_loop.storage.tasks.run_ready();
     // SAFETY: only this test's thread uses `POLLS`, and no reference to it exists.
     assert_eq!(unsafe { POLLS }, 1);
 }
@@ -447,12 +447,12 @@ fn join_waiter_is_woken_when_the_task_finishes() {
     let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
     static mut POLLS: u32 = 0;
-    let waiter = event_loop.storage().tasks.spawn(counting(&raw mut POLLS));
-    let task = event_loop.storage().tasks.spawn(async {});
+    let waiter = event_loop.storage.tasks.spawn(counting(&raw mut POLLS));
+    let task = event_loop.storage.tasks.spawn(async {});
     // SAFETY: `event_loop` outlives the waker.
-    let waker = unsafe { new_waker(event_loop.storage().tasks.ready(), waiter) };
-    event_loop.storage().tasks.set_join_waiter(task, &waker);
-    event_loop.storage().tasks.run_ready();
+    let waker = unsafe { new_waker(event_loop.storage.tasks.ready(), waiter) };
+    event_loop.storage.tasks.set_join_waiter(task, &waker);
+    event_loop.storage.tasks.run_ready();
     // SAFETY: only this test's thread uses `POLLS`, and no reference to it exists.
     assert_eq!(unsafe { POLLS }, 2);
 }
@@ -461,11 +461,11 @@ fn join_waiter_is_woken_when_the_task_finishes() {
 fn root_finishing_stops_the_run() {
     let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
-    let root = event_loop.storage().tasks.spawn(async {});
-    event_loop.storage().tasks.set_root(Root::Running(root));
+    let root = event_loop.storage.tasks.spawn(async {});
+    event_loop.storage.tasks.set_root(Root::Running(root));
     static mut POLLS: u32 = 0;
-    event_loop.storage().tasks.spawn(counting(&raw mut POLLS));
-    assert_eq!(event_loop.storage().tasks.run_ready(), RootStatus::Finished);
+    event_loop.storage.tasks.spawn(counting(&raw mut POLLS));
+    assert_eq!(event_loop.storage.tasks.run_ready(), RootStatus::Finished);
     // SAFETY: only this test's thread uses `POLLS`, and no reference to it exists.
     assert_eq!(unsafe { POLLS }, 0);
 }
@@ -496,8 +496,8 @@ impl Drop for SpawnRawOnDrop {
 fn dropping_the_loop_drops_tasks_spawned_from_drop() {
     let owned = parked_loop(test_memory_within_current_test!());
     static mut SPAWNED_DROPPED: bool = false;
-    owned.storage().tasks.spawn(SpawnRawOnDrop {
-        storage: owned.storage(),
+    owned.storage.tasks.spawn(SpawnRawOnDrop {
+        storage: owned.storage,
         spawned_dropped: &raw mut SPAWNED_DROPPED,
     });
     drop(owned);
@@ -512,17 +512,17 @@ fn readable_event_wakes_the_reader_once() {
     let (a, b) = pair();
     let (task, waker) = parked_task(event_loop);
     let io = event_loop
-        .storage()
+        .storage
         .io_waiters
         .register(a.as_raw_fd(), Direction::Read);
-    event_loop.storage().io_waiters.set_waker(io, &waker);
-    event_loop.storage().flush().unwrap();
+    event_loop.storage.io_waiters.set_waker(io, &waker);
+    event_loop.storage.flush().unwrap();
     rustix::io::write(&b, b"x").unwrap();
-    event_loop.storage().process_selector_events().unwrap();
+    event_loop.storage.process_selector_events().unwrap();
     assert_yields(ready_tasks(event_loop), [task]);
 
     rustix::io::write(&b, b"x").unwrap();
-    event_loop.storage().flush().unwrap();
+    event_loop.storage.flush().unwrap();
     assert!(!is_readable(event_loop, 0));
 }
 
@@ -533,13 +533,13 @@ fn removed_io_waker_arms_nothing() {
     let (a, b) = pair();
     let (_, waker) = parked_task(event_loop);
     let io = event_loop
-        .storage()
+        .storage
         .io_waiters
         .register(a.as_raw_fd(), Direction::Read);
-    event_loop.storage().io_waiters.set_waker(io, &waker);
-    event_loop.storage().io_waiters.remove_waker(io);
+    event_loop.storage.io_waiters.set_waker(io, &waker);
+    event_loop.storage.io_waiters.remove_waker(io);
     rustix::io::write(&b, b"x").unwrap();
-    event_loop.storage().flush().unwrap();
+    event_loop.storage.flush().unwrap();
     assert!(!is_readable(event_loop, 0));
 }
 
@@ -550,13 +550,13 @@ fn deregistered_io_produces_no_events() {
     let (a, b) = pair();
     let (_, waker) = parked_task(event_loop);
     let io = event_loop
-        .storage()
+        .storage
         .io_waiters
         .register(a.as_raw_fd(), Direction::Read);
-    event_loop.storage().io_waiters.set_waker(io, &waker);
-    event_loop.storage().flush().unwrap();
-    let change = event_loop.storage().io_waiters.release(io).unwrap();
-    event_loop.storage().selector().apply_now(change).unwrap();
+    event_loop.storage.io_waiters.set_waker(io, &waker);
+    event_loop.storage.flush().unwrap();
+    let change = event_loop.storage.io_waiters.release(io).unwrap();
+    event_loop.storage.selector.apply_now(change).unwrap();
     rustix::io::write(&b, b"x").unwrap();
     assert!(!is_readable(event_loop, 0));
 }
@@ -568,13 +568,13 @@ fn expired_timer_wakes_its_task() {
     let (task, waker) = parked_task(event_loop);
     let (_, later_waker) = parked_task(event_loop);
     let now = Instant::now();
-    let storage = event_loop.storage();
+    let storage = event_loop.storage;
     storage.timers.alloc(now + Duration::from_millis(5), waker);
     storage
         .timers
         .alloc(now + Duration::from_secs(60), later_waker);
-    event_loop.storage().flush().unwrap();
+    event_loop.storage.flush().unwrap();
     assert!(is_readable(event_loop, 500));
-    event_loop.storage().process_selector_events().unwrap();
+    event_loop.storage.process_selector_events().unwrap();
     assert_yields(ready_tasks(event_loop), [task]);
 }

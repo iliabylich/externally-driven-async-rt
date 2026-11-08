@@ -22,7 +22,7 @@ impl<S: State> Context<S> {
         // `state_mut` reference can be live. `apply` gets no `Context` (and `S`, its events and
         // everything they drop are `'static`, so they can't hold one), so it can't re-enter
         // `dispatch`: this is the only reference.
-        unsafe { &mut *self.storage.state().get() }.apply(event);
+        unsafe { &mut *self.storage.state.get() }.apply(event);
     }
 
     pub fn spawn<F>(&self, f: F) -> JoinHandle<'_, S>

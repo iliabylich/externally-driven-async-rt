@@ -29,7 +29,7 @@ impl core::fmt::Display for Error {
 impl core::error::Error for Error {}
 
 pub struct EventLoop<S: State> {
-    storage: &'static Storage<S>,
+    pub(crate) storage: &'static Storage<S>,
 }
 
 impl<S: State> EventLoop<S> {
@@ -93,12 +93,7 @@ impl<S: State> EventLoop<S> {
         // SAFETY: the state is only accessed mutably here and in `Context::dispatch`, which runs
         // inside tasks, i.e. only while `new`, a drain or `drop` holds exclusive access to the
         // loop; `&mut self` rules all of those out.
-        unsafe { &mut *self.storage.state().get() }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn storage(&self) -> &'static Storage<S> {
-        self.storage
+        unsafe { &mut *self.storage.state.get() }
     }
 
     fn finish_drain(&self, status: RootStatus) -> Result<(), Error> {
@@ -129,7 +124,7 @@ impl<S: State> Drop for EventLoop<S> {
 
 impl<S: State> AsFd for EventLoop<S> {
     fn as_fd(&self) -> BorrowedFd<'_> {
-        self.storage.selector().as_fd()
+        self.storage.selector.as_fd()
     }
 }
 

@@ -656,12 +656,12 @@ fn state_region_is_aligned_usable_and_dropped() {
         )
     };
     // SAFETY: nothing else references the state.
-    let state = unsafe { &mut *storage.state().get() };
+    let state = unsafe { &mut *storage.state.get() };
     assert_eq!((state as *const AlignedState).addr() % 64, 0);
     assert_eq!(state.value, 7);
     state.value = 8;
     // SAFETY: as above.
-    assert_eq!(unsafe { &*storage.state().get() }.value, 8);
+    assert_eq!(unsafe { &*storage.state.get() }.value, 8);
     // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
     assert!(!unsafe { DROPPED });
     // SAFETY: destroyed once, no task is being polled.

@@ -184,7 +184,7 @@ pub(crate) fn peer_read_exact<S: State>(
 }
 
 pub(crate) fn has_timers<S: State>(event_loop: &EventLoop<S>) -> bool {
-    event_loop.storage().timers.next_deadline().is_some()
+    event_loop.storage.timers.next_deadline().is_some()
 }
 
 // Resolves with whichever future completes first, dropping the other one.
