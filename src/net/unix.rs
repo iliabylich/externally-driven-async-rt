@@ -258,15 +258,15 @@ impl UnixDatagram {
 
 #[cfg(test)]
 mod tests {
-    use core::{ffi::CStr, future::pending, mem::MaybeUninit};
+    use core::{ffi::CStr, future::pending};
 
     use rustix::net::{AddressFamily, RecvFlags, SendFlags, Shutdown, SocketAddrUnix, SocketType};
 
     use crate::{
         net::{UnixDatagram, UnixListener, UnixStream},
         test_utils::{
-            Log, TEST_MEMORY, TestLoop, TestQueue, drain_until_readable, peer_read_exact,
-            raw_accept, raw_socket, run_until_events,
+            Log, TestLoop, TestStorage, drain_until_readable, peer_read_exact, raw_accept,
+            raw_socket, run_until_events,
         },
     };
 
@@ -328,13 +328,11 @@ mod tests {
         let listener = raw_socket(AddressFamily::UNIX, SocketType::STREAM);
         rustix::net::bind(&listener, &server_addr).unwrap();
         rustix::net::listen(&listener, 1).unwrap();
-        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
-                static QUEUE: TestQueue = TestQueue::new();
-                &QUEUE
+                static STORAGE: TestStorage = TestStorage::new();
+                &STORAGE
             },
-            &mut memory,
             Log::default(),
             async move |ctx| {
                 let mut stream = UnixStream::connect(ctx, &server_addr).await.unwrap();
@@ -374,13 +372,11 @@ mod tests {
             path_of(&listener.local_addr().unwrap()),
             path_of(&listener_addr)
         );
-        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
-                static QUEUE: TestQueue = TestQueue::new();
-                &QUEUE
+                static STORAGE: TestStorage = TestStorage::new();
+                &STORAGE
             },
-            &mut memory,
             Log::default(),
             async move |ctx| {
                 let (mut stream, peer) = listener.accept(ctx).await.unwrap();
@@ -413,13 +409,11 @@ mod tests {
         let (ours_addr, theirs_addr) = (ours.addr(), theirs.addr());
         let peer = raw_socket(AddressFamily::UNIX, SocketType::DGRAM);
         rustix::net::bind(&peer, &theirs_addr).unwrap();
-        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
-                static QUEUE: TestQueue = TestQueue::new();
-                &QUEUE
+                static STORAGE: TestStorage = TestStorage::new();
+                &STORAGE
             },
-            &mut memory,
             Log::default(),
             async move |ctx| {
                 let mut socket = UnixDatagram::bind(&ours_addr).unwrap();
@@ -459,13 +453,11 @@ mod tests {
     fn unbound_datagram_sender_has_an_unnamed_address() {
         let path = TempPath::new("dgram-unbound");
         let bound_addr = path.addr();
-        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
-                static QUEUE: TestQueue = TestQueue::new();
-                &QUEUE
+                static STORAGE: TestStorage = TestStorage::new();
+                &STORAGE
             },
-            &mut memory,
             Log::default(),
             async move |ctx| {
                 let mut bound = UnixDatagram::bind(&bound_addr).unwrap();

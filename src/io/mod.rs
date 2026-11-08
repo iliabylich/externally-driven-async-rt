@@ -36,7 +36,7 @@ impl<'a, const MAX_IO_COUNT: usize> IoRegistration<'a, MAX_IO_COUNT> {
     ) -> Self {
         Self {
             io_waiters: &storage.io_waiters,
-            selector: &storage.selector,
+            selector: storage.selector(),
             index: storage.io_waiters.register(fd.as_raw_fd(), direction),
         }
     }

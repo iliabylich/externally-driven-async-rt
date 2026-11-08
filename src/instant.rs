@@ -2,10 +2,12 @@ use core::{ops::Add, time::Duration};
 
 use crate::selectors::monotonic_nanos;
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct Instant(u64);
 
 impl Instant {
+    pub(crate) const ZERO: Self = Self(0);
+
     pub(crate) fn now() -> Self {
         Self(monotonic_nanos())
     }

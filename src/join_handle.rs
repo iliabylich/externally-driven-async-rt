@@ -7,25 +7,23 @@ use crate::{
 
 pub struct JoinHandle<
     'ctx,
-    'a,
     const MAX_TASKS_COUNT: usize,
     const MAX_TASK_SIZE: usize,
     const MAX_ROOT_TASK_SIZE: usize,
 > {
-    tasks: &'ctx Tasks<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
+    tasks: &'ctx Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
     id: TaskId,
 }
 
 impl<
     'ctx,
-    'a,
     const MAX_TASKS_COUNT: usize,
     const MAX_TASK_SIZE: usize,
     const MAX_ROOT_TASK_SIZE: usize,
-> JoinHandle<'ctx, 'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+> JoinHandle<'ctx, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
 {
     pub(crate) fn new(
-        tasks: &'ctx Tasks<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
+        tasks: &'ctx Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
         id: TaskId,
     ) -> Self {
         Self { tasks, id }
@@ -33,7 +31,7 @@ impl<
 }
 
 impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize>
-    Future for JoinHandle<'_, '_, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+    Future for JoinHandle<'_, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
 {
     type Output = ();
 
@@ -47,25 +45,21 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
 
 #[cfg(test)]
 mod tests {
-    use core::{future::pending, mem::MaybeUninit};
+    use core::future::pending;
 
     use crate::{
         Error,
-        test_utils::{
-            Log, TEST_MEMORY, TestLoop, TestQueue, socketpair, wait_readable, wake_by_writing,
-        },
+        test_utils::{Log, TestLoop, TestStorage, socketpair, wait_readable, wake_by_writing},
     };
 
     #[test]
     fn joining_a_running_task_waits_for_it() {
         let (a, b) = socketpair();
-        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
-                static QUEUE: TestQueue = TestQueue::new();
-                &QUEUE
+                static STORAGE: TestStorage = TestStorage::new();
+                &STORAGE
             },
-            &mut memory,
             Log::default(),
             async move |ctx| {
                 ctx.spawn(async move |ctx| {
@@ -89,13 +83,11 @@ mod tests {
     #[test]
     fn joining_a_finished_task_resolves_immediately() {
         let (a, b) = socketpair();
-        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
-                static QUEUE: TestQueue = TestQueue::new();
-                &QUEUE
+                static STORAGE: TestStorage = TestStorage::new();
+                &STORAGE
             },
-            &mut memory,
             Log::default(),
             async move |ctx| {
                 let handle = ctx.spawn(async |ctx| ctx.dispatch(1));
@@ -117,13 +109,11 @@ mod tests {
     #[test]
     fn dropped_handle_detaches_the_task() {
         let (a, b) = socketpair();
-        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
-                static QUEUE: TestQueue = TestQueue::new();
-                &QUEUE
+                static STORAGE: TestStorage = TestStorage::new();
+                &STORAGE
             },
-            &mut memory,
             Log::default(),
             async move |ctx| {
                 ctx.spawn(async move |ctx| {
@@ -141,13 +131,11 @@ mod tests {
 
     #[test]
     fn spawned_task_can_spawn_and_join() {
-        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let event_loop = TestLoop::new(
             {
-                static QUEUE: TestQueue = TestQueue::new();
-                &QUEUE
+                static STORAGE: TestStorage = TestStorage::new();
+                &STORAGE
             },
-            &mut memory,
             Log::default(),
             async |ctx| {
                 ctx.spawn(async |ctx| {

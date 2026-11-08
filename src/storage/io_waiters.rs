@@ -1,4 +1,4 @@
-use core::{cell::Cell, mem::MaybeUninit, task::Waker};
+use core::{cell::Cell, task::Waker};
 
 use rustix::fd::RawFd;
 
@@ -12,17 +12,6 @@ pub(crate) struct IoWaiter {
     direction: Cell<Direction>,
     waker: Cell<Option<Waker>>,
     armed: Cell<bool>,
-}
-
-impl Default for IoWaiter {
-    fn default() -> Self {
-        Self {
-            fd: Cell::new(-1),
-            direction: Cell::new(Direction::Read),
-            waker: Cell::new(None),
-            armed: Cell::new(false),
-        }
-    }
 }
 
 impl IoWaiter {
@@ -59,14 +48,19 @@ pub(crate) struct IoWaiters<const N: usize> {
 }
 
 impl<const N: usize> IoWaiters<N> {
-    pub(crate) fn init(place: &mut MaybeUninit<Self>) -> &Self {
-        let ptr = place.as_mut_ptr();
-        // SAFETY: `ptr` points to `place`, borrowed exclusively until the end; `&raw mut` creates no
-        // reference to the uninitialized field, and `MaybeUninit<T>` has `T`'s layout.
-        let pool = unsafe { &mut *(&raw mut (*ptr).pool).cast::<MaybeUninit<_>>() };
-        ObjectPool::<IoWaiter, N>::init(pool);
-        // SAFETY: the only field was written above.
-        unsafe { place.assume_init_ref() }
+    pub(crate) const fn new() -> Self {
+        Self {
+            pool: ObjectPool::new(
+                [const {
+                    IoWaiter {
+                        fd: Cell::new(-1),
+                        direction: Cell::new(Direction::Read),
+                        waker: Cell::new(None),
+                        armed: Cell::new(false),
+                    }
+                }; N],
+            ),
+        }
     }
 
     pub(crate) fn register(&self, fd: RawFd, direction: Direction) -> IoIndex {
@@ -149,7 +143,7 @@ impl<const N: usize> IoWaiters<N> {
 
 #[cfg(test)]
 mod tests {
-    use core::{mem::MaybeUninit, task::Waker};
+    use core::task::Waker;
 
     use crate::{
         selectors::{Direction, IoAction, IoChange, Token},
@@ -167,8 +161,7 @@ mod tests {
 
     #[test]
     fn register_wait_release() {
-        let mut place = MaybeUninit::uninit();
-        let io_waiters = IoWaiters::<1>::init(&mut place);
+        let io_waiters = &IoWaiters::<1>::new();
         let index = io_waiters.register(3, Direction::Write);
         assert!(!io_waiters.has_waker(index));
         io_waiters.set_waker(index, Waker::noop());
@@ -182,8 +175,7 @@ mod tests {
 
     #[test]
     fn changes_follow_the_stored_waker() {
-        let mut place = MaybeUninit::uninit();
-        let io_waiters = IoWaiters::<2>::init(&mut place);
+        let io_waiters = &IoWaiters::<2>::new();
         let reader = io_waiters.register(3, Direction::Read);
         let writer = io_waiters.register(4, Direction::Write);
         assert_pending_changes(io_waiters, []);
@@ -208,8 +200,7 @@ mod tests {
 
     #[test]
     fn releasing_an_armed_registration_returns_its_disarm() {
-        let mut place = MaybeUninit::uninit();
-        let io_waiters = IoWaiters::<1>::init(&mut place);
+        let io_waiters = &IoWaiters::<1>::new();
         let index = io_waiters.register(3, Direction::Read);
         io_waiters.set_waker(index, Waker::noop());
         io_waiters.mark_flushed();
@@ -225,8 +216,7 @@ mod tests {
 
     #[test]
     fn an_event_takes_the_waker_of_its_direction_only() {
-        let mut place = MaybeUninit::uninit();
-        let io_waiters = IoWaiters::<1>::init(&mut place);
+        let io_waiters = &IoWaiters::<1>::new();
         let index = io_waiters.register(3, Direction::Read);
         io_waiters.set_waker(index, &waker(1));
         let token = Token(index.to_bits());
@@ -239,8 +229,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "more than 1 concurrent IO operations")]
     fn capacity_is_bounded() {
-        let mut place = MaybeUninit::uninit();
-        let io_waiters = IoWaiters::<1>::init(&mut place);
+        let io_waiters = &IoWaiters::<1>::new();
         io_waiters.register(3, Direction::Read);
         io_waiters.register(3, Direction::Write);
     }

@@ -2,18 +2,15 @@ use crate::{
     pool::{Index, ObjectPool},
     test_utils::assert_yields,
 };
-use core::{cell::Cell, mem::MaybeUninit};
+use core::cell::Cell;
 
-fn alloc<T: Default, const N: usize>(
-    pool: &ObjectPool<Cell<T>, N>,
-    value: T,
-) -> Option<Index<Cell<T>>> {
+fn alloc<T, const N: usize>(pool: &ObjectPool<Cell<T>, N>, value: T) -> Option<Index<Cell<T>>> {
     let (index, slot) = pool.alloc()?;
     slot.set(value);
     Some(index)
 }
 
-fn value<T: Copy + Default, const N: usize>(
+fn value<T: Copy, const N: usize>(
     pool: &ObjectPool<Cell<T>, N>,
     index: Index<Cell<T>>,
 ) -> Option<T> {
@@ -22,11 +19,9 @@ fn value<T: Copy + Default, const N: usize>(
 
 #[test]
 fn highly_aligned_slots_are_aligned() {
-    #[derive(Default)]
     #[repr(align(64))]
     struct Aligned(Cell<u8>);
-    let mut place = MaybeUninit::uninit();
-    let pool = ObjectPool::<Aligned, 3>::init(&mut place);
+    let pool = &ObjectPool::<Aligned, 3>::new([const { Aligned(Cell::new(0)) }; 3]);
     let (index, slot) = pool.alloc().unwrap();
     slot.0.set(7);
     let value = pool.get(index).unwrap();
@@ -36,8 +31,7 @@ fn highly_aligned_slots_are_aligned() {
 
 #[test]
 fn alloc_get_free() {
-    let mut place = MaybeUninit::uninit();
-    let pool = ObjectPool::<Cell<&str>, 2>::init(&mut place);
+    let pool = &ObjectPool::<Cell<&str>, 2>::new([const { Cell::new("") }; 2]);
     let a = alloc(pool, "a").unwrap();
     let b = alloc(pool, "b").unwrap();
     assert_ne!(a, b);
@@ -51,8 +45,7 @@ fn alloc_get_free() {
 
 #[test]
 fn a_slot_is_usable_while_another_is_allocated_and_freed() {
-    let mut place = MaybeUninit::uninit();
-    let pool = ObjectPool::<Cell<u32>, 2>::init(&mut place);
+    let pool = &ObjectPool::<Cell<u32>, 2>::new([const { Cell::new(0) }; 2]);
     let (a, slot) = pool.alloc().unwrap();
     let b = alloc(pool, 2).unwrap();
     pool.free(b);
@@ -62,8 +55,7 @@ fn a_slot_is_usable_while_another_is_allocated_and_freed() {
 
 #[test]
 fn index_round_trips_through_bits() {
-    let mut place = MaybeUninit::uninit();
-    let pool = ObjectPool::<Cell<u32>, 2>::init(&mut place);
+    let pool = &ObjectPool::<Cell<u32>, 2>::new([const { Cell::new(0) }; 2]);
     let first = alloc(pool, 1).unwrap();
     pool.free(first);
     let index = alloc(pool, 2).unwrap();
@@ -74,16 +66,14 @@ fn index_round_trips_through_bits() {
 
 #[test]
 fn full_pool_rejects_alloc() {
-    let mut place = MaybeUninit::uninit();
-    let pool = ObjectPool::<Cell<u32>, 1>::init(&mut place);
+    let pool = &ObjectPool::<Cell<u32>, 1>::new([const { Cell::new(0) }; 1]);
     alloc(pool, 1).unwrap();
     assert!(pool.alloc().is_none());
 }
 
 #[test]
 fn freed_slot_is_reused_with_a_new_generation() {
-    let mut place = MaybeUninit::uninit();
-    let pool = ObjectPool::<Cell<u32>, 1>::init(&mut place);
+    let pool = &ObjectPool::<Cell<u32>, 1>::new([const { Cell::new(0) }; 1]);
     let old = alloc(pool, 1).unwrap();
     pool.free(old);
     let new = alloc(pool, 2).unwrap();
@@ -95,8 +85,7 @@ fn freed_slot_is_reused_with_a_new_generation() {
 
 #[test]
 fn double_free_is_rejected() {
-    let mut place = MaybeUninit::uninit();
-    let pool = ObjectPool::<Cell<u32>, 2>::init(&mut place);
+    let pool = &ObjectPool::<Cell<u32>, 2>::new([const { Cell::new(0) }; 2]);
     let index = alloc(pool, 1).unwrap();
     pool.free(index);
     pool.free(index);
@@ -107,8 +96,7 @@ fn double_free_is_rejected() {
 
 #[test]
 fn every_slot_is_usable_after_mixed_frees() {
-    let mut place = MaybeUninit::uninit();
-    let pool = ObjectPool::<Cell<usize>, 4>::init(&mut place);
+    let pool = &ObjectPool::<Cell<usize>, 4>::new([const { Cell::new(0) }; 4]);
     let indices = [0, 1, 2, 3].map(|i| alloc(pool, i).unwrap());
     pool.free(indices[1]);
     pool.free(indices[3]);
@@ -123,8 +111,7 @@ fn every_slot_is_usable_after_mixed_frees() {
 
 #[test]
 fn iter_yields_only_occupied_slots() {
-    let mut place = MaybeUninit::uninit();
-    let pool = ObjectPool::<Cell<u32>, 4>::init(&mut place);
+    let pool = &ObjectPool::<Cell<u32>, 4>::new([const { Cell::new(0) }; 4]);
     let a = alloc(pool, 1).unwrap();
     let b = alloc(pool, 2).unwrap();
     let c = alloc(pool, 3).unwrap();
@@ -137,8 +124,7 @@ fn iter_yields_only_occupied_slots() {
 
 #[test]
 fn freeing_the_yielded_slot_while_iterating() {
-    let mut place = MaybeUninit::uninit();
-    let pool = ObjectPool::<Cell<u32>, 3>::init(&mut place);
+    let pool = &ObjectPool::<Cell<u32>, 3>::new([const { Cell::new(0) }; 3]);
     for value in 0..3 {
         alloc(pool, value).unwrap();
     }
@@ -153,8 +139,7 @@ fn freeing_the_yielded_slot_while_iterating() {
 
 #[test]
 fn occupied_list_stays_consistent() {
-    let mut place = MaybeUninit::uninit();
-    let pool = ObjectPool::<Cell<u32>, 8>::init(&mut place);
+    let pool = &ObjectPool::<Cell<u32>, 8>::new([const { Cell::new(0) }; 8]);
     let mut live: [Option<(Index<Cell<u32>>, u32)>; 8] = [None; 8];
     let mut next_value = 0;
     for step in 0..64u32 {

@@ -120,7 +120,6 @@ impl UdpSocket {
 mod tests {
     use core::{
         future::pending,
-        mem::MaybeUninit,
         net::{IpAddr, Ipv4Addr, SocketAddr},
     };
 
@@ -132,8 +131,7 @@ mod tests {
     use crate::{
         net::UdpSocket,
         test_utils::{
-            Log, TEST_MEMORY, TestLoop, TestQueue, drain_until_readable, raw_socket,
-            run_until_events,
+            Log, TestLoop, TestStorage, drain_until_readable, raw_socket, run_until_events,
         },
     };
 
@@ -149,13 +147,11 @@ mod tests {
     #[test]
     fn round_trip_with_a_raw_peer() {
         let (peer, peer_addr) = raw_peer();
-        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
-                static QUEUE: TestQueue = TestQueue::new();
-                &QUEUE
+                static STORAGE: TestStorage = TestStorage::new();
+                &STORAGE
             },
-            &mut memory,
             Log::default(),
             async move |ctx| {
                 let mut socket = UdpSocket::bind(LOCALHOST).unwrap();

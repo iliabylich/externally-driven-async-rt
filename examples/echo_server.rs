@@ -1,7 +1,7 @@
-use core::{mem::MaybeUninit, net::SocketAddr, time::Duration};
+use core::{net::SocketAddr, time::Duration};
 
 use externally_driven_async_rt::{
-    Context, Error, EventLoop, State, WakeQueue,
+    Context, Error, EventLoop, LoopStorage, State,
     net::{TcpListener, TcpStream},
 };
 
@@ -36,7 +36,14 @@ type ServerContext<'a> = Context<
     MAX_IO_COUNT,
 >;
 
-const MEMSIZE: usize = ServerLoop::REQUIRED_SIZE;
+type ServerStorage = LoopStorage<
+    Server,
+    MAX_TASKS_COUNT,
+    MAX_TASK_SIZE,
+    MAX_ROOT_TASK_SIZE,
+    MAX_TIMERS_COUNT,
+    MAX_IO_COUNT,
+>;
 
 #[derive(Default)]
 struct Server {
@@ -181,9 +188,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = async move |ctx: &ServerContext<'_>| {
         accept_loop(ctx, addr).await;
     };
-    static QUEUE: WakeQueue<MAX_TASKS_COUNT> = WakeQueue::new();
-    let mut memory = [MaybeUninit::uninit(); MEMSIZE];
-    let mut event_loop = ServerLoop::new(&QUEUE, &mut memory, Server::default(), root)?;
+    static STORAGE: ServerStorage = ServerStorage::new();
+    let mut event_loop = ServerLoop::new(&STORAGE, Server::default(), root)?;
     for line in core::mem::take(&mut event_loop.state_mut().log) {
         println!("{line}");
     }

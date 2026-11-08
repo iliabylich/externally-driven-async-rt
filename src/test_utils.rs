@@ -13,7 +13,7 @@ use rustix::{
 };
 
 use crate::{
-    Context, Error, EventLoop, State, WakeQueue, io::IoRegistration, selectors::Direction,
+    Context, Error, EventLoop, LoopStorage, State, io::IoRegistration, selectors::Direction,
 };
 
 pub(crate) const TEST_MAX_TASKS_COUNT: usize = 16;
@@ -22,7 +22,14 @@ pub(crate) const TEST_MAX_ROOT_TASK_SIZE: usize = 2048;
 pub(crate) const TEST_MAX_TIMERS_COUNT: usize = 16;
 pub(crate) const TEST_MAX_IO_COUNT: usize = 8;
 
-pub(crate) type TestQueue = WakeQueue<TEST_MAX_TASKS_COUNT>;
+pub(crate) type TestStorage<S = Log> = LoopStorage<
+    S,
+    TEST_MAX_TASKS_COUNT,
+    TEST_MAX_TASK_SIZE,
+    TEST_MAX_ROOT_TASK_SIZE,
+    TEST_MAX_TIMERS_COUNT,
+    TEST_MAX_IO_COUNT,
+>;
 
 pub(crate) type TestLoop<'a, S> = EventLoop<
     'a,
@@ -367,5 +374,3 @@ pub(crate) fn run_until_events<
         assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
     }
 }
-
-pub(crate) const TEST_MEMORY: usize = 64 * 1024;

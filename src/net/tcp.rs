@@ -145,7 +145,7 @@ impl TcpStream {
 
 #[cfg(test)]
 mod tests {
-    use core::{future::pending, mem::MaybeUninit, net::SocketAddr};
+    use core::{future::pending, net::SocketAddr};
 
     use rustix::{
         fd::OwnedFd,
@@ -156,8 +156,8 @@ mod tests {
     use crate::{
         net::{TcpListener, TcpStream},
         test_utils::{
-            self, Log, TEST_MEMORY, TestLoop, TestQueue, drain_until_readable, is_writable,
-            peer_read_exact, raw_accept, run_until_events,
+            self, Log, TestLoop, TestStorage, drain_until_readable, is_writable, peer_read_exact,
+            raw_accept, run_until_events,
         },
     };
 
@@ -179,13 +179,11 @@ mod tests {
     #[test]
     fn echo_with_a_raw_peer() {
         let (listener, addr) = raw_listener();
-        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
-                static QUEUE: TestQueue = TestQueue::new();
-                &QUEUE
+                static STORAGE: TestStorage = TestStorage::new();
+                &STORAGE
             },
-            &mut memory,
             Log::default(),
             async move |ctx| {
                 let mut stream = TcpStream::connect(ctx, addr).await.unwrap();
@@ -220,13 +218,11 @@ mod tests {
     fn listener_accepts_a_raw_client() {
         let mut listener = TcpListener::bind(LOCALHOST).unwrap();
         let addr = listener.local_addr().unwrap();
-        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
-                static QUEUE: TestQueue = TestQueue::new();
-                &QUEUE
+                static STORAGE: TestStorage = TestStorage::new();
+                &STORAGE
             },
-            &mut memory,
             Log::default(),
             async move |ctx| {
                 let (mut stream, peer) = listener.accept(ctx).await.unwrap();
@@ -259,13 +255,11 @@ mod tests {
     #[test]
     fn connect_to_a_closed_port_fails() {
         let addr = TcpListener::bind(LOCALHOST).unwrap().local_addr().unwrap();
-        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
-                static QUEUE: TestQueue = TestQueue::new();
-                &QUEUE
+                static STORAGE: TestStorage = TestStorage::new();
+                &STORAGE
             },
-            &mut memory,
             Log::default(),
             async move |ctx| {
                 let errno = TcpStream::connect(ctx, addr).await.err().unwrap();
@@ -287,13 +281,11 @@ mod tests {
         const CHUNK: usize = 512;
         let mut listener = TcpListener::bind(LOCALHOST).unwrap();
         let addr = listener.local_addr().unwrap();
-        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
-                static QUEUE: TestQueue = TestQueue::new();
-                &QUEUE
+                static STORAGE: TestStorage = TestStorage::new();
+                &STORAGE
             },
-            &mut memory,
             Log::default(),
             async move |ctx| {
                 ctx.spawn(async move |ctx| {

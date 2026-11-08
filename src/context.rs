@@ -13,7 +13,7 @@ pub struct Context<
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
 > {
-    storage: &'a Storage<
+    storage: Storage<
         'a,
         S,
         MAX_TASKS_COUNT,
@@ -54,7 +54,7 @@ impl<
         MAX_TIMERS_COUNT,
         MAX_IO_COUNT,
     > {
-        self.storage
+        &self.storage
     }
 
     pub fn dispatch(&self, event: S::Event) {
@@ -65,25 +65,26 @@ impl<
         // can't reach one: the task lends it to its closure for a higher-ranked lifetime, so it
         // can't be stored in `S` or its events, whose lifetimes are fixed when the loop is
         // created. So `apply` can't re-enter `dispatch`: this is the only reference.
-        unsafe { &mut *self.storage.state.get() }.apply(event);
+        unsafe { &mut *self.storage.state.get() }
+            .as_mut()
+            .expect("the state is set while tasks run")
+            .apply(event);
     }
 
     pub fn spawn<F>(
         &self,
         f: F,
-    ) -> JoinHandle<'_, 'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+    ) -> JoinHandle<'_, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
     where
         F: AsyncFnOnce(&Self) + 'a,
     {
         let storage = self.storage;
-        let id = storage
-            .tasks
-            .spawn(async move { f(&Self { storage }).await });
-        JoinHandle::new(&storage.tasks, id)
+        let id = storage.spawn(async move { f(&Self { storage }).await });
+        JoinHandle::new(&self.storage.tasks, id)
     }
 
     pub(crate) fn spawn_root<F>(
-        storage: &'a Storage<
+        storage: Storage<
             'a,
             S,
             MAX_TASKS_COUNT,
@@ -96,9 +97,7 @@ impl<
     ) where
         F: AsyncFnOnce(&Self) + 'a,
     {
-        storage
-            .tasks
-            .spawn_root(async move { f(&Self { storage }).await });
+        storage.spawn_root(async move { f(&Self { storage }).await });
     }
 
     pub fn sleep(&self, duration: Duration) -> Sleep<'_, MAX_TIMERS_COUNT> {

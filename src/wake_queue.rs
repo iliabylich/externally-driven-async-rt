@@ -5,7 +5,7 @@ use core::{
     task::{RawWaker, RawWakerVTable, Waker},
 };
 
-use crate::thread_id::ThreadId;
+use crate::{storage::TaskId, thread_id::ThreadId};
 
 const NONE: u32 = u32::MAX;
 const UNTRACKED: u64 = u64::MAX;
@@ -22,7 +22,7 @@ struct Link {
     generation: AtomicU64,
 }
 
-pub struct WakeQueue<const N: usize> {
+pub(crate) struct WakeQueue<const N: usize> {
     owner: AtomicUsize,
     head: AtomicU32,
     tail: AtomicU32,
@@ -30,11 +30,7 @@ pub struct WakeQueue<const N: usize> {
 }
 
 impl<const N: usize> WakeQueue<N> {
-    #[expect(
-        clippy::new_without_default,
-        reason = "a queue lives in a `static`, which needs a `const fn`"
-    )]
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         const {
             assert!(N > 0, "wake queue capacity must not be zero");
             assert!(
@@ -97,21 +93,29 @@ impl<const N: usize> WakeQueue<N> {
         }
     }
 
-    pub(crate) fn generation(&self, slot: u32) -> Option<u32> {
+    fn generation(&self, slot: u32) -> Option<u32> {
         let generation = self.links[slot as usize].generation.load(Relaxed);
         (generation != UNTRACKED).then_some(generation as u32)
     }
 
-    pub(crate) fn set_generation(&self, slot: u32, generation: Option<u32>) {
-        let generation = generation.map_or(UNTRACKED, u64::from);
-        self.links[slot as usize]
+    pub(crate) fn track(&self, id: TaskId) {
+        let generation = u64::from(id.generation());
+        self.links[id.slot() as usize]
             .generation
             .store(generation, Relaxed);
     }
 
+    pub(crate) fn untrack(&self, id: TaskId) {
+        if self.generation(id.slot()) == Some(id.generation()) {
+            self.links[id.slot() as usize]
+                .generation
+                .store(UNTRACKED, Relaxed);
+        }
+    }
+
     pub(crate) fn push(&self, slot: u32) {
         let link = &self.links[slot as usize];
-        if link.queued.load(Relaxed) {
+        if self.generation(slot).is_none() || link.queued.load(Relaxed) {
             return;
         }
         link.queued.store(true, Relaxed);
@@ -123,7 +127,16 @@ impl<const N: usize> WakeQueue<N> {
         self.tail.store(slot, Relaxed);
     }
 
-    pub(crate) fn pop(&self) -> Option<u32> {
+    pub(crate) fn pop(&self) -> Option<TaskId> {
+        loop {
+            let slot = self.pop_slot()?;
+            if let Some(generation) = self.generation(slot) {
+                return Some(TaskId::from_parts(slot, generation));
+            }
+        }
+    }
+
+    fn pop_slot(&self) -> Option<u32> {
         let slot = decode(self.head.load(Relaxed))?;
         let link = &self.links[slot as usize];
         let next = link.next.load(Relaxed);
@@ -173,94 +186,143 @@ fn drop_waker(_: *const ()) {}
 
 #[cfg(test)]
 mod tests {
-    use crate::{test_utils::assert_yields, wake_queue::WakeQueue};
+    use crate::{storage::TaskId, test_utils::assert_yields, wake_queue::WakeQueue};
 
-    fn drain<const N: usize>(queue: &WakeQueue<N>) -> impl Iterator<Item = u32> + '_ {
+    fn tracked<const N: usize>(queue: &WakeQueue<N>, slot: u32, generation: u32) -> TaskId {
+        let id = TaskId::from_parts(slot, generation);
+        queue.track(id);
+        id
+    }
+
+    fn drain<const N: usize>(queue: &WakeQueue<N>) -> impl Iterator<Item = TaskId> + '_ {
         core::iter::from_fn(|| queue.pop())
     }
 
     #[test]
     fn pops_in_push_order() {
         let queue = WakeQueue::<4>::new();
-        for slot in [2, 0, 3] {
-            queue.push(slot);
+        let ids = [2, 0, 3].map(|slot| tracked(&queue, slot, 0));
+        for id in ids {
+            queue.push(id.slot());
         }
         assert!(!queue.is_empty());
-        assert_yields(drain(&queue), [2, 0, 3]);
+        assert_yields(drain(&queue), ids);
         assert!(queue.is_empty());
     }
 
     #[test]
     fn a_queued_slot_is_pushed_once() {
         let queue = WakeQueue::<2>::new();
+        let a = tracked(&queue, 0, 0);
+        let b = tracked(&queue, 1, 0);
         queue.push(0);
         queue.push(1);
         queue.push(0);
-        assert_yields(drain(&queue), [0, 1]);
+        assert_yields(drain(&queue), [a, b]);
         queue.push(0);
-        assert_yields(drain(&queue), [0]);
+        assert_yields(drain(&queue), [a]);
     }
 
     #[test]
     fn re_push_during_draining_goes_to_the_back() {
         let queue = WakeQueue::<2>::new();
+        let a = tracked(&queue, 0, 0);
+        let b = tracked(&queue, 1, 0);
         queue.push(0);
         queue.push(1);
-        assert_eq!(queue.pop(), Some(0));
+        assert_eq!(queue.pop(), Some(a));
         queue.push(0);
-        assert_yields(drain(&queue), [1, 0]);
+        assert_yields(drain(&queue), [b, a]);
     }
 
     #[test]
-    fn generations_are_per_slot() {
+    fn pushing_an_untracked_slot_is_ignored() {
+        let queue = WakeQueue::<1>::new();
+        queue.push(0);
+        assert!(queue.is_empty());
+        let old = tracked(&queue, 0, 0);
+        queue.untrack(old);
+        queue.push(0);
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn a_reused_slot_pops_its_new_task() {
+        let queue = WakeQueue::<1>::new();
+        let old = tracked(&queue, 0, 0);
+        queue.untrack(old);
+        let new = tracked(&queue, 0, 1);
+        queue.push(old.slot());
+        assert_yields(drain(&queue), [new]);
+    }
+
+    #[test]
+    fn a_task_finished_while_queued_is_skipped() {
         let queue = WakeQueue::<2>::new();
-        queue.set_generation(1, Some(7));
-        assert_eq!(queue.generation(0), None);
-        assert_eq!(queue.generation(1), Some(7));
-        queue.set_generation(1, None);
-        assert_eq!(queue.generation(1), None);
+        let a = tracked(&queue, 0, 0);
+        let b = tracked(&queue, 1, 0);
+        queue.push(a.slot());
+        queue.push(b.slot());
+        queue.untrack(a);
+        assert_yields(drain(&queue), [b]);
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn untracking_a_newer_task_is_ignored() {
+        let queue = WakeQueue::<1>::new();
+        let old = TaskId::from_parts(0, 0);
+        let new = tracked(&queue, 0, 1);
+        queue.untrack(old);
+        queue.push(new.slot());
+        assert_yields(drain(&queue), [new]);
     }
 
     #[test]
     fn waking_pushes_the_slot() {
         static QUEUE: WakeQueue<2> = WakeQueue::new();
         QUEUE.claim();
+        let id = tracked(&QUEUE, 1, 0);
         let waker = QUEUE.waker(1);
         waker.wake_by_ref();
-        assert_yields(drain(&QUEUE), [1]);
+        assert_yields(drain(&QUEUE), [id]);
         let clone = waker.clone();
         drop(waker);
         clone.wake();
-        assert_yields(drain(&QUEUE), [1]);
+        assert_yields(drain(&QUEUE), [id]);
     }
 
     #[test]
     fn duplicate_wakes_queue_the_slot_once() {
         static QUEUE: WakeQueue<2> = WakeQueue::new();
         QUEUE.claim();
+        let id = tracked(&QUEUE, 0, 0);
         let waker = QUEUE.waker(0);
         waker.wake_by_ref();
         waker.wake_by_ref();
         waker.wake();
-        assert_yields(drain(&QUEUE), [0]);
+        assert_yields(drain(&QUEUE), [id]);
     }
 
     #[test]
     fn waking_after_the_queue_was_mutated() {
         static QUEUE: WakeQueue<2> = WakeQueue::new();
         QUEUE.claim();
+        let a = tracked(&QUEUE, 0, 0);
+        let b = tracked(&QUEUE, 1, 0);
         let waker = QUEUE.waker(0);
         QUEUE.push(1);
         waker.wake_by_ref();
-        assert_eq!(QUEUE.pop(), Some(1));
+        assert_eq!(QUEUE.pop(), Some(b));
         waker.wake();
-        assert_yields(drain(&QUEUE), [0]);
+        assert_yields(drain(&QUEUE), [a]);
     }
 
     #[test]
     fn dropping_does_not_wake() {
         static QUEUE: WakeQueue<2> = WakeQueue::new();
         QUEUE.claim();
+        tracked(&QUEUE, 0, 0);
         let waker = QUEUE.waker(0);
         drop(waker.clone());
         drop(waker);

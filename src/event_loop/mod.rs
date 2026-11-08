@@ -1,14 +1,10 @@
-use core::mem::MaybeUninit;
-
 use rustix::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
 use crate::{
     context::Context,
-    ready::ReadyQueue,
     selectors::Selector,
     state::State,
-    storage::{Root, RootStatus, Storage},
-    wake_queue::WakeQueue,
+    storage::{LoopStorage, Root, RootStatus, Storage},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,7 +33,7 @@ pub struct EventLoop<
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
 > {
-    pub(crate) storage: &'a Storage<
+    pub(crate) storage: Storage<
         'a,
         S,
         MAX_TASKS_COUNT,
@@ -67,9 +63,8 @@ impl<
         MAX_IO_COUNT,
     >
 {
-    pub const REQUIRED_SIZE: usize = size_of::<
-        Storage<
-            'a,
+    pub fn new<F>(
+        storage: &'static LoopStorage<
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,
@@ -77,21 +72,6 @@ impl<
             MAX_TIMERS_COUNT,
             MAX_IO_COUNT,
         >,
-    >() + align_of::<
-        Storage<
-            'a,
-            S,
-            MAX_TASKS_COUNT,
-            MAX_TASK_SIZE,
-            MAX_ROOT_TASK_SIZE,
-            MAX_TIMERS_COUNT,
-            MAX_IO_COUNT,
-        >,
-    >() - 1;
-
-    pub fn new<const MEMORY: usize, F>(
-        queue: &'static WakeQueue<MAX_TASKS_COUNT>,
-        memory: &'a mut [MaybeUninit<u8>; MEMORY],
         state: S,
         f: F,
     ) -> Result<Self, Error>
@@ -109,10 +89,10 @@ impl<
             ) + 'a,
     {
         let selector = Selector::new().map_err(Error::Io)?;
-        let storage = Storage::init(place(memory), ReadyQueue::new(queue), selector, state);
+        let storage = storage.claim(Some(selector), state);
         let event_loop = Self { storage };
         Context::spawn_root(storage, f);
-        match storage.tasks.run_ready() {
+        match storage.run_ready() {
             RootStatus::Running => {}
             RootStatus::Finished => return Err(Error::RootFinished),
         }
@@ -130,7 +110,7 @@ impl<
             if !storage.tasks.has_ready() {
                 break RootStatus::Running;
             }
-            if storage.tasks.run_ready() == RootStatus::Finished {
+            if storage.run_ready() == RootStatus::Finished {
                 break RootStatus::Finished;
             }
         };
@@ -142,11 +122,13 @@ impl<
         // inside tasks, i.e. only while `new`, a drain or `drop` holds exclusive access to the
         // loop; `&mut self` rules all of those out.
         unsafe { &mut *self.storage.state.get() }
+            .as_mut()
+            .expect("the state is set until the loop is dropped")
     }
 
     fn finish_drain(&self, status: RootStatus) -> Result<(), Error> {
         if status == RootStatus::Finished {
-            self.storage.tasks.drop_all();
+            self.storage.drop_all();
         }
         self.storage.flush().map_err(Error::Io)?;
         match status {
@@ -177,18 +159,17 @@ impl<
 {
     fn drop(&mut self) {
         self.storage.clear();
-        // SAFETY: this loop is the only one using the storage, and `drop` runs at most once, so
-        // the state and the selector are dropped exactly once, and never used again. No task (so
-        // no `Context` and no reference into the storage) is left after `clear`; the state was
-        // initialized in `new`, and the storage's other parts hold nothing that needs dropping
-        // (the ready queue holds only `Copy` data, the blocks no live future, the pools nothing
-        // after `clear`). The selector is moved out (a read) rather than dropped in place,
-        // because dropping needs write access to the storage, which only shared references (like
-        // `self.storage`) point to.
-        unsafe {
-            core::ptr::drop_in_place(self.storage.state.get());
-            drop(core::ptr::read(&self.storage.selector));
-        }
+        // SAFETY: this loop is the only one using the storage (it claimed it), and no task (so no
+        // `Context`, and no reference to the state or the selector) is left after `clear`;
+        // `&mut self` rules out the loop's own borrows.
+        let (state, selector) = unsafe {
+            (
+                (*self.storage.state.get()).take(),
+                (*self.storage.selector.get()).take(),
+            )
+        };
+        drop(state);
+        drop(selector);
     }
 }
 
@@ -212,7 +193,7 @@ impl<
     >
 {
     fn as_fd(&self) -> BorrowedFd<'_> {
-        self.storage.selector.as_fd()
+        self.storage.selector().as_fd()
     }
 }
 
@@ -238,21 +219,6 @@ impl<
     fn as_raw_fd(&self) -> RawFd {
         self.as_fd().as_raw_fd()
     }
-}
-
-fn place<T, const SIZE: usize>(memory: &mut [MaybeUninit<u8>; SIZE]) -> &mut MaybeUninit<T> {
-    const {
-        assert!(
-            SIZE >= size_of::<T>() + align_of::<T>() - 1,
-            "an EventLoop memory is smaller than its REQUIRED_SIZE"
-        );
-    }
-    let addr = memory.as_ptr().addr();
-    let start = addr.next_multiple_of(align_of::<T>()) - addr;
-    // SAFETY: `start` is less than `T`'s alignment, so a `T` fits in `memory` from there (asserted
-    // above), aligned. `MaybeUninit` needs no initialized contents, and `memory` is borrowed
-    // exclusively for as long as the result.
-    unsafe { &mut *memory.as_mut_ptr().add(start).cast() }
 }
 
 #[cfg(test)]

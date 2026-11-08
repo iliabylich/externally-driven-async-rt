@@ -1,7 +1,6 @@
 use core::{
     cell::{Cell, UnsafeCell},
     future::Future,
-    marker::PhantomData,
     mem::MaybeUninit,
     ptr::NonNull,
     task::Waker,
@@ -9,9 +8,9 @@ use core::{
 
 use crate::{
     pool::{Index, ObjectPool},
-    ready::ReadyQueue,
     storage::store_waker,
     task::{JoinStatus, Task},
+    wake_queue::WakeQueue,
 };
 
 #[derive(Default)]
@@ -22,7 +21,6 @@ enum TaskSlot {
     Polling,
 }
 
-#[derive(Default)]
 pub(crate) struct TaskEntry {
     task: Cell<TaskSlot>,
     join_waiter: Cell<Option<Waker>>,
@@ -64,44 +62,39 @@ pub(crate) enum Root {
 }
 
 pub(crate) struct Tasks<
-    'a,
     const MAX_TASKS_COUNT: usize,
     const MAX_TASK_SIZE: usize,
     const MAX_ROOT_TASK_SIZE: usize,
 > {
     pool: ObjectPool<TaskEntry, MAX_TASKS_COUNT>,
-    ready: ReadyQueue<MAX_TASKS_COUNT>,
+    queue: WakeQueue<MAX_TASKS_COUNT>,
     slab: [Aligned16<MAX_TASK_SIZE>; MAX_TASKS_COUNT],
     root_region: Aligned16<MAX_ROOT_TASK_SIZE>,
     root: Cell<Root>,
-    futures: PhantomData<Cell<&'a ()>>,
 }
 
-impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize>
-    Tasks<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize>
+    Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
 {
-    pub(crate) fn init<'p>(
-        place: &'p mut MaybeUninit<Self>,
-        ready: ReadyQueue<MAX_TASKS_COUNT>,
-    ) -> &'p Self {
-        let ptr = place.as_mut_ptr();
-        // SAFETY: `ptr` points to `place`, borrowed exclusively until the end; the fields are
-        // disjoint, `&raw mut` creates no reference to them while they're uninitialized, and
-        // `MaybeUninit<T>` has `T`'s layout.
-        let (pool, ready_place, root, futures) = unsafe {
-            (
-                &mut *(&raw mut (*ptr).pool).cast::<MaybeUninit<_>>(),
-                &mut *(&raw mut (*ptr).ready).cast::<MaybeUninit<_>>(),
-                &mut *(&raw mut (*ptr).root).cast::<MaybeUninit<_>>(),
-                &mut *(&raw mut (*ptr).futures).cast::<MaybeUninit<_>>(),
-            )
-        };
-        ObjectPool::<TaskEntry, MAX_TASKS_COUNT>::init(pool);
-        ready_place.write(ready);
-        root.write(Cell::new(Root::Unset));
-        futures.write(PhantomData::<Cell<&'a ()>>);
-        // SAFETY: every field was written above, except the blocks, which are `MaybeUninit`.
-        unsafe { place.assume_init_ref() }
+    pub(crate) const fn new() -> Self {
+        Self {
+            pool: ObjectPool::new(
+                [const {
+                    TaskEntry {
+                        task: Cell::new(TaskSlot::Empty),
+                        join_waiter: Cell::new(None),
+                    }
+                }; MAX_TASKS_COUNT],
+            ),
+            queue: WakeQueue::new(),
+            slab: [const { Aligned16(UnsafeCell::new(MaybeUninit::uninit())) }; MAX_TASKS_COUNT],
+            root_region: Aligned16(UnsafeCell::new(MaybeUninit::uninit())),
+            root: Cell::new(Root::Unset),
+        }
+    }
+
+    pub(crate) fn claim(&self) {
+        self.queue.claim();
     }
 
     pub(crate) fn root(&self) -> Root {
@@ -114,13 +107,17 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
     }
 
     #[cfg(test)]
-    pub(crate) fn ready(&self) -> ReadyQueue<MAX_TASKS_COUNT> {
-        self.ready
+    pub(crate) fn queue(&self) -> &WakeQueue<MAX_TASKS_COUNT> {
+        &self.queue
     }
 
-    pub(crate) fn insert<Fut>(&self, future: Fut) -> TaskId
+    /// # Safety
+    ///
+    /// Everything `future` borrows must outlive every later call to `run_ready`, `remove` and
+    /// `drop_all`, because those poll and drop it.
+    pub(crate) unsafe fn insert<Fut>(&self, future: Fut) -> TaskId
     where
-        Fut: Future<Output = ()> + 'a,
+        Fut: Future<Output = ()>,
     {
         assert!(
             size_of::<Fut>() <= MAX_TASK_SIZE,
@@ -138,17 +135,19 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
         let memory = NonNull::from(&self.slab[id.slot() as usize].0).cast();
         // SAFETY: `Fut` fits the slab's blocks (checked above). The slot's block is unused: the
         // slot was free, and a slot is only freed after its future was dropped. The slot stays
-        // reserved until this future is dropped. Futures are only polled and dropped through
-        // `&self`, which can't outlive `'a`, and `Tasks` is invariant in `'a`, so `'a` can't be
-        // shortened to accept futures that live less than the other ones.
+        // reserved until this future is dropped, which happens (if at all) while everything it
+        // borrows is alive, as the caller guarantees.
         let future = unsafe { Task::write(memory, future) };
         self.occupy(id, entry, future);
         id
     }
 
-    pub(crate) fn spawn_root<Fut>(&self, future: Fut)
+    /// # Safety
+    ///
+    /// As for `insert`.
+    pub(crate) unsafe fn spawn_root<Fut>(&self, future: Fut)
     where
-        Fut: Future<Output = ()> + 'a,
+        Fut: Future<Output = ()>,
     {
         assert!(
             matches!(self.root.get(), Root::Unset),
@@ -170,17 +169,17 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
         };
         // SAFETY: `Fut` fits the root region (asserted above), and the region is unused: the root
         // is still `Unset` (asserted above), and leaves that state below, so this is the only
-        // call that gets here. `'a` holds as in `insert`.
+        // call that gets here. The borrows outlive the future's use as in `insert`.
         let future = unsafe { Task::write(NonNull::from(&self.root_region.0).cast(), future) };
         self.occupy(id, entry, future);
-        self.ready.push(id.slot());
+        self.queue.push(id.slot());
         self.root.set(Root::Running(id));
     }
 
     fn occupy(&self, id: TaskId, entry: &TaskEntry, future: Task) {
         entry.task.set(TaskSlot::Idle(future));
         entry.join_waiter.set(None);
-        self.ready.track(id);
+        self.queue.track(id);
     }
 
     #[cfg(test)]
@@ -188,7 +187,10 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
         self.pool.get(id).is_some_and(TaskEntry::has_task)
     }
 
-    pub(crate) fn remove(&self, id: TaskId) -> Option<Option<Waker>> {
+    /// # Safety
+    ///
+    /// Everything the task's future borrows must still be alive, because it's dropped here.
+    pub(crate) unsafe fn remove(&self, id: TaskId) -> Option<Option<Waker>> {
         let entry = self.pool.get(id)?;
         let task = match entry.task.take() {
             TaskSlot::Idle(task) => task,
@@ -204,7 +206,7 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
     fn free(&self, id: TaskId, entry: &TaskEntry, task: Task) -> Option<Waker> {
         entry.task.set(TaskSlot::Empty);
         let join_waiter = entry.join_waiter.take();
-        self.ready.untrack(id);
+        self.queue.untrack(id);
         drop(task);
         self.pool.free(id);
         join_waiter
@@ -220,22 +222,30 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
         }
     }
 
-    pub(crate) fn spawn<Fut>(&self, future: Fut) -> TaskId
+    /// # Safety
+    ///
+    /// As for `insert`.
+    pub(crate) unsafe fn spawn<Fut>(&self, future: Fut) -> TaskId
     where
-        Fut: Future<Output = ()> + 'a,
+        Fut: Future<Output = ()>,
     {
-        let id = self.insert(future);
-        self.ready.push(id.slot());
+        // SAFETY: guaranteed by the caller.
+        let id = unsafe { self.insert(future) };
+        self.queue.push(id.slot());
         id
     }
 
     pub(crate) fn has_ready(&self) -> bool {
-        !self.ready.is_empty()
+        !self.queue.is_empty()
     }
 
-    pub(crate) fn run_ready(&self) -> RootStatus {
+    /// # Safety
+    ///
+    /// Everything the stored futures borrow must still be alive, because they're polled and
+    /// dropped here.
+    pub(crate) unsafe fn run_ready(&'static self) -> RootStatus {
         loop {
-            let Some(id) = self.ready.pop() else {
+            let Some(id) = self.queue.pop() else {
                 return RootStatus::Running;
             };
             let Some(entry) = self.pool.get(id) else {
@@ -246,7 +256,7 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
                 TaskSlot::Polling => panic!("a task can't be polled re-entrantly"),
                 TaskSlot::Empty => unreachable!("an allocated task always has a future"),
             };
-            let waker = self.ready.waker(id.slot());
+            let waker = self.queue.waker(id.slot());
             let mut cx = core::task::Context::from_waker(&waker);
             if task.poll(&mut cx).is_pending() {
                 entry.task.set(TaskSlot::Idle(task));
@@ -264,9 +274,13 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
         }
     }
 
-    pub(crate) fn drop_all(&self) {
+    /// # Safety
+    ///
+    /// As for `run_ready`.
+    pub(crate) unsafe fn drop_all(&self) {
         while let Some((id, _)) = self.pool.iter().find(|(_, entry)| entry.is_idle()) {
-            self.remove(id);
+            // SAFETY: guaranteed by the caller.
+            unsafe { self.remove(id) };
         }
     }
 
@@ -278,38 +292,35 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
 
 #[cfg(test)]
 mod tests {
-    use core::{cell::Cell, mem::MaybeUninit, task::Waker};
+    use core::{cell::Cell, task::Waker};
 
     use crate::{
-        WakeQueue,
-        ready::ReadyQueue,
-        storage::{Root, RootStatus, TaskId, Tasks},
+        LoopStorage,
+        storage::{Root, RootStatus, Storage, TaskId},
         task::JoinStatus,
         test_utils::{DropFlag, flagged_task},
     };
 
     const MAX_TASK_SIZE: usize = 1024;
 
-    type TestTasks<'a, const MAX_TASKS_COUNT: usize> = Tasks<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, 0>;
+    type TasksStorage<const MAX_TASKS_COUNT: usize> =
+        LoopStorage<(), MAX_TASKS_COUNT, MAX_TASK_SIZE, 0, 1, 1>;
 
     #[test]
     fn removing_a_task_drops_its_future_and_returns_its_join_waiter() {
         let dropped = Cell::new(false);
-        let mut place = MaybeUninit::uninit();
-        let tasks = TestTasks::<2>::init(
-            &mut place,
-            ReadyQueue::new({
-                static QUEUE: WakeQueue<2> = WakeQueue::new();
-                &QUEUE
-            }),
-        );
-        let id = tasks.insert(flagged_task(&dropped));
+        let storage = {
+            static STORAGE: TasksStorage<2> = TasksStorage::new();
+            STORAGE.claim(None, ())
+        };
+        let tasks = &storage.tasks;
+        let id = storage.insert(flagged_task(&dropped));
         assert!(tasks.contains(id));
         assert_eq!(
             tasks.set_join_waiter(id, Waker::noop()),
             JoinStatus::Running
         );
-        let join_waiter = tasks.remove(id).unwrap();
+        let join_waiter = storage.remove(id).unwrap();
         assert!(dropped.get());
         assert!(join_waiter.is_some());
         assert!(!tasks.contains(id));
@@ -321,17 +332,14 @@ mod tests {
 
     #[test]
     fn finished_task_id_never_matches_a_reused_slot() {
-        let mut place = MaybeUninit::uninit();
-        let tasks = TestTasks::<1>::init(
-            &mut place,
-            ReadyQueue::new({
-                static QUEUE: WakeQueue<1> = WakeQueue::new();
-                &QUEUE
-            }),
-        );
-        let first = tasks.insert(async {});
-        tasks.remove(first);
-        let second = tasks.insert(async {});
+        let storage = {
+            static STORAGE: TasksStorage<1> = TasksStorage::new();
+            STORAGE.claim(None, ())
+        };
+        let tasks = &storage.tasks;
+        let first = storage.insert(async {});
+        storage.remove(first);
+        let second = storage.insert(async {});
         assert_ne!(first, second);
         assert!(!tasks.contains(first));
         assert_eq!(
@@ -343,37 +351,30 @@ mod tests {
     #[test]
     #[should_panic(expected = "more than 1 concurrent tasks")]
     fn full_task_pool_panics() {
-        let mut place = MaybeUninit::uninit();
-        let tasks = TestTasks::<1>::init(
-            &mut place,
-            ReadyQueue::new({
-                static QUEUE: WakeQueue<1> = WakeQueue::new();
-                &QUEUE
-            }),
-        );
-        tasks.insert(async {});
-        tasks.insert(async {});
+        let storage = {
+            static STORAGE: TasksStorage<1> = TasksStorage::new();
+            STORAGE.claim(None, ())
+        };
+        storage.insert(async {});
+        storage.insert(async {});
     }
 
     #[test]
     fn drop_all_drops_every_future() {
         let dropped = Cell::new(false);
-        let mut place = MaybeUninit::uninit();
-        let tasks = TestTasks::<2>::init(
-            &mut place,
-            ReadyQueue::new({
-                static QUEUE: WakeQueue<2> = WakeQueue::new();
-                &QUEUE
-            }),
-        );
-        tasks.insert(flagged_task(&dropped));
-        tasks.drop_all();
+        let storage = {
+            static STORAGE: TasksStorage<2> = TasksStorage::new();
+            STORAGE.claim(None, ())
+        };
+        let tasks = &storage.tasks;
+        storage.insert(flagged_task(&dropped));
+        storage.drop_all();
         assert!(dropped.get());
         assert_eq!(tasks.count(), 0);
     }
 
     struct SpawnOnDrop<'a> {
-        tasks: &'a TestTasks<'a, 2>,
+        storage: Storage<'a, (), 2, MAX_TASK_SIZE, 0, 1, 1>,
         id: &'a Cell<Option<TaskId>>,
         spawned: &'a Cell<Option<TaskId>>,
     }
@@ -381,13 +382,14 @@ mod tests {
     impl Drop for SpawnOnDrop<'_> {
         fn drop(&mut self) {
             let id = self.id.get().unwrap();
-            let tasks = self.tasks;
+            let storage = self.storage;
+            let tasks = &storage.tasks;
             assert!(!tasks.contains(id));
             assert_eq!(
                 tasks.set_join_waiter(id, Waker::noop()),
                 JoinStatus::Finished
             );
-            self.spawned.set(Some(tasks.insert(async {})));
+            self.spawned.set(Some(storage.insert(async {})));
         }
     }
 
@@ -395,24 +397,21 @@ mod tests {
     fn a_task_spawned_while_one_is_dropped_gets_another_slot() {
         let id = Cell::new(None);
         let spawned = Cell::new(None);
-        let mut place = MaybeUninit::uninit();
-        let tasks = TestTasks::<2>::init(
-            &mut place,
-            ReadyQueue::new({
-                static QUEUE: WakeQueue<2> = WakeQueue::new();
-                &QUEUE
-            }),
-        );
+        let storage = {
+            static STORAGE: TasksStorage<2> = TasksStorage::new();
+            STORAGE.claim(None, ())
+        };
+        let tasks = &storage.tasks;
         let guard = SpawnOnDrop {
-            tasks,
+            storage,
             id: &id,
             spawned: &spawned,
         };
-        let dropping = tasks.insert(async move {
+        let dropping = storage.insert(async move {
             let _guard = guard;
         });
         id.set(Some(dropping));
-        tasks.remove(dropping).unwrap();
+        storage.remove(dropping).unwrap();
         let spawned = spawned.get().unwrap();
         assert_ne!(spawned.slot(), dropping.slot());
         assert!(tasks.contains(spawned));
@@ -420,37 +419,30 @@ mod tests {
 
     #[test]
     fn full_size_futures_in_neighbouring_slots_do_not_overlap() {
-        let mut place = MaybeUninit::uninit();
-        let tasks = TestTasks::<2>::init(
-            &mut place,
-            ReadyQueue::new({
-                static QUEUE: WakeQueue<2> = WakeQueue::new();
-                &QUEUE
-            }),
-        );
+        let storage = {
+            static STORAGE: TasksStorage<2> = TasksStorage::new();
+            STORAGE.claim(None, ())
+        };
+        let tasks = &storage.tasks;
         let ids = [1u8, 2].map(|byte| {
             let data = [byte; MAX_TASK_SIZE - 16];
-            tasks.spawn(async move {
+            storage.spawn(async move {
                 assert!(data.iter().all(|b| *b == byte));
             })
         });
-        assert_eq!(tasks.run_ready(), RootStatus::Running);
+        assert_eq!(storage.run_ready(), RootStatus::Running);
         assert!(ids.iter().all(|id| !tasks.contains(*id)));
     }
 
     #[test]
     #[should_panic(expected = "a task future of 8193 bytes doesn't fit MAX_TASK_SIZE")]
     fn a_too_big_future_panics() {
-        let mut place = MaybeUninit::uninit();
-        let tasks = TestTasks::<1>::init(
-            &mut place,
-            ReadyQueue::new({
-                static QUEUE: WakeQueue<1> = WakeQueue::new();
-                &QUEUE
-            }),
-        );
+        let storage = {
+            static STORAGE: TasksStorage<1> = TasksStorage::new();
+            STORAGE.claim(None, ())
+        };
         let data = [0u8; 8192];
-        tasks.insert(async move {
+        storage.insert(async move {
             let _data = data;
         });
     }
@@ -473,34 +465,27 @@ mod tests {
 
     #[test]
     fn futures_up_to_task_size_fit() {
-        let mut place = MaybeUninit::uninit();
-        let tasks = Tasks::<2, 100, 0>::init(
-            &mut place,
-            ReadyQueue::new({
-                static QUEUE: WakeQueue<2> = WakeQueue::new();
-                &QUEUE
-            }),
-        );
+        let storage = {
+            static STORAGE: LoopStorage<(), 2, 100, 0, 1, 1> = LoopStorage::new();
+            STORAGE.claim(None, ())
+        };
+        let tasks = &storage.tasks;
         let ids = [
-            tasks.spawn(FixedFuture([1u8; 100])),
-            tasks.spawn(FixedFuture((Align16, [2u8; 80]))),
+            storage.spawn(FixedFuture([1u8; 100])),
+            storage.spawn(FixedFuture((Align16, [2u8; 80]))),
         ];
-        assert_eq!(tasks.run_ready(), RootStatus::Running);
+        assert_eq!(storage.run_ready(), RootStatus::Running);
         assert!(ids.iter().all(|id| !tasks.contains(*id)));
     }
 
     #[test]
     #[should_panic(expected = "a task future of 101 bytes doesn't fit MAX_TASK_SIZE (100 bytes)")]
     fn a_future_one_byte_bigger_than_task_size_panics() {
-        let mut place = MaybeUninit::uninit();
-        let tasks = Tasks::<1, 100, 0>::init(
-            &mut place,
-            ReadyQueue::new({
-                static QUEUE: WakeQueue<1> = WakeQueue::new();
-                &QUEUE
-            }),
-        );
-        tasks.insert(FixedFuture([0u8; 101]));
+        let storage = {
+            static STORAGE: LoopStorage<(), 1, 100, 0, 1, 1> = LoopStorage::new();
+            STORAGE.claim(None, ())
+        };
+        storage.insert(FixedFuture([0u8; 101]));
     }
 
     #[test]
@@ -508,16 +493,12 @@ mod tests {
     fn an_overaligned_future_panics() {
         #[repr(align(32))]
         struct Aligned;
-        let mut place = MaybeUninit::uninit();
-        let tasks = TestTasks::<1>::init(
-            &mut place,
-            ReadyQueue::new({
-                static QUEUE: WakeQueue<1> = WakeQueue::new();
-                &QUEUE
-            }),
-        );
+        let storage = {
+            static STORAGE: TasksStorage<1> = TasksStorage::new();
+            STORAGE.claim(None, ())
+        };
         let aligned = Aligned;
-        tasks.insert(async move {
+        storage.insert(async move {
             let _aligned = aligned;
         });
     }
@@ -542,28 +523,32 @@ mod tests {
     #[test]
     fn root_region_holds_a_root_bigger_than_a_slab_block() {
         let dropped = Cell::new(false);
-        let mut place = MaybeUninit::uninit();
-        let tasks = Tasks::<2, MAX_TASK_SIZE, { size_of::<BigRoot>() }>::init(
-            &mut place,
-            ReadyQueue::new({
-                static QUEUE: WakeQueue<2> = WakeQueue::new();
-                &QUEUE
-            }),
-        );
+        let storage = {
+            static STORAGE: LoopStorage<
+                (),
+                2,
+                MAX_TASK_SIZE,
+                { size_of::<BigRoot<'static>>() },
+                1,
+                1,
+            > = LoopStorage::new();
+            STORAGE.claim(None, ())
+        };
+        let tasks = &storage.tasks;
         let root = BigRoot {
             data: [3; 9000],
             _flag: DropFlag(&dropped),
         };
-        tasks.spawn_root(root);
+        storage.spawn_root(root);
         let Root::Running(id) = tasks.root() else {
             panic!("spawning the root makes it running");
         };
-        let sibling = tasks.insert(async {});
+        let sibling = storage.insert(async {});
         assert_ne!(sibling.slot(), id.slot());
-        assert_eq!(tasks.run_ready(), RootStatus::Running);
+        assert_eq!(storage.run_ready(), RootStatus::Running);
         assert!(tasks.contains(id));
         assert!(!dropped.get());
-        tasks.drop_all();
+        storage.drop_all();
         assert!(dropped.get());
     }
 
@@ -572,29 +557,21 @@ mod tests {
         expected = "the root future of 1 bytes doesn't fit MAX_ROOT_TASK_SIZE (0 bytes)"
     )]
     fn a_too_big_root_panics() {
-        let mut place = MaybeUninit::uninit();
-        let tasks = TestTasks::<1>::init(
-            &mut place,
-            ReadyQueue::new({
-                static QUEUE: WakeQueue<1> = WakeQueue::new();
-                &QUEUE
-            }),
-        );
-        tasks.spawn_root(FixedFuture(0u8));
+        let storage = {
+            static STORAGE: TasksStorage<1> = TasksStorage::new();
+            STORAGE.claim(None, ())
+        };
+        storage.spawn_root(FixedFuture(0u8));
     }
 
     #[test]
     #[should_panic(expected = "the root is already spawned")]
     fn spawning_a_second_root_panics() {
-        let mut place = MaybeUninit::uninit();
-        let tasks = TestTasks::<2>::init(
-            &mut place,
-            ReadyQueue::new({
-                static QUEUE: WakeQueue<2> = WakeQueue::new();
-                &QUEUE
-            }),
-        );
-        tasks.spawn_root(core::future::pending::<()>());
-        tasks.spawn_root(core::future::pending::<()>());
+        let storage = {
+            static STORAGE: TasksStorage<2> = TasksStorage::new();
+            STORAGE.claim(None, ())
+        };
+        storage.spawn_root(core::future::pending::<()>());
+        storage.spawn_root(core::future::pending::<()>());
     }
 }

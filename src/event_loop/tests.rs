@@ -10,26 +10,24 @@ use core::{
 use rustix::fd::AsRawFd;
 
 use crate::{
-    Error, EventLoop, State, WakeQueue,
+    Error, EventLoop, LoopStorage, State,
     instant::Instant,
     selectors::Direction,
     storage::{Root, RootStatus, Storage, TaskId},
     test_utils::{
         DropFlag, Log, TEST_MAX_IO_COUNT, TEST_MAX_ROOT_TASK_SIZE, TEST_MAX_TASK_SIZE,
-        TEST_MAX_TASKS_COUNT, TEST_MAX_TIMERS_COUNT, TEST_MEMORY, TestContext, TestLoop, TestQueue,
-        assert_yields, is_readable, socketpair, wait_readable, wake_by_writing,
+        TEST_MAX_TASKS_COUNT, TEST_MAX_TIMERS_COUNT, TestContext, TestLoop, TestStorage,
+        assert_yields, counting_waker, is_readable, socketpair, wait_readable, wake_by_writing,
     },
 };
 
 #[test]
 fn root_finishing_during_new_is_an_error() {
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let result = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async |ctx| ctx.dispatch(1),
     );
@@ -38,13 +36,11 @@ fn root_finishing_during_new_is_an_error() {
 
 #[test]
 fn events_dispatched_during_new_are_applied() {
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let event_loop = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async |ctx| {
             ctx.dispatch(1);
@@ -57,13 +53,11 @@ fn events_dispatched_during_new_are_applied() {
 
 #[test]
 fn idle_loop_is_not_readable_and_drains_to_nothing() {
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let mut event_loop = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async |_| pending().await,
     )
@@ -76,13 +70,11 @@ fn idle_loop_is_not_readable_and_drains_to_nothing() {
 #[test]
 fn root_finishing_inside_a_drain() {
     let (a, b) = socketpair();
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let mut event_loop = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async move |ctx| {
             ctx.dispatch(1);
@@ -110,13 +102,11 @@ fn root_finishing_inside_a_drain() {
 #[test]
 fn root_progresses_across_drains() {
     let (a, b) = socketpair();
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let mut event_loop = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async move |ctx| {
             let mut i = 0;
@@ -141,13 +131,11 @@ fn root_progresses_across_drains() {
 #[test]
 fn handle_survives_moves_and_an_opaque_pointer_round_trip() {
     let (a, b) = socketpair();
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let event_loop = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async move |ctx| {
             wait_readable(ctx, &a).await;
@@ -173,13 +161,11 @@ fn handle_survives_moves_and_an_opaque_pointer_round_trip() {
 fn two_loops_on_one_thread_are_independent() {
     let (a1, b1) = socketpair();
     let (a2, _b2) = socketpair();
-    let mut first_memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let mut first = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut first_memory,
         Log::default(),
         async move |ctx| {
             wait_readable(ctx, &a1).await;
@@ -187,13 +173,11 @@ fn two_loops_on_one_thread_are_independent() {
         },
     )
     .unwrap();
-    let mut second_memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let mut second = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut second_memory,
         Log::default(),
         async move |ctx| {
             wait_readable(ctx, &a2).await;
@@ -216,13 +200,11 @@ fn two_loops_on_one_thread_are_independent() {
 #[test]
 #[should_panic(expected = "boom in new")]
 fn panic_propagates_out_of_new() {
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let _ = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async |_| panic!("boom in new"),
     );
@@ -232,13 +214,11 @@ fn panic_propagates_out_of_new() {
 #[should_panic(expected = "boom in drain")]
 fn panic_propagates_out_of_drain() {
     let (a, b) = socketpair();
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let mut event_loop = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async move |ctx| {
             wait_readable(ctx, &a).await;
@@ -263,13 +243,11 @@ impl State for PanickingState {
 #[test]
 #[should_panic(expected = "boom in apply")]
 fn panic_in_apply_propagates() {
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let _ = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage<PanickingState> = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         PanickingState,
         async |ctx| {
             ctx.dispatch(());
@@ -289,21 +267,18 @@ impl Drop for DispatchOnDrop<'_, '_> {
 #[test]
 fn root_future_bigger_than_task_size_is_fine() {
     let data = [7u8; 3 * TEST_MAX_TASK_SIZE];
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
-    let mut event_loop = EventLoop::<
-        '_,
-        _,
-        TEST_MAX_TASKS_COUNT,
-        TEST_MAX_TASK_SIZE,
-        { 8 * TEST_MAX_TASK_SIZE },
-        TEST_MAX_TIMERS_COUNT,
-        TEST_MAX_IO_COUNT,
-    >::new(
+    let mut event_loop = EventLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: LoopStorage<
+                Log,
+                TEST_MAX_TASKS_COUNT,
+                TEST_MAX_TASK_SIZE,
+                { 8 * TEST_MAX_TASK_SIZE },
+                TEST_MAX_TIMERS_COUNT,
+                TEST_MAX_IO_COUNT,
+            > = LoopStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async move |ctx| {
             ctx.dispatch(u32::from(data.iter().all(|byte| *byte == 7)));
@@ -317,21 +292,18 @@ fn root_future_bigger_than_task_size_is_fine() {
 #[test]
 #[should_panic(expected = "more than 2 concurrent tasks")]
 fn exceeding_max_tasks_count_panics() {
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
-    let _ = EventLoop::<
-        '_,
-        _,
-        2,
-        TEST_MAX_TASK_SIZE,
-        TEST_MAX_ROOT_TASK_SIZE,
-        TEST_MAX_TIMERS_COUNT,
-        TEST_MAX_IO_COUNT,
-    >::new(
+    let _ = EventLoop::new(
         {
-            static QUEUE: WakeQueue<2> = WakeQueue::new();
-            &QUEUE
+            static STORAGE: LoopStorage<
+                Log,
+                2,
+                TEST_MAX_TASK_SIZE,
+                TEST_MAX_ROOT_TASK_SIZE,
+                TEST_MAX_TIMERS_COUNT,
+                TEST_MAX_IO_COUNT,
+            > = LoopStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async |ctx| {
             ctx.spawn(async |_| pending().await);
@@ -343,21 +315,18 @@ fn exceeding_max_tasks_count_panics() {
 
 #[test]
 fn finished_tasks_free_their_slots() {
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
-    let event_loop = EventLoop::<
-        '_,
-        _,
-        2,
-        TEST_MAX_TASK_SIZE,
-        TEST_MAX_ROOT_TASK_SIZE,
-        TEST_MAX_TIMERS_COUNT,
-        TEST_MAX_IO_COUNT,
-    >::new(
+    let event_loop = EventLoop::new(
         {
-            static QUEUE: WakeQueue<2> = WakeQueue::new();
-            &QUEUE
+            static STORAGE: LoopStorage<
+                Log,
+                2,
+                TEST_MAX_TASK_SIZE,
+                TEST_MAX_ROOT_TASK_SIZE,
+                TEST_MAX_TIMERS_COUNT,
+                TEST_MAX_IO_COUNT,
+            > = LoopStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async |ctx| {
             for i in 0..5 {
@@ -371,13 +340,11 @@ fn finished_tasks_free_their_slots() {
 
 #[test]
 fn spawned_task_runs_in_the_same_drain() {
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let event_loop = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async |ctx| {
             ctx.spawn(async |ctx| ctx.dispatch(2));
@@ -391,13 +358,11 @@ fn spawned_task_runs_in_the_same_drain() {
 #[test]
 fn tasks_are_dropped_when_the_root_finishes() {
     let (a, b) = socketpair();
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let mut event_loop = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async move |ctx| {
             ctx.spawn(async |ctx| {
@@ -436,13 +401,11 @@ impl Drop for SpawnOnDrop<'_, '_> {
 #[test]
 fn spawning_and_dispatching_from_drop_during_teardown() {
     let (a, b) = socketpair();
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let mut event_loop = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async move |ctx| {
             ctx.spawn(async |ctx| {
@@ -462,17 +425,27 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
     assert_eq!(event_loop.state_mut().events(), [1, 3]);
 }
 
-struct LastEvent<'a>(&'a Cell<u32>);
+#[derive(Default)]
+struct LastEvent(u32);
 
-impl State for LastEvent<'_> {
+impl State for LastEvent {
     type Event = u32;
 
     fn apply(&mut self, event: u32) {
-        self.0.set(event);
+        self.0 = event;
     }
 }
 
-struct DispatchOnDropShared<'c, 'a>(&'c TestContext<'a, LastEvent<'a>>, u32);
+impl Drop for LastEvent {
+    fn drop(&mut self) {
+        assert_eq!(
+            self.0, 2,
+            "the event dispatched while dropping wasn't applied"
+        );
+    }
+}
+
+struct DispatchOnDropShared<'c, 'a>(&'c TestContext<'a, LastEvent>, u32);
 
 impl Drop for DispatchOnDropShared<'_, '_> {
     fn drop(&mut self) {
@@ -482,15 +455,12 @@ impl Drop for DispatchOnDropShared<'_, '_> {
 
 #[test]
 fn events_dispatched_while_dropping_the_loop_are_applied() {
-    let last = Cell::new(0);
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
-    let event_loop = TestLoop::new(
+    let mut event_loop = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage<LastEvent> = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
-        LastEvent(&last),
+        LastEvent::default(),
         async |ctx| {
             ctx.dispatch(1);
             ctx.spawn(async |ctx| {
@@ -501,22 +471,19 @@ fn events_dispatched_while_dropping_the_loop_are_applied() {
         },
     )
     .unwrap();
-    assert_eq!(last.get(), 1);
+    assert_eq!(event_loop.state_mut().0, 1);
     drop(event_loop);
-    assert_eq!(last.get(), 2);
 }
 
 #[test]
 fn dropping_the_loop_drops_its_tasks() {
     let dropped = Cell::new(false);
     let flag = DropFlag(&dropped);
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let event_loop = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async move |ctx| {
             ctx.spawn(async move |_| {
@@ -534,66 +501,44 @@ fn dropping_the_loop_drops_its_tasks() {
 
 #[test]
 fn dropping_the_loop_drops_its_state() {
-    struct Flagged<'a> {
-        _flag: DropFlag<'a>,
+    struct Counted {
+        _waker: Waker,
     }
 
-    impl State for Flagged<'_> {
+    impl State for Counted {
         type Event = ();
 
         fn apply(&mut self, (): ()) {}
     }
 
-    let dropped = Cell::new(false);
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
+    let drops = Cell::new(0);
     let event_loop = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage<Counted> = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
-        Flagged {
-            _flag: DropFlag(&dropped),
+        Counted {
+            _waker: counting_waker(&drops),
         },
         async |_| {
             pending::<()>().await;
         },
     )
     .unwrap();
-    assert!(!dropped.get());
+    assert_eq!(drops.get(), 0);
     drop(event_loop);
-    assert!(dropped.get());
+    assert_eq!(drops.get(), 1);
 }
 
 #[test]
-fn the_loop_runs_in_stack_memory() {
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
-    let event_loop = TestLoop::new(
-        {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
-        },
-        &mut memory,
-        Log::default(),
-        async |ctx| {
-            ctx.dispatch(1);
-            pending::<()>().await;
-        },
-    );
-    assert_eq!(event_loop.unwrap().state_mut().events(), [1]);
-}
-
-#[test]
-fn waking_after_the_loop_and_its_stack_memory_are_gone_is_harmless() {
+fn waking_after_the_loop_is_gone_is_harmless() {
     let escaped = Cell::new(None);
     {
-        let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let event_loop = TestLoop::new(
             {
-                static QUEUE: TestQueue = TestQueue::new();
-                &QUEUE
+                static STORAGE: TestStorage = TestStorage::new();
+                &STORAGE
             },
-            &mut memory,
             Log::default(),
             async |_| {
                 poll_fn(|cx| {
@@ -616,70 +561,64 @@ fn counting(polls: &Cell<u32>) -> impl Future<Output = ()> {
 }
 
 fn ready_tasks<'a>(event_loop: &'a TestLoop<'_, Log>) -> impl Iterator<Item = TaskId> + 'a {
-    core::iter::from_fn(|| event_loop.storage.tasks.ready().pop())
+    core::iter::from_fn(|| event_loop.storage.tasks.queue().pop())
 }
 
 fn parked_task(event_loop: &TestLoop<Log>) -> (TaskId, Waker) {
-    let id = event_loop.storage.tasks.insert(pending());
-    let waker = event_loop.storage.tasks.ready().waker(id.slot());
+    let id = event_loop.storage.insert(pending());
+    let waker = event_loop.storage.waker(id);
     (id, waker)
 }
 
 #[test]
 fn finished_task_is_removed() {
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let owned = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async |_| pending().await,
     )
     .unwrap();
     let event_loop = &owned;
-    let id = event_loop.storage.tasks.spawn(async {});
-    assert_eq!(event_loop.storage.tasks.run_ready(), RootStatus::Running);
+    let id = event_loop.storage.spawn(async {});
+    assert_eq!(event_loop.storage.run_ready(), RootStatus::Running);
     assert!(!event_loop.storage.tasks.contains(id));
 }
 
 #[test]
 fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
     let polls = Cell::new(0);
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let owned = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async |_| pending().await,
     )
     .unwrap();
     let event_loop = &owned;
-    event_loop.storage.tasks.spawn(poll_fn(|cx| {
+    event_loop.storage.spawn(poll_fn(|cx| {
         polls.set(polls.get() + 1);
         if polls.get() < 3 {
             cx.waker().wake_by_ref();
         }
         Poll::<()>::Pending
     }));
-    event_loop.storage.tasks.run_ready();
+    event_loop.storage.run_ready();
     assert_eq!(polls.get(), 3);
 }
 
 #[test]
 fn task_spawned_during_a_poll_runs_in_the_same_run() {
     let polls = Cell::new(0);
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let owned = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async |_| pending().await,
     )
@@ -687,60 +626,56 @@ fn task_spawned_during_a_poll_runs_in_the_same_run() {
     let event_loop = &owned;
     let storage = event_loop.storage;
     let child = counting(&polls);
-    event_loop.storage.tasks.spawn(async move {
-        storage.tasks.spawn(child);
+    event_loop.storage.spawn(async move {
+        storage.spawn(child);
     });
-    event_loop.storage.tasks.run_ready();
+    event_loop.storage.run_ready();
     assert_eq!(polls.get(), 1);
 }
 
 #[test]
 fn join_waiter_is_woken_when_the_task_finishes() {
     let polls = Cell::new(0);
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let owned = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async |_| pending().await,
     )
     .unwrap();
     let event_loop = &owned;
-    let waiter = event_loop.storage.tasks.spawn(counting(&polls));
-    let task = event_loop.storage.tasks.spawn(async {});
-    let waker = event_loop.storage.tasks.ready().waker(waiter.slot());
+    let waiter = event_loop.storage.spawn(counting(&polls));
+    let task = event_loop.storage.spawn(async {});
+    let waker = event_loop.storage.waker(waiter);
     event_loop.storage.tasks.set_join_waiter(task, &waker);
-    event_loop.storage.tasks.run_ready();
+    event_loop.storage.run_ready();
     assert_eq!(polls.get(), 2);
 }
 
 #[test]
 fn root_finishing_stops_the_run() {
     let polls = Cell::new(0);
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let owned = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async |_| pending().await,
     )
     .unwrap();
     let event_loop = &owned;
-    let root = event_loop.storage.tasks.spawn(async {});
+    let root = event_loop.storage.spawn(async {});
     event_loop.storage.tasks.set_root(Root::Running(root));
-    event_loop.storage.tasks.spawn(counting(&polls));
-    assert_eq!(event_loop.storage.tasks.run_ready(), RootStatus::Finished);
+    event_loop.storage.spawn(counting(&polls));
+    assert_eq!(event_loop.storage.run_ready(), RootStatus::Finished);
     assert_eq!(polls.get(), 0);
 }
 
 struct SpawnRawOnDrop<'a> {
-    storage: &'a Storage<
+    storage: Storage<
         'a,
         Log,
         TEST_MAX_TASKS_COUNT,
@@ -763,7 +698,7 @@ impl Future for SpawnRawOnDrop<'_> {
 impl Drop for SpawnRawOnDrop<'_> {
     fn drop(&mut self) {
         let guard = DropFlag(self.spawned_dropped);
-        self.storage.tasks.spawn(async move {
+        self.storage.spawn(async move {
             let _guard = guard;
         });
     }
@@ -772,18 +707,16 @@ impl Drop for SpawnRawOnDrop<'_> {
 #[test]
 fn dropping_the_loop_drops_tasks_spawned_from_drop() {
     let spawned_dropped = Cell::new(false);
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let owned = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async |_| pending().await,
     )
     .unwrap();
-    owned.storage.tasks.spawn(SpawnRawOnDrop {
+    owned.storage.spawn(SpawnRawOnDrop {
         storage: owned.storage,
         spawned_dropped: &spawned_dropped,
     });
@@ -793,13 +726,11 @@ fn dropping_the_loop_drops_tasks_spawned_from_drop() {
 
 #[test]
 fn readable_event_wakes_the_reader_once() {
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let owned = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async |_| pending().await,
     )
@@ -824,13 +755,11 @@ fn readable_event_wakes_the_reader_once() {
 
 #[test]
 fn removed_io_waker_arms_nothing() {
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let owned = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async |_| pending().await,
     )
@@ -851,13 +780,11 @@ fn removed_io_waker_arms_nothing() {
 
 #[test]
 fn deregistered_io_produces_no_events() {
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let owned = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async |_| pending().await,
     )
@@ -872,20 +799,18 @@ fn deregistered_io_produces_no_events() {
     event_loop.storage.io_waiters.set_waker(io, &waker);
     event_loop.storage.flush().unwrap();
     let change = event_loop.storage.io_waiters.release(io).unwrap();
-    event_loop.storage.selector.apply_now(change).unwrap();
+    event_loop.storage.selector().apply_now(change).unwrap();
     rustix::io::write(&b, b"x").unwrap();
     assert!(!is_readable(event_loop, 0));
 }
 
 #[test]
 fn expired_timer_wakes_its_task() {
-    let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let owned = TestLoop::new(
         {
-            static QUEUE: TestQueue = TestQueue::new();
-            &QUEUE
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
         },
-        &mut memory,
         Log::default(),
         async |_| pending().await,
     )

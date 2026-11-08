@@ -1,4 +1,4 @@
-use core::{cell::Cell, mem::MaybeUninit, task::Waker};
+use core::{cell::Cell, task::Waker};
 
 use crate::{
     instant::Instant,
@@ -6,7 +6,6 @@ use crate::{
     storage::store_waker,
 };
 
-#[derive(Default)]
 pub(crate) struct Timer {
     deadline: Cell<Instant>,
     seq: Cell<u64>,
@@ -21,21 +20,19 @@ pub(crate) struct Timers<const N: usize> {
 }
 
 impl<const N: usize> Timers<N> {
-    pub(crate) fn init(place: &mut MaybeUninit<Self>) -> &Self {
-        let ptr = place.as_mut_ptr();
-        // SAFETY: `ptr` points to `place`, borrowed exclusively until the end; the fields are
-        // disjoint, `&raw mut` creates no reference to them while they're uninitialized, and
-        // `MaybeUninit<T>` has `T`'s layout.
-        let (pool, next_seq) = unsafe {
-            (
-                &mut *(&raw mut (*ptr).pool).cast::<MaybeUninit<_>>(),
-                &mut *(&raw mut (*ptr).next_seq).cast::<MaybeUninit<_>>(),
-            )
-        };
-        ObjectPool::<Timer, N>::init(pool);
-        next_seq.write(Cell::new(0u64));
-        // SAFETY: every field was written above.
-        unsafe { place.assume_init_ref() }
+    pub(crate) const fn new() -> Self {
+        Self {
+            pool: ObjectPool::new(
+                [const {
+                    Timer {
+                        deadline: Cell::new(Instant::ZERO),
+                        seq: Cell::new(0),
+                        waker: Cell::new(None),
+                    }
+                }; N],
+            ),
+            next_seq: Cell::new(0),
+        }
     }
 
     pub(crate) fn alloc(&self, deadline: Instant, waker: Waker) -> TimerIndex {
@@ -92,7 +89,7 @@ impl<const N: usize> Timers<N> {
 
 #[cfg(test)]
 mod tests {
-    use core::{cell::Cell, mem::MaybeUninit, task::Waker, time::Duration};
+    use core::{cell::Cell, task::Waker, time::Duration};
 
     use crate::{
         instant::Instant,
@@ -114,8 +111,7 @@ mod tests {
     fn alloc_and_release() {
         let now = Instant::now();
         let drops = Cell::new(0);
-        let mut place = MaybeUninit::uninit();
-        let timers = Timers::<2>::init(&mut place);
+        let timers = &Timers::<2>::new();
         let index = timers.alloc(now, counting_waker(&drops));
         assert_eq!(timers.next_deadline(), Some(now));
 
@@ -130,8 +126,7 @@ mod tests {
     #[should_panic(expected = "more than 1 concurrent sleeps")]
     fn capacity_is_bounded() {
         let now = Instant::now();
-        let mut place = MaybeUninit::uninit();
-        let timers = Timers::<1>::init(&mut place);
+        let timers = &Timers::<1>::new();
         timers.alloc(now, Waker::noop().clone());
         timers.alloc(now, Waker::noop().clone());
     }
@@ -140,8 +135,7 @@ mod tests {
     fn expire_wakes_due_timers_in_deadline_order() {
         let earliest = Instant::now();
         let now = earliest + Duration::from_millis(1);
-        let mut place = MaybeUninit::uninit();
-        let timers = Timers::<8>::init(&mut place);
+        let timers = &Timers::<8>::new();
         timers.alloc(now + Duration::from_millis(5), waker(3));
         timers.alloc(now, waker(2));
         timers.alloc(now + Duration::from_millis(5), waker(4));
@@ -159,8 +153,7 @@ mod tests {
     #[test]
     fn equal_deadlines_expire_in_insertion_order_across_slot_reuse() {
         let now = Instant::now();
-        let mut place = MaybeUninit::uninit();
-        let timers = Timers::<2>::init(&mut place);
+        let timers = &Timers::<2>::new();
         let first = timers.alloc(now, Waker::noop().clone());
         timers.alloc(now, waker(1));
         timers.release(first);
@@ -171,8 +164,7 @@ mod tests {
     #[test]
     fn released_timer_is_not_woken() {
         let now = Instant::now();
-        let mut place = MaybeUninit::uninit();
-        let timers = Timers::<1>::init(&mut place);
+        let timers = &Timers::<1>::new();
         let index = timers.alloc(now, waker(1));
         timers.release(index);
         assert_expires(timers, now, []);
@@ -182,8 +174,7 @@ mod tests {
     #[test]
     fn replaced_waker_is_the_one_woken() {
         let now = Instant::now();
-        let mut place = MaybeUninit::uninit();
-        let timers = Timers::<1>::init(&mut place);
+        let timers = &Timers::<1>::new();
         let index = timers.alloc(now, waker(1));
         timers.set_waker(index, &waker(2));
         assert_expires(timers, now, [2]);
@@ -192,8 +183,7 @@ mod tests {
     #[test]
     fn next_deadline_is_the_earliest_one() {
         let now = Instant::now();
-        let mut place = MaybeUninit::uninit();
-        let timers = Timers::<4>::init(&mut place);
+        let timers = &Timers::<4>::new();
         assert_eq!(timers.next_deadline(), None);
         let later = now + Duration::from_millis(30);
         let earlier = now + Duration::from_millis(10);
