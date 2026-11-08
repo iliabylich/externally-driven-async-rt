@@ -6,14 +6,14 @@ use crate::{
 };
 
 #[must_use = "futures do nothing unless you `.await` or poll them"]
-pub struct Sleep<'ctx> {
-    timers: &'ctx Timers,
+pub struct Sleep<'ctx, const MAX_TIMERS_COUNT: usize> {
+    timers: &'ctx Timers<MAX_TIMERS_COUNT>,
     deadline: Instant,
     timer: Option<TimerIndex>,
 }
 
-impl<'ctx> Sleep<'ctx> {
-    pub(crate) fn new(timers: &'ctx Timers, deadline: Instant) -> Self {
+impl<'ctx, const MAX_TIMERS_COUNT: usize> Sleep<'ctx, MAX_TIMERS_COUNT> {
+    pub(crate) fn new(timers: &'ctx Timers<MAX_TIMERS_COUNT>, deadline: Instant) -> Self {
         Self {
             timers,
             deadline,
@@ -22,7 +22,7 @@ impl<'ctx> Sleep<'ctx> {
     }
 }
 
-impl Future for Sleep<'_> {
+impl<const MAX_TIMERS_COUNT: usize> Future for Sleep<'_, MAX_TIMERS_COUNT> {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {
@@ -40,7 +40,7 @@ impl Future for Sleep<'_> {
     }
 }
 
-impl Drop for Sleep<'_> {
+impl<const MAX_TIMERS_COUNT: usize> Drop for Sleep<'_, MAX_TIMERS_COUNT> {
     fn drop(&mut self) {
         if let Some(timer) = self.timer {
             self.timers.release(timer);
@@ -53,17 +53,17 @@ mod tests {
     use core::{future::pending, pin::pin, time::Duration};
 
     use crate::{
-        Capacities,
         instant::Instant,
         test_utils::{
-            First, Log, TEST_CAPACITIES, Winner, has_timers, is_readable, pair, readable,
+            First, Log, TEST_MAX_IO_COUNT, TEST_MAX_ROOT_TASK_SIZE, TEST_MAX_TASK_SIZE,
+            TEST_MAX_TASKS_COUNT, Winner, has_timers, is_readable, pair, readable,
             run_until_root_finishes, test_loop, wake_by_writing,
         },
     };
 
     #[test]
     fn zero_sleep_completes_immediately() {
-        let event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async |ctx| {
+        let event_loop = test_loop!(Log::default(), async |ctx| {
             ctx.sleep(Duration::ZERO).await;
             ctx.dispatch(1);
             pending::<()>().await;
@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn sleep_waits_at_least_its_duration() {
         let start = Instant::now();
-        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async |ctx| {
+        let mut event_loop = test_loop!(Log::default(), async |ctx| {
             ctx.sleep(Duration::from_millis(20)).await;
             ctx.dispatch(1);
         },)
@@ -89,7 +89,7 @@ mod tests {
 
     #[test]
     fn sleeps_complete_in_deadline_order() {
-        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async |ctx| {
+        let mut event_loop = test_loop!(Log::default(), async |ctx| {
             let handles = [30, 10, 20].map(|ms| {
                 ctx.spawn(async move |ctx| {
                     ctx.sleep(Duration::from_millis(ms)).await;
@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn many_concurrent_sleeps() {
-        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async |ctx| {
+        let mut event_loop = test_loop!(Log::default(), async |ctx| {
             let handles: [_; 12] = core::array::from_fn(|i| {
                 ctx.spawn(async move |ctx| {
                     ctx.sleep(Duration::from_millis(1 + i as u64 % 10)).await;
@@ -127,7 +127,7 @@ mod tests {
     #[test]
     fn losing_sleep_leaves_no_timer_behind() {
         let (a, b) = pair();
-        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
             let winner = First(
                 pin!(readable(ctx, &a)),
                 ctx.sleep(Duration::from_millis(50)),
@@ -152,9 +152,8 @@ mod tests {
     #[test]
     fn winning_sleep_drops_the_other_future() {
         let (a, b) = pair();
-        // The same socket, for checking it from outside the loop.
         let a_outside = rustix::io::dup(&a).unwrap();
-        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
             let winner = First(
                 pin!(readable(ctx, &a)),
                 ctx.sleep(Duration::from_millis(10)),
@@ -178,7 +177,7 @@ mod tests {
     fn drift_free_interval_from_relative_sleeps() {
         let period = Duration::from_millis(10);
         let start = Instant::now();
-        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
             let mut next = Instant::now();
             for i in 0..5 {
                 next = next + period;
@@ -197,11 +196,14 @@ mod tests {
     #[should_panic(expected = "more than 1 concurrent sleeps")]
     fn exceeding_max_timers_count_panics() {
         let _ = test_loop!(
+            [
+                TEST_MAX_TASKS_COUNT,
+                TEST_MAX_TASK_SIZE,
+                TEST_MAX_ROOT_TASK_SIZE,
+                1,
+                TEST_MAX_IO_COUNT
+            ],
             Log::default(),
-            Capacities {
-                max_timers: 1,
-                ..TEST_CAPACITIES
-            },
             async |ctx| {
                 let long = Duration::from_secs(60);
                 First(ctx.sleep(long), ctx.sleep(long)).await;
@@ -212,11 +214,14 @@ mod tests {
     #[test]
     fn sequential_sleeps_reuse_the_timer_slot() {
         let mut event_loop = test_loop!(
+            [
+                TEST_MAX_TASKS_COUNT,
+                TEST_MAX_TASK_SIZE,
+                TEST_MAX_ROOT_TASK_SIZE,
+                1,
+                TEST_MAX_IO_COUNT
+            ],
             Log::default(),
-            Capacities {
-                max_timers: 1,
-                ..TEST_CAPACITIES
-            },
             async |ctx| {
                 for i in 0..3 {
                     ctx.sleep(Duration::from_millis(1)).await;

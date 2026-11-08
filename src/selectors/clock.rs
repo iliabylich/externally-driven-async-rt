@@ -1,9 +1,5 @@
 use core::mem::MaybeUninit;
 
-// `CLOCK_UPTIME_RAW` from <time.h>: it stops while the system sleeps, like `EVFILT_TIMER`, so
-// deadlines and the OS timer agree (it's also what `std::time::Instant` uses on macOS, which is
-// why Miri supports it). `CLOCK_MONOTONIC`, the only monotonic clock rustix offers on macOS, keeps
-// running during sleep.
 const CLOCK_UPTIME_RAW: u32 = 8;
 
 #[repr(C)]

@@ -28,9 +28,6 @@ impl TaskPtr {
     }
 }
 
-// Owns a task future written into memory it doesn't own (its slot of the task slab), at a fixed
-// address, and drops it in place. A raw pointer, not a reference: the storage moves the owner
-// around while `TaskPtr`s poll the future in place.
 pub(crate) struct OwnedTask(TaskPtr);
 
 impl OwnedTask {

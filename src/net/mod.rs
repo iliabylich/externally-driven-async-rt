@@ -50,11 +50,8 @@ impl Address for SocketAddrUnix {
     }
 }
 
-// macOS reports an unnamed Unix socket as a 16-byte address with an all-zero `sun_path`, which
-// rustix (1.1.6) would decode as a 13-byte path of NULs (and trips a `debug_assert`), so unnamed
-// addresses are detected here, by an empty `sun_path`, before converting.
 fn is_unnamed_unix(addr: &SocketAddrAny) -> bool {
-    const SUN_PATH_OFFSET: usize = 2; // after `sun_len: u8` and `sun_family: u8`
+    const SUN_PATH_OFFSET: usize = 2;
     // SAFETY: `as_ptr` points to the `addr_len()` initialized bytes of the address.
     let bytes = unsafe {
         core::slice::from_raw_parts(addr.as_ptr().cast::<u8>(), addr.addr_len() as usize)
@@ -75,9 +72,6 @@ fn socket(family: AddressFamily, ty: SocketType) -> rustix::io::Result<OwnedFd> 
     Ok(fd)
 }
 
-// macOS has neither `SOCK_CLOEXEC`/`SOCK_NONBLOCK` nor `MSG_NOSIGNAL`, so these are set on the fd.
-// Without `SO_NOSIGPIPE` a write to a closed peer raises SIGPIPE, which kills a host process that
-// doesn't ignore it.
 fn configure(fd: &OwnedFd, ty: SocketType) -> rustix::io::Result<()> {
     fcntl_setfd(fd, FdFlags::CLOEXEC)?;
     ioctl_fionbio(fd, true)?;
@@ -109,15 +103,29 @@ fn peer_addr<A: Address>(fd: &OwnedFd) -> rustix::io::Result<A> {
     A::from_any(rustix::net::getpeername(fd)?)
 }
 
-async fn connect<S: State, A: Address>(
-    ctx: &Context<S>,
+async fn connect<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+    A: Address,
+>(
+    ctx: &Context<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >,
     family: AddressFamily,
     addr: &A,
 ) -> rustix::io::Result<OwnedFd> {
     let fd = socket(family, SocketType::STREAM)?;
     match rustix::net::connect(&fd, addr) {
         Ok(()) => return Ok(fd),
-        // An interrupted connect keeps going in the background, just like `EINPROGRESS`.
         Err(Errno::INPROGRESS | Errno::INTR) => {}
         Err(errno) => return Err(errno),
     }
@@ -128,8 +136,23 @@ async fn connect<S: State, A: Address>(
     Ok(fd)
 }
 
-async fn accept<S: State, A: Address>(
-    ctx: &Context<S>,
+async fn accept<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+    A: Address,
+>(
+    ctx: &Context<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >,
     fd: &OwnedFd,
 ) -> rustix::io::Result<(OwnedFd, A)> {
     let (stream, addr) = io_loop!(
@@ -142,8 +165,22 @@ async fn accept<S: State, A: Address>(
     Ok((stream, A::from_any(addr)?))
 }
 
-async fn read<S: State>(
-    ctx: &Context<S>,
+async fn read<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+>(
+    ctx: &Context<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >,
     fd: &OwnedFd,
     buf: &mut [u8],
 ) -> rustix::io::Result<usize> {
@@ -155,7 +192,25 @@ async fn read<S: State>(
     )
 }
 
-async fn write<S: State>(ctx: &Context<S>, fd: &OwnedFd, buf: &[u8]) -> rustix::io::Result<usize> {
+async fn write<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+>(
+    ctx: &Context<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >,
+    fd: &OwnedFd,
+    buf: &[u8],
+) -> rustix::io::Result<usize> {
     io_loop!(
         ctx,
         fd.as_fd(),
@@ -164,7 +219,25 @@ async fn write<S: State>(ctx: &Context<S>, fd: &OwnedFd, buf: &[u8]) -> rustix::
     )
 }
 
-async fn send<S: State>(ctx: &Context<S>, fd: &OwnedFd, buf: &[u8]) -> rustix::io::Result<usize> {
+async fn send<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+>(
+    ctx: &Context<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >,
+    fd: &OwnedFd,
+    buf: &[u8],
+) -> rustix::io::Result<usize> {
     io_loop!(
         ctx,
         fd.as_fd(),
@@ -173,8 +246,22 @@ async fn send<S: State>(ctx: &Context<S>, fd: &OwnedFd, buf: &[u8]) -> rustix::i
     )
 }
 
-async fn recv<S: State>(
-    ctx: &Context<S>,
+async fn recv<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+>(
+    ctx: &Context<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >,
     fd: &OwnedFd,
     buf: &mut [u8],
 ) -> rustix::io::Result<usize> {
@@ -187,8 +274,23 @@ async fn recv<S: State>(
     Ok(len)
 }
 
-async fn send_to<S: State, A: Address>(
-    ctx: &Context<S>,
+async fn send_to<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+    A: Address,
+>(
+    ctx: &Context<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >,
     fd: &OwnedFd,
     buf: &[u8],
     addr: &A,
@@ -201,8 +303,23 @@ async fn send_to<S: State, A: Address>(
     )
 }
 
-async fn recv_from<S: State, A: Address>(
-    ctx: &Context<S>,
+async fn recv_from<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+    A: Address,
+>(
+    ctx: &Context<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >,
     fd: &OwnedFd,
     buf: &mut [u8],
 ) -> rustix::io::Result<(usize, A)> {

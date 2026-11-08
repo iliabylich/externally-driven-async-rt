@@ -14,18 +14,46 @@ impl UdpSocket {
         Ok(Self { fd })
     }
 
-    pub async fn send_to<S: State>(
+    pub async fn send_to<
+        S: State,
+        const MAX_TASKS_COUNT: usize,
+        const MAX_TASK_SIZE: usize,
+        const MAX_ROOT_TASK_SIZE: usize,
+        const MAX_TIMERS_COUNT: usize,
+        const MAX_IO_COUNT: usize,
+    >(
         &mut self,
-        ctx: &Context<S>,
+        ctx: &Context<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
         buf: &[u8],
         addr: SocketAddr,
     ) -> rustix::io::Result<usize> {
         crate::net::send_to(ctx, &self.fd, buf, &addr).await
     }
 
-    pub async fn recv_from<S: State>(
+    pub async fn recv_from<
+        S: State,
+        const MAX_TASKS_COUNT: usize,
+        const MAX_TASK_SIZE: usize,
+        const MAX_ROOT_TASK_SIZE: usize,
+        const MAX_TIMERS_COUNT: usize,
+        const MAX_IO_COUNT: usize,
+    >(
         &mut self,
-        ctx: &Context<S>,
+        ctx: &Context<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
         buf: &mut [u8],
     ) -> rustix::io::Result<(usize, SocketAddr)> {
         crate::net::recv_from(ctx, &self.fd, buf).await
@@ -35,17 +63,45 @@ impl UdpSocket {
         rustix::net::connect(&self.fd, &addr)
     }
 
-    pub async fn send<S: State>(
+    pub async fn send<
+        S: State,
+        const MAX_TASKS_COUNT: usize,
+        const MAX_TASK_SIZE: usize,
+        const MAX_ROOT_TASK_SIZE: usize,
+        const MAX_TIMERS_COUNT: usize,
+        const MAX_IO_COUNT: usize,
+    >(
         &mut self,
-        ctx: &Context<S>,
+        ctx: &Context<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
         buf: &[u8],
     ) -> rustix::io::Result<usize> {
         crate::net::send(ctx, &self.fd, buf).await
     }
 
-    pub async fn recv<S: State>(
+    pub async fn recv<
+        S: State,
+        const MAX_TASKS_COUNT: usize,
+        const MAX_TASK_SIZE: usize,
+        const MAX_ROOT_TASK_SIZE: usize,
+        const MAX_TIMERS_COUNT: usize,
+        const MAX_IO_COUNT: usize,
+    >(
         &mut self,
-        ctx: &Context<S>,
+        ctx: &Context<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
         buf: &mut [u8],
     ) -> rustix::io::Result<usize> {
         crate::net::recv(ctx, &self.fd, buf).await
@@ -70,9 +126,7 @@ mod tests {
 
     use crate::{
         net::UdpSocket,
-        test_utils::{
-            Log, TEST_CAPACITIES, drain_until_readable, raw_socket, run_until_events, test_loop,
-        },
+        test_utils::{Log, drain_until_readable, raw_socket, run_until_events, test_loop},
     };
 
     const LOCALHOST: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
@@ -87,7 +141,7 @@ mod tests {
     #[test]
     fn round_trip_with_a_raw_peer() {
         let (peer, peer_addr) = raw_peer();
-        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
             let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
             assert!(socket.local_addr().unwrap().port() != 0);
             let mut buf = [0; 64];

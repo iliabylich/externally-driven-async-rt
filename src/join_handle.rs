@@ -1,27 +1,42 @@
 use core::{future::Future, pin::Pin, task::Poll};
 
 use crate::{
-    state::State,
-    storage::{Storage, TaskId},
+    storage::{TaskId, Tasks},
     task::JoinStatus,
 };
 
-pub struct JoinHandle<'ctx, S: State> {
-    storage: &'ctx Storage<S>,
+pub struct JoinHandle<
+    'ctx,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+> {
+    tasks: &'ctx Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
     id: TaskId,
 }
 
-impl<'ctx, S: State> JoinHandle<'ctx, S> {
-    pub(crate) fn new(storage: &'ctx Storage<S>, id: TaskId) -> Self {
-        Self { storage, id }
+impl<
+    'ctx,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+> JoinHandle<'ctx, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+{
+    pub(crate) fn new(
+        tasks: &'ctx Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
+        id: TaskId,
+    ) -> Self {
+        Self { tasks, id }
     }
 }
 
-impl<S: State> Future for JoinHandle<'_, S> {
+impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize>
+    Future for JoinHandle<'_, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+{
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {
-        match self.storage.tasks.set_join_waiter(self.id, cx.waker()) {
+        match self.tasks.set_join_waiter(self.id, cx.waker()) {
             JoinStatus::Running => Poll::Pending,
             JoinStatus::Finished => Poll::Ready(()),
         }
@@ -34,13 +49,13 @@ mod tests {
 
     use crate::{
         Error,
-        test_utils::{Log, TEST_CAPACITIES, pair, readable, test_loop, wake_by_writing},
+        test_utils::{Log, pair, readable, test_loop, wake_by_writing},
     };
 
     #[test]
     fn joining_a_running_task_waits_for_it() {
         let (a, b) = pair();
-        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
             ctx.spawn(async move |ctx| {
                 readable(ctx, &a).await;
                 ctx.dispatch(1);
@@ -61,7 +76,7 @@ mod tests {
     #[test]
     fn joining_a_finished_task_resolves_immediately() {
         let (a, b) = pair();
-        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
             let handle = ctx.spawn(async |ctx| ctx.dispatch(1));
             readable(ctx, &a).await;
             handle.await;
@@ -80,7 +95,7 @@ mod tests {
     #[test]
     fn dropped_handle_detaches_the_task() {
         let (a, b) = pair();
-        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
             ctx.spawn(async move |ctx| {
                 readable(ctx, &a).await;
                 ctx.dispatch(1);
@@ -95,7 +110,7 @@ mod tests {
 
     #[test]
     fn spawned_task_can_spawn_and_join() {
-        let event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async |ctx| {
+        let event_loop = test_loop!(Log::default(), async |ctx| {
             ctx.spawn(async |ctx| {
                 ctx.spawn(async |ctx| ctx.dispatch(1)).await;
                 ctx.dispatch(2);

@@ -27,7 +27,6 @@ fn disarm(token: u64, fd: &OwnedFd, direction: Direction) -> IoChange {
     change(token, fd, direction, IoAction::Disarm)
 }
 
-// Every pending event, polling batch after batch while they come back full.
 fn events(selector: &Selector) -> impl Iterator<Item = SelectorEvent> + '_ {
     let mut batch = [None; EVENTS_PER_CALL];
     let mut next = EVENTS_PER_CALL;
@@ -145,8 +144,6 @@ fn reused_fd_number_reports_the_new_token() {
 
 #[test]
 fn changes_and_events_beyond_one_batch_are_all_delivered() {
-    // Changelists and event batches hold 4 entries in tests; both ends of a socket pair are
-    // writable, so 3 pairs give 6 changes.
     let selector = Selector::new().unwrap();
     let [(a0, b0), (a1, b1), (a2, b2)] = core::array::from_fn(|_| pair());
     let fds = [&a0, &b0, &a1, &b1, &a2, &b2];

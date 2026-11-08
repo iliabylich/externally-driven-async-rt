@@ -9,26 +9,27 @@ use core::{
 use rustix::fd::AsRawFd;
 
 use crate::{
-    Capacities, Context, Error, EventLoop, State,
+    Error, State,
     instant::Instant,
     selectors::Direction,
     storage::{Root, RootStatus, Storage, TaskId},
     test_utils::{
-        Log, TEST_CAPACITIES, TestContext, assert_yields, is_readable, pair, readable, test_loop,
-        test_loop_in, test_memory_within_current_test, wake_by_writing,
+        Log, TEST_MAX_IO_COUNT, TEST_MAX_ROOT_TASK_SIZE, TEST_MAX_TASK_SIZE, TEST_MAX_TASKS_COUNT,
+        TEST_MAX_TIMERS_COUNT, TEST_MEMORY, TestContext, TestLoop, assert_yields, is_readable,
+        pair, readable, test_loop, test_loop_in, test_memory_within_current_test, wake_by_writing,
     },
     waker::new_waker,
 };
 
 #[test]
 fn root_finishing_during_new_is_an_error() {
-    let result = test_loop!(Log::default(), TEST_CAPACITIES, async |ctx| ctx.dispatch(1),);
+    let result = test_loop!(Log::default(), async |ctx| ctx.dispatch(1),);
     assert_eq!(result.err(), Some(Error::RootFinished));
 }
 
 #[test]
 fn events_dispatched_during_new_are_applied() {
-    let event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async |ctx| {
+    let event_loop = test_loop!(Log::default(), async |ctx| {
         ctx.dispatch(1);
         ctx.dispatch(2);
         pending::<()>().await;
@@ -38,8 +39,7 @@ fn events_dispatched_during_new_are_applied() {
 
 #[test]
 fn idle_loop_is_not_readable_and_drains_to_nothing() {
-    let mut event_loop =
-        test_loop!(Log::default(), TEST_CAPACITIES, async |_| pending().await,).unwrap();
+    let mut event_loop = test_loop!(Log::default(), async |_| pending().await,).unwrap();
     assert!(!is_readable(&event_loop, 0));
     assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
     assert!(event_loop.state_mut().events().is_empty());
@@ -48,7 +48,7 @@ fn idle_loop_is_not_readable_and_drains_to_nothing() {
 #[test]
 fn root_finishing_inside_a_drain() {
     let (a, b) = pair();
-    let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+    let mut event_loop = test_loop!(Log::default(), async move |ctx| {
         ctx.dispatch(1);
         readable(ctx, &a).await;
         ctx.dispatch(2);
@@ -73,7 +73,7 @@ fn root_finishing_inside_a_drain() {
 #[test]
 fn root_progresses_across_drains() {
     let (a, b) = pair();
-    let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+    let mut event_loop = test_loop!(Log::default(), async move |ctx| {
         let mut i = 0;
         loop {
             readable(ctx, &a).await;
@@ -95,16 +95,15 @@ fn root_progresses_across_drains() {
 #[test]
 fn handle_survives_moves_and_an_opaque_pointer_round_trip() {
     let (a, b) = pair();
-    let event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+    let event_loop = test_loop!(Log::default(), async move |ctx| {
         readable(ctx, &a).await;
         ctx.dispatch(1);
     },)
     .unwrap();
     let handles = [event_loop];
     let [event_loop] = handles;
-    // Like an FFI wrapper: the handle lives behind a raw pointer, then is taken back out.
     let mut slot = MaybeUninit::new(event_loop);
-    let raw: *mut EventLoop<Log> = slot.as_mut_ptr();
+    let raw: *mut TestLoop<Log> = slot.as_mut_ptr();
     // SAFETY: `raw` points to the initialized handle in `slot`, which is read out once.
     let mut event_loop = unsafe { raw.read() };
     wake_by_writing(&event_loop, &b);
@@ -119,12 +118,12 @@ fn handle_survives_moves_and_an_opaque_pointer_round_trip() {
 fn two_loops_on_one_thread_are_independent() {
     let (a1, b1) = pair();
     let (a2, _b2) = pair();
-    let mut first = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+    let mut first = test_loop!(Log::default(), async move |ctx| {
         readable(ctx, &a1).await;
         ctx.dispatch(1);
     },)
     .unwrap();
-    let mut second = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+    let mut second = test_loop!(Log::default(), async move |ctx| {
         readable(ctx, &a2).await;
         ctx.dispatch(2);
     },)
@@ -144,16 +143,14 @@ fn two_loops_on_one_thread_are_independent() {
 #[test]
 #[should_panic(expected = "boom in new")]
 fn panic_propagates_out_of_new() {
-    let _ = test_loop!(Log::default(), TEST_CAPACITIES, async |_| panic!(
-        "boom in new"
-    ),);
+    let _ = test_loop!(Log::default(), async |_| panic!("boom in new"),);
 }
 
 #[test]
 #[should_panic(expected = "boom in drain")]
 fn panic_propagates_out_of_drain() {
     let (a, b) = pair();
-    let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+    let mut event_loop = test_loop!(Log::default(), async move |ctx| {
         readable(ctx, &a).await;
         panic!("boom in drain");
     },)
@@ -175,7 +172,7 @@ impl State for PanickingState {
 #[test]
 #[should_panic(expected = "boom in apply")]
 fn panic_in_apply_propagates() {
-    let _ = test_loop!(PanickingState, TEST_CAPACITIES, async |ctx| {
+    let _ = test_loop!(PanickingState, async |ctx| {
         ctx.dispatch(());
         pending::<()>().await;
     },);
@@ -190,12 +187,22 @@ impl Drop for DispatchOnDrop<'_> {
 }
 
 #[test]
-fn root_future_bigger_than_max_task_size_is_fine() {
-    let data = [7u8; 3 * TEST_CAPACITIES.max_task_size];
-    let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
-        ctx.dispatch(u32::from(data.iter().all(|byte| *byte == 7)));
-        pending::<()>().await;
-    },)
+fn root_future_bigger_than_task_size_is_fine() {
+    let data = [7u8; 3 * TEST_MAX_TASK_SIZE];
+    let mut event_loop = test_loop!(
+        [
+            TEST_MAX_TASKS_COUNT,
+            TEST_MAX_TASK_SIZE,
+            8 * TEST_MAX_TASK_SIZE,
+            TEST_MAX_TIMERS_COUNT,
+            TEST_MAX_IO_COUNT
+        ],
+        Log::default(),
+        async move |ctx| {
+            ctx.dispatch(u32::from(data.iter().all(|byte| *byte == 7)));
+            pending::<()>().await;
+        },
+    )
     .unwrap();
     assert_eq!(event_loop.state_mut().events(), [1]);
 }
@@ -204,11 +211,14 @@ fn root_future_bigger_than_max_task_size_is_fine() {
 #[should_panic(expected = "more than 2 concurrent tasks")]
 fn exceeding_max_tasks_count_panics() {
     let _ = test_loop!(
+        [
+            2,
+            TEST_MAX_TASK_SIZE,
+            TEST_MAX_ROOT_TASK_SIZE,
+            TEST_MAX_TIMERS_COUNT,
+            TEST_MAX_IO_COUNT
+        ],
         Log::default(),
-        Capacities {
-            max_tasks: 2,
-            ..TEST_CAPACITIES
-        },
         async |ctx| {
             ctx.spawn(async |_| pending().await);
             ctx.spawn(async |_| pending().await);
@@ -220,11 +230,14 @@ fn exceeding_max_tasks_count_panics() {
 #[test]
 fn finished_tasks_free_their_slots() {
     let event_loop = test_loop!(
+        [
+            2,
+            TEST_MAX_TASK_SIZE,
+            TEST_MAX_ROOT_TASK_SIZE,
+            TEST_MAX_TIMERS_COUNT,
+            TEST_MAX_IO_COUNT
+        ],
         Log::default(),
-        Capacities {
-            max_tasks: 2,
-            ..TEST_CAPACITIES
-        },
         async |ctx| {
             for i in 0..5 {
                 ctx.spawn(async move |ctx| ctx.dispatch(i)).await;
@@ -237,7 +250,7 @@ fn finished_tasks_free_their_slots() {
 
 #[test]
 fn spawned_task_runs_in_the_same_drain() {
-    let event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async |ctx| {
+    let event_loop = test_loop!(Log::default(), async |ctx| {
         ctx.spawn(async |ctx| ctx.dispatch(2));
         ctx.dispatch(1);
         pending::<()>().await;
@@ -248,7 +261,7 @@ fn spawned_task_runs_in_the_same_drain() {
 #[test]
 fn tasks_are_dropped_when_the_root_finishes() {
     let (a, b) = pair();
-    let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+    let mut event_loop = test_loop!(Log::default(), async move |ctx| {
         ctx.spawn(async |ctx| {
             let _guard = DispatchOnDrop(ctx, 10);
             pending::<()>().await;
@@ -284,7 +297,7 @@ impl Drop for SpawnOnDrop<'_> {
 #[test]
 fn spawning_and_dispatching_from_drop_during_teardown() {
     let (a, b) = pair();
-    let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+    let mut event_loop = test_loop!(Log::default(), async move |ctx| {
         ctx.spawn(async |ctx| {
             let _guard = SpawnOnDrop(ctx);
             pending::<()>().await;
@@ -311,7 +324,6 @@ impl Drop for Flag {
     }
 }
 
-// Readable after the loop (and so the state) is gone.
 struct LastEvent(*mut u32);
 
 impl State for LastEvent {
@@ -324,7 +336,7 @@ impl State for LastEvent {
     }
 }
 
-struct DispatchOnDropShared<'a>(&'a Context<LastEvent>, u32);
+struct DispatchOnDropShared<'a>(&'a TestContext<LastEvent>, u32);
 
 impl Drop for DispatchOnDropShared<'_> {
     fn drop(&mut self) {
@@ -335,7 +347,7 @@ impl Drop for DispatchOnDropShared<'_> {
 #[test]
 fn events_dispatched_while_dropping_the_loop_are_applied() {
     static mut LAST: u32 = 0;
-    let event_loop = test_loop!(LastEvent(&raw mut LAST), TEST_CAPACITIES, async |ctx| {
+    let event_loop = test_loop!(LastEvent(&raw mut LAST), async |ctx| {
         ctx.dispatch(1);
         ctx.spawn(async |ctx| {
             let _guard = DispatchOnDropShared(ctx, 2);
@@ -355,7 +367,7 @@ fn events_dispatched_while_dropping_the_loop_are_applied() {
 fn dropping_the_loop_drops_its_tasks() {
     static mut DROPPED: bool = false;
     let flag = Flag(&raw mut DROPPED);
-    let event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+    let event_loop = test_loop!(Log::default(), async move |ctx| {
         ctx.spawn(async move |_| {
             let _flag = flag;
             pending::<()>().await;
@@ -370,11 +382,8 @@ fn dropping_the_loop_drops_its_tasks() {
     assert!(unsafe { DROPPED });
 }
 
-fn parked_loop(memory: &'static mut [MaybeUninit<u8>]) -> EventLoop<Log> {
-    test_loop_in(memory, Log::default(), TEST_CAPACITIES, async |_| {
-        pending().await
-    })
-    .unwrap()
+fn parked_loop(memory: &'static mut [MaybeUninit<u8>; TEST_MEMORY]) -> TestLoop<Log> {
+    test_loop_in(memory, Log::default(), async |_| pending().await).unwrap()
 }
 
 fn counting(polls: *mut u32) -> impl Future<Output = ()> {
@@ -386,11 +395,11 @@ fn counting(polls: *mut u32) -> impl Future<Output = ()> {
     })
 }
 
-fn ready_tasks(event_loop: &EventLoop<Log>) -> impl Iterator<Item = TaskId> + '_ {
+fn ready_tasks(event_loop: &TestLoop<Log>) -> impl Iterator<Item = TaskId> + '_ {
     core::iter::from_fn(|| event_loop.storage.tasks.ready().pop())
 }
 
-fn parked_task(event_loop: &EventLoop<Log>) -> (TaskId, Waker) {
+fn parked_task(event_loop: &TestLoop<Log>) -> (TaskId, Waker) {
     let id = event_loop.storage.tasks.insert(pending());
     // SAFETY: `event_loop` outlives the waker.
     let waker = unsafe { new_waker(event_loop.storage.tasks.ready(), id) };
@@ -471,7 +480,14 @@ fn root_finishing_stops_the_run() {
 }
 
 struct SpawnRawOnDrop {
-    storage: &'static Storage<Log>,
+    storage: &'static Storage<
+        Log,
+        TEST_MAX_TASKS_COUNT,
+        TEST_MAX_TASK_SIZE,
+        TEST_MAX_ROOT_TASK_SIZE,
+        TEST_MAX_TIMERS_COUNT,
+        TEST_MAX_IO_COUNT,
+    >,
     spawned_dropped: *mut bool,
 }
 

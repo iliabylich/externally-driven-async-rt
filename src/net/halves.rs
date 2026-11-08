@@ -15,9 +15,23 @@ impl ReadHalf {
         Self { fd }
     }
 
-    pub async fn read<S: State>(
+    pub async fn read<
+        S: State,
+        const MAX_TASKS_COUNT: usize,
+        const MAX_TASK_SIZE: usize,
+        const MAX_ROOT_TASK_SIZE: usize,
+        const MAX_TIMERS_COUNT: usize,
+        const MAX_IO_COUNT: usize,
+    >(
         &mut self,
-        ctx: &Context<S>,
+        ctx: &Context<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
         buf: &mut [u8],
     ) -> rustix::io::Result<usize> {
         read(ctx, &self.fd, buf).await
@@ -33,9 +47,23 @@ impl WriteHalf {
         Self { fd }
     }
 
-    pub async fn write<S: State>(
+    pub async fn write<
+        S: State,
+        const MAX_TASKS_COUNT: usize,
+        const MAX_TASK_SIZE: usize,
+        const MAX_ROOT_TASK_SIZE: usize,
+        const MAX_TIMERS_COUNT: usize,
+        const MAX_IO_COUNT: usize,
+    >(
         &mut self,
-        ctx: &Context<S>,
+        ctx: &Context<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
         buf: &[u8],
     ) -> rustix::io::Result<usize> {
         write(ctx, &self.fd, buf).await
@@ -46,8 +74,6 @@ impl WriteHalf {
     }
 }
 
-// Each half owns its own `dup` of the socket, so closing one fd doesn't end the connection.
-// Shutting down the write direction makes dropping the write half visible to the peer (EOF).
 impl Drop for WriteHalf {
     fn drop(&mut self) {
         let _ = self.shutdown();

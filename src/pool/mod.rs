@@ -1,4 +1,4 @@
-use core::{alloc::Layout, cell::Cell, fmt, marker::PhantomData, mem::MaybeUninit, ptr::NonNull};
+use core::{cell::Cell, fmt, marker::PhantomData, mem::MaybeUninit};
 
 pub(crate) struct Index<T> {
     slot: u32,
@@ -60,7 +60,6 @@ impl<T> fmt::Debug for Index<T> {
 
 #[derive(Clone, Copy)]
 enum Links {
-    // The doubly-linked list of occupied slots (O(1) unlinking in `free`).
     Occupied {
         prev: Option<u32>,
         next: Option<u32>,
@@ -70,46 +69,40 @@ enum Links {
     },
 }
 
-// The value stays in place for the pool's whole life (a vacant slot holds a stale or default
-// one), so the pool can hand out `&T` while every method takes `&self`; `T` is made of `Cell`s.
 struct Slot<T> {
     generation: Cell<u32>,
     links: Cell<Links>,
     value: T,
 }
 
-// `repr(C)` fixes the field order and offsets, so `layout` can compute the size of a pool with
-// `len` slots and `init` can place one in raw memory.
-#[repr(C)]
-pub(crate) struct ObjectPool<T> {
+pub(crate) struct ObjectPool<T, const N: usize> {
     free_head: Cell<Option<u32>>,
     occupied_head: Cell<Option<u32>>,
-    slots: [Slot<T>],
+    slots: [Slot<T>; N],
 }
 
-impl<T: Default> ObjectPool<T> {
-    /// Writes an empty pool with `len` slots at `ptr`, each holding `T::default()`.
-    ///
-    /// # Safety
-    ///
-    /// `ptr` must be valid for writes of `Self::layout(len)` bytes (so `layout` must have accepted
-    /// `len`), aligned to it, and stay valid (and otherwise unused) for `'a`.
-    pub(crate) unsafe fn init<'a>(ptr: NonNull<u8>, len: usize) -> &'a Self {
-        let pool = Self::raw(ptr, len);
-        // SAFETY: the caller guarantees `ptr` is valid for `Self::layout(len)`, which (`repr(C)`)
-        // covers every field, disjointly. `&raw mut` creates no reference to the uninitialized
-        // pool, and the fields are borrowed as `MaybeUninit`, which needs no initialized contents.
+impl<T: Default, const N: usize> ObjectPool<T, N> {
+    pub(crate) fn init(place: &mut MaybeUninit<Self>) -> &Self {
+        assert!(N > 0, "object pool capacity must not be zero");
+        assert!(
+            N <= u32::MAX as usize,
+            "object pool capacity must fit in u32"
+        );
+        let ptr = place.as_mut_ptr();
+        // SAFETY: `ptr` points to `place`, borrowed exclusively until the end; the fields are
+        // disjoint, `&raw mut` creates no reference to them while they're uninitialized, and
+        // `MaybeUninit<T>` has `T`'s layout.
         let (free_head, occupied_head, slots) = unsafe {
             (
-                &mut *(&raw mut (*pool).free_head).cast::<MaybeUninit<Cell<Option<u32>>>>(),
-                &mut *(&raw mut (*pool).occupied_head).cast::<MaybeUninit<Cell<Option<u32>>>>(),
-                &mut *(&raw mut (*pool).slots as *mut [MaybeUninit<Slot<T>>]),
+                &mut *(&raw mut (*ptr).free_head).cast::<MaybeUninit<_>>(),
+                &mut *(&raw mut (*ptr).occupied_head).cast::<MaybeUninit<_>>(),
+                &mut *(&raw mut (*ptr).slots).cast::<[MaybeUninit<_>; N]>(),
             )
         };
-        free_head.write(Cell::new(Some(0)));
-        occupied_head.write(Cell::new(None));
+        free_head.write(Cell::new(Some(0u32)));
+        occupied_head.write(Cell::new(None::<u32>));
         for (slot, place) in slots.iter_mut().enumerate() {
-            let next_free = if slot + 1 < len {
+            let next_free = if slot + 1 < N {
                 Some((slot + 1) as u32)
             } else {
                 None
@@ -120,36 +113,12 @@ impl<T: Default> ObjectPool<T> {
                 value: T::default(),
             });
         }
-        // SAFETY: every field was written above, and the memory stays valid for `'a` (guaranteed
-        // by the caller).
-        unsafe { &*pool }
+        // SAFETY: every field was written above.
+        unsafe { place.assume_init_ref() }
     }
 }
 
-impl<T> ObjectPool<T> {
-    pub(crate) fn layout(len: usize) -> Layout {
-        assert!(len > 0, "object pool capacity must not be zero");
-        assert!(
-            len <= u32::MAX as usize,
-            "object pool capacity must fit in u32"
-        );
-        let slots = Layout::array::<Slot<T>>(len).expect("object pool is too large");
-        let head = Layout::new::<Cell<Option<u32>>>();
-        let (layout, _) = head.extend(head).expect("object pool is too large");
-        let (layout, _) = layout.extend(slots).expect("object pool is too large");
-        layout.pad_to_align()
-    }
-
-    /// The pool of `len` slots at `ptr`, with `ptr`'s provenance.
-    pub(crate) fn raw(ptr: NonNull<u8>, len: usize) -> *mut Self {
-        core::ptr::slice_from_raw_parts_mut(ptr.as_ptr().cast::<Slot<T>>(), len) as *mut Self
-    }
-
-    pub(crate) fn capacity(&self) -> usize {
-        self.slots.len()
-    }
-
-    /// Takes a free slot, whose value is left as it was: the caller sets it.
+impl<T, const N: usize> ObjectPool<T, N> {
     pub(crate) fn alloc(&self) -> Option<(Index<T>, &T)> {
         let slot = self.free_head.get()?;
         let entry = &self.slots[slot as usize];
@@ -172,8 +141,6 @@ impl<T> ObjectPool<T> {
         ))
     }
 
-    /// Its value stays in place until the slot is reused, so the caller takes out what must not
-    /// linger (wakers, futures) through `get` first. A stale `index` is ignored.
     pub(crate) fn free(&self, index: Index<T>) {
         let Some(entry) = self.occupied(index) else {
             return;
@@ -225,7 +192,6 @@ impl<T> ObjectPool<T> {
         self.occupied(index).map(|entry| &entry.value)
     }
 
-    /// Freeing the yielded slot while iterating is fine; freeing any other one is not.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (Index<T>, &T)> {
         let mut cursor = self.occupied_head.get();
         core::iter::from_fn(move || {

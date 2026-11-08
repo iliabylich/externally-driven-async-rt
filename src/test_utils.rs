@@ -1,11 +1,8 @@
 use core::{
-    alloc::Layout,
     cell::Cell,
     future::Future,
-    marker::PhantomData,
     mem::MaybeUninit,
     pin::Pin,
-    ptr::NonNull,
     task::{Poll, RawWaker, RawWakerVTable, Waker},
     time::Duration,
 };
@@ -16,19 +13,30 @@ use rustix::{
     net::{AddressFamily, SocketFlags, SocketType, socketpair},
 };
 
-use crate::{
-    Capacities, Context, Error, EventLoop, State, io::IoRegistration, ready::ReadyQueue,
-    selectors::Direction, storage::Storage,
-};
+use crate::{Context, Error, EventLoop, State, io::IoRegistration, selectors::Direction};
 
-pub(crate) const TEST_CAPACITIES: Capacities = Capacities {
-    max_tasks: 16,
-    max_task_size: 1024,
-    max_timers: 16,
-    max_io: 8,
-};
+pub(crate) const TEST_MAX_TASKS_COUNT: usize = 16;
+pub(crate) const TEST_MAX_TASK_SIZE: usize = 1024;
+pub(crate) const TEST_MAX_ROOT_TASK_SIZE: usize = 2048;
+pub(crate) const TEST_MAX_TIMERS_COUNT: usize = 16;
+pub(crate) const TEST_MAX_IO_COUNT: usize = 8;
 
-pub(crate) type TestContext = Context<Log>;
+pub(crate) type TestLoop<S> = EventLoop<
+    S,
+    TEST_MAX_TASKS_COUNT,
+    TEST_MAX_TASK_SIZE,
+    TEST_MAX_ROOT_TASK_SIZE,
+    TEST_MAX_TIMERS_COUNT,
+    TEST_MAX_IO_COUNT,
+>;
+pub(crate) type TestContext<S = Log> = Context<
+    S,
+    TEST_MAX_TASKS_COUNT,
+    TEST_MAX_TASK_SIZE,
+    TEST_MAX_ROOT_TASK_SIZE,
+    TEST_MAX_TIMERS_COUNT,
+    TEST_MAX_IO_COUNT,
+>;
 
 #[derive(Default)]
 pub(crate) struct Log {
@@ -86,7 +94,6 @@ fn is_ready(fd: impl AsFd, flags: PollFlags, timeout_ms: i64) -> bool {
     poll(&mut fds, Some(&timeout)).unwrap() == 1
 }
 
-// A blocking sleep: `poll` on no fds.
 pub(crate) fn sleep(duration: Duration) {
     let timeout = Timespec {
         tv_sec: duration.as_secs() as i64,
@@ -95,14 +102,30 @@ pub(crate) fn sleep(duration: Duration) {
     assert_eq!(poll(&mut [], Some(&timeout)).unwrap(), 0);
 }
 
-pub(crate) async fn readable(ctx: &TestContext, fd: &OwnedFd) {
+pub(crate) async fn readable<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+>(
+    ctx: &Context<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >,
+    fd: &OwnedFd,
+) {
     let mut registration = IoRegistration::new(ctx.storage(), fd.as_fd(), Direction::Read);
     while !is_readable(fd, 0) {
         registration.wait().await;
     }
 }
 
-// Like `assert_eq!` on two collections, without collecting: reports the first item that differs.
 #[track_caller]
 pub(crate) fn assert_yields<T: PartialEq + core::fmt::Debug>(
     actual: impl IntoIterator<Item = T>,
@@ -117,7 +140,6 @@ pub(crate) fn assert_yields<T: PartialEq + core::fmt::Debug>(
     }
 }
 
-// Does nothing; told apart by its data pointer, `id` (`Waker::data`).
 pub(crate) fn waker(id: usize) -> Waker {
     static VTABLE: RawWakerVTable =
         RawWakerVTable::new(|data| RawWaker::new(data, &VTABLE), |_| {}, |_| {}, |_| {});
@@ -125,7 +147,6 @@ pub(crate) fn waker(id: usize) -> Waker {
     unsafe { Waker::new(core::ptr::without_provenance(id), &VTABLE) }
 }
 
-// Does nothing but count its drops (clones included) in `drops`.
 pub(crate) fn counting_waker(drops: &Cell<u32>) -> Waker {
     static VTABLE: RawWakerVTable = RawWakerVTable::new(
         |data| RawWaker::new(data, &VTABLE),
@@ -153,7 +174,6 @@ impl Drop for DropFlag {
     }
 }
 
-// Sets `*dropped` once dropped.
 pub(crate) fn flagged_task(dropped: *mut bool) -> impl Future<Output = ()> {
     let flag = DropFlag(dropped);
     async move {
@@ -166,7 +186,23 @@ pub(crate) fn wake_by_writing(event_loop: &impl AsFd, peer: &OwnedFd) {
     assert!(is_readable(event_loop, 1000));
 }
 
-pub(crate) fn run_until_root_finishes<S: State>(event_loop: &mut EventLoop<S>) {
+pub(crate) fn run_until_root_finishes<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+>(
+    event_loop: &mut EventLoop<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >,
+) {
     loop {
         assert!(
             is_readable(&*event_loop, 2000),
@@ -180,8 +216,6 @@ pub(crate) fn run_until_root_finishes<S: State>(event_loop: &mut EventLoop<S>) {
     }
 }
 
-// Raw nonblocking rustix sockets for the other end of socket tests: an implementation independent
-// of ours.
 pub(crate) fn raw_socket(family: AddressFamily, ty: SocketType) -> OwnedFd {
     let fd = rustix::net::socket(family, ty, None).unwrap();
     rustix::io::ioctl_fionbio(&fd, true).unwrap();
@@ -195,9 +229,24 @@ pub(crate) fn raw_accept(listener: &OwnedFd) -> OwnedFd {
     fd
 }
 
-// For a peer outside the loop: drains the loop until `peer` has something to read. Waits on both
-// at once: data the loop wrote may reach the peer later (loopback delivery can be deferred).
-pub(crate) fn drain_until_readable<S: State>(event_loop: &mut EventLoop<S>, peer: impl AsFd) {
+pub(crate) fn drain_until_readable<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+>(
+    event_loop: &mut EventLoop<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >,
+    peer: impl AsFd,
+) {
     loop {
         let mut fds = [
             PollFd::new(&peer, PollFlags::IN),
@@ -219,9 +268,22 @@ pub(crate) fn drain_until_readable<S: State>(event_loop: &mut EventLoop<S>, peer
     }
 }
 
-// For a nonblocking peer outside the loop: fills `buf` from `peer`, draining the loop meanwhile.
-pub(crate) fn peer_read_exact<S: State>(
-    event_loop: &mut EventLoop<S>,
+pub(crate) fn peer_read_exact<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+>(
+    event_loop: &mut EventLoop<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >,
     peer: impl AsFd,
     buf: &mut [u8],
 ) {
@@ -234,11 +296,26 @@ pub(crate) fn peer_read_exact<S: State>(
     }
 }
 
-pub(crate) fn has_timers<S: State>(event_loop: &EventLoop<S>) -> bool {
+pub(crate) fn has_timers<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+>(
+    event_loop: &EventLoop<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >,
+) -> bool {
     event_loop.storage.timers.next_deadline().is_some()
 }
 
-// Resolves with whichever future completes first, dropping the other one.
 pub(crate) struct First<A, B>(pub(crate) A, pub(crate) B);
 
 #[derive(Debug, PartialEq, Eq)]
@@ -261,7 +338,23 @@ impl<A: Future + Unpin, B: Future + Unpin> Future for First<A, B> {
     }
 }
 
-pub(crate) fn run_until_events(event_loop: &mut EventLoop<Log>, count: usize) {
+pub(crate) fn run_until_events<
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+>(
+    event_loop: &mut EventLoop<
+        Log,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >,
+    count: usize,
+) {
     while event_loop.state_mut().events().len() < count {
         assert!(
             is_readable(&*event_loop, 2000),
@@ -273,9 +366,6 @@ pub(crate) fn run_until_events(event_loop: &mut EventLoop<Log>, count: usize) {
 
 pub(crate) const TEST_MEMORY: usize = 64 * 1024;
 
-// `'static` memory for an `EventLoop`. Each expansion has its own `static mut`, so it must only
-// be expanded directly in a `#[test]` function (not in a helper or a loop): then it runs once, on
-// that test's thread.
 macro_rules! test_memory_within_current_test {
     () => {{
         static mut MEMORY: [core::mem::MaybeUninit<u8>; $crate::test_utils::TEST_MEMORY] =
@@ -287,101 +377,64 @@ macro_rules! test_memory_within_current_test {
 }
 pub(crate) use test_memory_within_current_test;
 
-// An `EventLoop` in its call site's own `test_memory_within_current_test!`, so the same rule
-// applies: expand it directly in a `#[test]` function.
 macro_rules! test_loop {
-    ($($arg:expr),+ $(,)?) => {
-        $crate::test_utils::test_loop_in($crate::test_utils::test_memory_within_current_test!(), $($arg),+)
+    ([$($capacity:expr),+ $(,)?], $state:expr, $f:expr $(,)?) => {
+        $crate::test_utils::test_loop_in::<_, $({ $capacity }),+, _>(
+            $crate::test_utils::test_memory_within_current_test!(),
+            $state,
+            $f,
+        )
+    };
+    ($state:expr, $f:expr $(,)?) => {
+        $crate::test_utils::test_loop!(
+            [
+                $crate::test_utils::TEST_MAX_TASKS_COUNT,
+                $crate::test_utils::TEST_MAX_TASK_SIZE,
+                $crate::test_utils::TEST_MAX_ROOT_TASK_SIZE,
+                $crate::test_utils::TEST_MAX_TIMERS_COUNT,
+                $crate::test_utils::TEST_MAX_IO_COUNT,
+            ],
+            $state,
+            $f,
+        )
     };
 }
 pub(crate) use test_loop;
 
-// An `EventLoop` in exactly `required_size` bytes of `memory`.
-pub(crate) fn test_loop_in<S, F>(
-    memory: &'static mut [MaybeUninit<u8>],
-    state: S,
-    capacities: Capacities,
-    f: F,
-) -> Result<EventLoop<S>, Error>
-where
+pub(crate) fn test_loop_in<
     S: State,
-    F: AsyncFnOnce(&Context<S>) + 'static,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+    F,
+>(
+    memory: &'static mut [MaybeUninit<u8>; TEST_MEMORY],
+    state: S,
+    f: F,
+) -> Result<
+    EventLoop<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >,
+    Error,
+>
+where
+    F: AsyncFnOnce(
+            &Context<
+                S,
+                MAX_TASKS_COUNT,
+                MAX_TASK_SIZE,
+                MAX_ROOT_TASK_SIZE,
+                MAX_TIMERS_COUNT,
+                MAX_IO_COUNT,
+            >,
+        ) + 'static,
 {
-    let size = EventLoop::<S>::required_size(capacities, &f);
-    assert!(
-        size <= memory.len(),
-        "TEST_MEMORY is too small: {size} bytes needed"
-    );
-    let (memory, _) = memory.split_at_mut(size);
-    EventLoop::new(memory, state, capacities, f)
-}
-
-pub(crate) const STORAGE_MEMORY: usize = 16 * 1024;
-
-pub(crate) fn stack_memory() -> [MaybeUninit<u8>; STORAGE_MEMORY] {
-    [MaybeUninit::uninit(); STORAGE_MEMORY]
-}
-
-// The first address in `memory` aligned for `layout`, with room for it.
-pub(crate) fn aligned_in(memory: &mut [MaybeUninit<u8>], layout: Layout) -> NonNull<u8> {
-    let start = memory.as_ptr().align_offset(layout.align());
-    assert!(
-        start + layout.size() <= memory.len(),
-        "STORAGE_MEMORY is too small"
-    );
-    // The whole tail, not just its first byte: the pointer must be valid for all of `layout`.
-    NonNull::from(&mut memory[start..]).cast()
-}
-
-// A `Storage` without a selector (so no kqueue: usable under Miri) in borrowed memory, destroyed
-// on drop. It starts one byte into the memory, so the storage has to align its start.
-pub(crate) struct TestStorage<'m> {
-    storage: &'static Storage<(), ()>,
-    _memory: PhantomData<&'m mut [MaybeUninit<u8>]>,
-}
-
-impl<'m> TestStorage<'m> {
-    pub(crate) fn new(
-        memory: &'m mut [MaybeUninit<u8>],
-        max_tasks_count: usize,
-        max_timers_count: usize,
-        max_io_count: usize,
-    ) -> Self {
-        let capacities = Capacities {
-            max_tasks: max_tasks_count,
-            max_task_size: TEST_CAPACITIES.max_task_size,
-            max_timers: max_timers_count,
-            max_io: max_io_count,
-        };
-        let root_layout = Layout::new::<()>();
-        // SAFETY: `memory` is borrowed for as long as the storage exists (it's destroyed on drop).
-        let storage = unsafe {
-            Storage::new(
-                NonNull::from(&mut memory[1..]),
-                (),
-                (),
-                capacities,
-                root_layout,
-            )
-        };
-        Self {
-            storage,
-            _memory: PhantomData,
-        }
-    }
-
-    pub(crate) fn storage(&self) -> &'static Storage<(), ()> {
-        self.storage
-    }
-
-    pub(crate) fn ready(&self) -> &ReadyQueue {
-        self.storage.tasks.ready()
-    }
-}
-
-impl Drop for TestStorage<'_> {
-    fn drop(&mut self) {
-        // SAFETY: destroyed once, with no task being polled.
-        unsafe { self.storage.destroy() };
-    }
+    EventLoop::new(memory, state, f)
 }

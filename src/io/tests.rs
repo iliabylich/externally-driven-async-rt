@@ -11,16 +11,34 @@ use rustix::{
 };
 
 use crate::{
-    Capacities, EventLoop,
+    Context, State,
     io::IoRegistration,
     selectors::Direction,
     test_utils::{
-        First, Log, TEST_CAPACITIES, TestContext, Winner, is_readable, pair,
+        First, Log, TEST_MAX_ROOT_TASK_SIZE, TEST_MAX_TASK_SIZE, TEST_MAX_TASKS_COUNT,
+        TEST_MAX_TIMERS_COUNT, TestContext, TestLoop, Winner, is_readable, pair,
         run_until_root_finishes, test_loop,
     },
 };
 
-async fn read_some(ctx: &TestContext, fd: &OwnedFd) -> rustix::io::Result<usize> {
+async fn read_some<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+>(
+    ctx: &Context<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >,
+    fd: &OwnedFd,
+) -> rustix::io::Result<usize> {
     let mut buf = [0; 64];
     let mut registration = IoRegistration::new(ctx.storage(), fd.as_fd(), Direction::Read);
     loop {
@@ -50,14 +68,14 @@ fn drain_receive_buffer(fd: &OwnedFd) {
     while rustix::io::read(fd, &mut buf).is_ok() {}
 }
 
-fn registrations(event_loop: &EventLoop<Log>) -> usize {
+fn registrations(event_loop: &TestLoop<Log>) -> usize {
     event_loop.storage.io_waiters.count()
 }
 
 #[test]
 fn read_waits_until_the_peer_writes() {
     let (a, b) = pair();
-    let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+    let mut event_loop = test_loop!(Log::default(), async move |ctx| {
         let n = read_some(ctx, &a).await.unwrap();
         ctx.dispatch(n as u32);
         pending::<()>().await;
@@ -77,7 +95,7 @@ fn read_waits_until_the_peer_writes() {
 fn write_waits_on_a_full_buffer() {
     let (a, b) = pair();
     fill_send_buffer(&a);
-    let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+    let mut event_loop = test_loop!(Log::default(), async move |ctx| {
         let n = write_some(ctx, &a).await.unwrap();
         ctx.dispatch(n as u32);
     },)
@@ -94,7 +112,7 @@ fn write_waits_on_a_full_buffer() {
 fn ready_fd_arms_nothing() {
     let (a, b) = pair();
     rustix::io::write(&b, b"abc").unwrap();
-    let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+    let mut event_loop = test_loop!(Log::default(), async move |ctx| {
         let n = read_some(ctx, &a).await.unwrap();
         ctx.dispatch(n as u32);
         pending::<()>().await;
@@ -109,7 +127,7 @@ fn ready_fd_arms_nothing() {
 #[test]
 fn dropping_a_pending_read_deregisters() {
     let (a, b) = pair();
-    let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+    let mut event_loop = test_loop!(Log::default(), async move |ctx| {
         let winner = First(
             pin!(read_some(ctx, &a)),
             ctx.sleep(Duration::from_millis(10)),
@@ -133,7 +151,7 @@ fn dropping_a_pending_read_deregisters() {
 #[test]
 fn read_survives_a_spurious_wake() {
     let (a, b) = pair();
-    let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+    let mut event_loop = test_loop!(Log::default(), async move |ctx| {
         let mut woken = false;
         let wake_once = poll_fn(move |cx| {
             if !woken {
@@ -159,7 +177,7 @@ fn read_survives_a_spurious_wake() {
 
 #[test]
 fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
-    let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async |ctx| {
+    let mut event_loop = test_loop!(Log::default(), async |ctx| {
         let (a, _b) = pair();
         let winner = First(
             pin!(read_some(ctx, &a)),
@@ -188,11 +206,14 @@ fn exceeding_max_io_count_panics() {
     let (a, _b) = pair();
     let (c, _d) = pair();
     let _ = test_loop!(
+        [
+            TEST_MAX_TASKS_COUNT,
+            TEST_MAX_TASK_SIZE,
+            TEST_MAX_ROOT_TASK_SIZE,
+            TEST_MAX_TIMERS_COUNT,
+            1
+        ],
         Log::default(),
-        Capacities {
-            max_io: 1,
-            ..TEST_CAPACITIES
-        },
         async move |ctx| {
             First(pin!(read_some(ctx, &a)), pin!(read_some(ctx, &c))).await;
         },
@@ -203,11 +224,14 @@ fn exceeding_max_io_count_panics() {
 fn sequential_io_reuses_the_slot() {
     let (a, b) = pair();
     let mut event_loop = test_loop!(
+        [
+            TEST_MAX_TASKS_COUNT,
+            TEST_MAX_TASK_SIZE,
+            TEST_MAX_ROOT_TASK_SIZE,
+            TEST_MAX_TIMERS_COUNT,
+            1
+        ],
         Log::default(),
-        Capacities {
-            max_io: 1,
-            ..TEST_CAPACITIES
-        },
         async move |ctx| {
             for _ in 0..3 {
                 let len = read_some(ctx, &a).await.unwrap();

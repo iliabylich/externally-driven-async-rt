@@ -1,23 +1,18 @@
 use core::{
-    alloc::Layout,
     cell::{Cell, UnsafeCell},
     mem::MaybeUninit,
-    ptr::NonNull,
     task::Waker,
 };
 
 use crate::{
-    capacities::Capacities,
     instant::Instant,
     selectors::{Direction, EVENTS_PER_CALL, Selector, SelectorEvent},
 };
 
 pub(crate) use io_waiters::{IoIndex, IoWaiters};
-use layout::StorageLayout;
 pub(crate) use tasks::{Root, RootStatus, TaskId, Tasks};
 pub(crate) use timers::{TimerIndex, Timers};
 
-// `clone_from`, so storing a waker that wakes the same task as the stored one doesn't clone it.
 fn store_waker(cell: &Cell<Option<Waker>>, waker: &Waker) {
     let stored = match cell.take() {
         Some(mut stored) => {
@@ -29,91 +24,75 @@ fn store_waker(cell: &Cell<Option<Waker>>, waker: &Waker) {
     cell.set(Some(stored));
 }
 
-// The runtime: one block of caller-provided memory that never moves, with this struct at its
-// start, holding the inline values and a reference to every other part of the allocation (the
-// state, each pool, the ready queue, the task slab, the root region). Reached through a
-// `&'static Storage` (in the `EventLoop` and every `Context`) and borrows of it. Objects inside
-// are addressed by typed indices.
-pub(crate) struct Storage<S: 'static, Sel = Selector> {
+pub(crate) struct Storage<
+    S: 'static,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+    Sel = Selector,
+> {
     pub(crate) selector: Sel,
-    // `'static`: they live as long as the storage, which nothing that can reach it outlives.
-    // Only shared references: the state is in an `UnsafeCell`.
-    pub(crate) state: &'static UnsafeCell<S>,
-    pub(crate) timers: Timers,
-    pub(crate) io_waiters: IoWaiters,
-    pub(crate) tasks: Tasks,
+    pub(crate) state: UnsafeCell<S>,
+    pub(crate) timers: Timers<MAX_TIMERS_COUNT>,
+    pub(crate) io_waiters: IoWaiters<MAX_IO_COUNT>,
+    pub(crate) tasks: Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
 }
 
-impl<S: 'static, Sel: 'static> Storage<S, Sel> {
-    /// The size of the memory `new` needs: the storage's layout plus slack for aligning its start,
-    /// so memory of this size works wherever it starts.
-    pub(crate) fn required_size(capacities: Capacities, root_layout: Layout) -> usize {
-        StorageLayout::required_size::<S, Sel>(capacities, root_layout)
+impl<
+    S: 'static,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+    Sel: 'static,
+>
+    Storage<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+        Sel,
+    >
+{
+    pub(crate) fn init(place: &mut MaybeUninit<Self>, selector: Sel, state: S) -> &Self {
+        let ptr = place.as_mut_ptr();
+        // SAFETY: `ptr` points to `place`, borrowed exclusively until the end; the fields are
+        // disjoint, `&raw mut` creates no reference to them while they're uninitialized, and
+        // `MaybeUninit<T>` has `T`'s layout.
+        let (selector_place, state_place, timers, io_waiters, tasks) = unsafe {
+            (
+                &mut *(&raw mut (*ptr).selector).cast::<MaybeUninit<_>>(),
+                &mut *(&raw mut (*ptr).state).cast::<MaybeUninit<_>>(),
+                &mut *(&raw mut (*ptr).timers).cast::<MaybeUninit<_>>(),
+                &mut *(&raw mut (*ptr).io_waiters).cast::<MaybeUninit<_>>(),
+                &mut *(&raw mut (*ptr).tasks).cast::<MaybeUninit<_>>(),
+            )
+        };
+        selector_place.write(selector);
+        state_place.write(UnsafeCell::new(state));
+        Timers::<MAX_TIMERS_COUNT>::init(timers);
+        IoWaiters::<MAX_IO_COUNT>::init(io_waiters);
+        Tasks::<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>::init(tasks);
+        // SAFETY: every field was written above.
+        unsafe { place.assume_init_ref() }
     }
 
-    /// Builds the storage inside `memory`, at its first suitably aligned address. Panics if
-    /// `memory` is smaller than needed (`required_size` is always enough).
-    ///
-    /// # Safety
-    ///
-    /// `memory` must be valid for reads and writes and not be used by anything else until
-    /// `destroy` returns.
-    pub(crate) unsafe fn new(
-        memory: NonNull<[MaybeUninit<u8>]>,
-        selector: Sel,
-        state: S,
-        capacities: Capacities,
-        root_layout: Layout,
-    ) -> &'static Self {
-        let StorageLayout {
-            base_ptr,
-            state_ptr,
-            timers_ptr,
-            io_waiters_ptr,
-            tasks_ptr,
-        } = StorageLayout::new::<S, Sel>(capacities, root_layout, memory);
-        // SAFETY: `StorageLayout::new` put every part inside `memory` (it checked the size),
-        // aligned for it and not overlapping the others; `memory` is valid and unused (guaranteed
-        // by the caller). Each part is written exactly once, the `Storage` struct last. The parts
-        // live until `destroy`, which nothing holding the storage outlives, and are only accessed
-        // through shared references (and by `destroy`), hence `'static`.
-        unsafe {
-            let state_ptr = state_ptr.cast::<UnsafeCell<S>>();
-            state_ptr.write(UnsafeCell::new(state));
-            let storage = Self {
-                selector,
-                timers: Timers::init(timers_ptr, capacities.max_timers),
-                io_waiters: IoWaiters::init(io_waiters_ptr, capacities.max_io),
-                tasks: Tasks::init(
-                    tasks_ptr,
-                    capacities.max_tasks,
-                    capacities.max_task_size,
-                    root_layout,
-                ),
-                state: state_ptr.as_ref(),
-            };
-            let ptr = base_ptr.cast::<Self>();
-            ptr.write(storage);
-            ptr.as_ref()
-        }
-    }
-
-    /// Drops every task, the state, the pools and the selector. The memory isn't freed: it's the
-    /// caller's.
-    ///
     /// # Safety
     ///
     /// Called exactly once, while no task is being polled; the storage isn't used afterwards.
     pub(crate) unsafe fn destroy(&self) {
-        // Task futures hold `Context`s pointing at the storage and may use them in their `Drop`
-        // impls, so they go first, while everything is intact.
         self.tasks.drop_all();
         self.timers.clear();
         self.io_waiters.clear();
         // SAFETY: no task (so no `Context` and no reference into the storage) is left; the state
-        // was initialized in `new` and is dropped exactly once here, the other parts hold nothing
-        // that needs dropping (the ready queue holds only `Copy` data, the task slab and root
-        // region no live future, the pools nothing after `drop_all` and `clear`). The selector is
+        // was initialized in `init` and is dropped exactly once here, the other parts hold nothing
+        // that needs dropping (the ready queue holds only `Copy` data, the blocks no live future,
+        // the pools nothing after `drop_all` and `clear`). The selector is
         // this struct's only field with drop glue; it's moved out (a read) rather than dropped in
         // place, because dropping needs write access to the struct, which callers hold protected
         // shared references to (`&self`, and e.g. an `EventLoop` given to `mem::drop`).
@@ -124,7 +103,15 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
     }
 }
 
-impl<S: 'static> Storage<S, Selector> {
+impl<
+    S: 'static,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+> Storage<S, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE, MAX_TIMERS_COUNT, MAX_IO_COUNT>
+{
     pub(crate) fn process_selector_events(&self) -> rustix::io::Result<()> {
         let mut events = [None; EVENTS_PER_CALL];
         loop {
@@ -167,7 +154,6 @@ impl<S: 'static> Storage<S, Selector> {
 }
 
 mod io_waiters;
-mod layout;
 mod tasks;
 mod timers;
 

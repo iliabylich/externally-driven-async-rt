@@ -5,7 +5,6 @@ compile_error!(
     "externally-driven-async-rt currently supports only macOS (Linux support is planned)"
 );
 
-mod capacities;
 mod context;
 mod event_loop;
 mod instant;
@@ -14,19 +13,16 @@ mod join_handle;
 pub mod net;
 mod pool;
 mod ready;
-mod root_region;
 mod selectors;
 mod sleep;
 mod state;
 mod storage;
 mod task;
-mod task_slab;
 #[cfg(test)]
 mod test_utils;
 mod thread_id;
 mod waker;
 
-pub use capacities::Capacities;
 pub use context::Context;
 pub use event_loop::{Error, EventLoop};
 pub use join_handle::JoinHandle;

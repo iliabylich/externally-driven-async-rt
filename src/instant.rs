@@ -2,7 +2,6 @@ use core::{ops::Add, time::Duration};
 
 use crate::selectors::monotonic_nanos;
 
-// Nanoseconds on the selector's monotonic clock.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct Instant(u64);
 
@@ -16,7 +15,6 @@ impl Instant {
     }
 }
 
-// Saturating: a deadline that far away (centuries) is never reached anyway.
 impl Add<Duration> for Instant {
     type Output = Self;
 

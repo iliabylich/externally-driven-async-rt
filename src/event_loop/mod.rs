@@ -1,9 +1,8 @@
-use core::{alloc::Layout, mem::MaybeUninit, ptr::NonNull};
+use core::mem::MaybeUninit;
 
 use rustix::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
 use crate::{
-    capacities::Capacities,
     context::{Context, task_future},
     selectors::Selector,
     state::State,
@@ -25,44 +24,99 @@ impl core::fmt::Display for Error {
     }
 }
 
-// No `source()`: without its `std` feature, rustix's `Errno` doesn't implement `Error`.
 impl core::error::Error for Error {}
 
-pub struct EventLoop<S: State> {
-    pub(crate) storage: &'static Storage<S>,
+pub struct EventLoop<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+> {
+    pub(crate) storage: &'static Storage<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >,
 }
 
-impl<S: State> EventLoop<S> {
-    pub fn required_size<F>(capacities: Capacities, _root: &F) -> usize
-    where
-        F: AsyncFnOnce(&Context<S>) + 'static,
-    {
-        Storage::<S>::required_size(capacities, return_layout(task_future::<S, F>))
-    }
+impl<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+> EventLoop<S, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE, MAX_TIMERS_COUNT, MAX_IO_COUNT>
+{
+    pub const REQUIRED_SIZE: usize = size_of::<
+        Storage<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
+    >() + align_of::<
+        Storage<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
+    >() - 1;
 
-    pub fn new<F>(
-        memory: &'static mut [MaybeUninit<u8>],
+    pub fn new<const MEMORY: usize, F>(
+        memory: &'static mut [MaybeUninit<u8>; MEMORY],
         state: S,
-        capacities: Capacities,
         f: F,
     ) -> Result<Self, Error>
     where
-        F: AsyncFnOnce(&Context<S>) + 'static,
+        F: AsyncFnOnce(
+                &Context<
+                    S,
+                    MAX_TASKS_COUNT,
+                    MAX_TASK_SIZE,
+                    MAX_ROOT_TASK_SIZE,
+                    MAX_TIMERS_COUNT,
+                    MAX_IO_COUNT,
+                >,
+            ) + 'static,
     {
+        const {
+            assert!(
+                MEMORY >= Self::REQUIRED_SIZE,
+                "the EventLoop memory is smaller than REQUIRED_SIZE"
+            );
+        }
         let selector = Selector::new().map_err(Error::Io)?;
-        // SAFETY: `memory` is borrowed exclusively forever, so nothing else ever uses it.
-        let storage = unsafe {
-            Storage::new(
-                NonNull::from(memory),
-                selector,
-                state,
-                capacities,
-                return_layout(task_future::<S, F>),
-            )
-        };
+        let align = align_of::<
+            Storage<
+                S,
+                MAX_TASKS_COUNT,
+                MAX_TASK_SIZE,
+                MAX_ROOT_TASK_SIZE,
+                MAX_TIMERS_COUNT,
+                MAX_IO_COUNT,
+            >,
+        >();
+        let addr = memory.as_ptr().addr();
+        let start = addr.next_multiple_of(align) - addr;
+        // SAFETY: `start` is less than `align`, so the storage fits in `memory` from there
+        // (`REQUIRED_SIZE`, asserted above), aligned. `MaybeUninit` needs no initialized contents,
+        // and `memory` is borrowed exclusively forever.
+        let place = unsafe { &mut *memory.as_mut_ptr().add(start).cast() };
+        let storage = Storage::init(place, selector, state);
         let event_loop = Self { storage };
         // SAFETY: the future is stored in this storage right away, as its root.
-        let root = unsafe { task_future::<S, F>(storage, f) };
+        let root = unsafe { task_future(storage, f) };
         storage.tasks.spawn_root(root);
         match storage.tasks.run_ready() {
             RootStatus::Running => {}
@@ -108,13 +162,23 @@ impl<S: State> EventLoop<S> {
     }
 }
 
-// The root future's type can't be named, and its layout is needed to allocate the storage before
-// the future can be created (it captures the storage).
-fn return_layout<A, B, R>(_: unsafe fn(A, B) -> R) -> Layout {
-    Layout::new::<R>()
-}
-
-impl<S: State> Drop for EventLoop<S> {
+impl<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+> Drop
+    for EventLoop<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >
+{
     fn drop(&mut self) {
         // SAFETY: destroyed exactly once, here, with no task being polled (`drop` can't run from
         // inside the loop).
@@ -122,13 +186,45 @@ impl<S: State> Drop for EventLoop<S> {
     }
 }
 
-impl<S: State> AsFd for EventLoop<S> {
+impl<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+> AsFd
+    for EventLoop<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >
+{
     fn as_fd(&self) -> BorrowedFd<'_> {
         self.storage.selector.as_fd()
     }
 }
 
-impl<S: State> AsRawFd for EventLoop<S> {
+impl<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+> AsRawFd
+    for EventLoop<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >
+{
     fn as_raw_fd(&self) -> RawFd {
         self.as_fd().as_raw_fd()
     }

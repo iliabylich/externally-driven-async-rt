@@ -1,7 +1,7 @@
 use core::{net::SocketAddr, time::Duration};
 
 use externally_driven_async_rt::{
-    Capacities, Context, Error, EventLoop, State,
+    Context, Error, EventLoop, State,
     net::{TcpListener, TcpStream},
 };
 
@@ -11,14 +11,28 @@ use rustix::{
     io::Errno,
 };
 
-const CAPACITIES: Capacities = Capacities {
-    max_tasks: 1024,
-    max_task_size: 4096,
-    max_timers: 4,
-    max_io: 1024,
-};
+const MAX_TASKS_COUNT: usize = 1024;
+const MAX_TASK_SIZE: usize = 4096;
+const MAX_ROOT_TASK_SIZE: usize = 4096;
+const MAX_TIMERS_COUNT: usize = 4;
+const MAX_IO_COUNT: usize = 1024;
 
-type ServerContext = Context<Server>;
+type ServerLoop = EventLoop<
+    Server,
+    MAX_TASKS_COUNT,
+    MAX_TASK_SIZE,
+    MAX_ROOT_TASK_SIZE,
+    MAX_TIMERS_COUNT,
+    MAX_IO_COUNT,
+>;
+type ServerContext = Context<
+    Server,
+    MAX_TASKS_COUNT,
+    MAX_TASK_SIZE,
+    MAX_ROOT_TASK_SIZE,
+    MAX_TIMERS_COUNT,
+    MAX_IO_COUNT,
+>;
 
 #[derive(Default)]
 struct Server {
@@ -132,8 +146,6 @@ enum Command {
     Unknown(String),
 }
 
-// Reads stdin with a raw `read` (not std's buffered reader, which could swallow lines that `poll`
-// then never reports again) and turns every complete line into a command.
 fn read_commands(
     stdin: BorrowedFd<'_>,
     pending: &mut Vec<u8>,
@@ -165,15 +177,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = async move |ctx: &ServerContext| {
         accept_loop(ctx, addr).await;
     };
-    // The loop's memory lives as long as the process, so it's simply leaked.
-    let size = EventLoop::<Server>::required_size(CAPACITIES, &root);
-    let memory = Box::leak(Box::new_uninit_slice(size));
-    let mut event_loop = EventLoop::new(memory, Server::default(), CAPACITIES, root)?;
+    let memory = Box::new_uninit_slice(ServerLoop::REQUIRED_SIZE)
+        .try_into()
+        .unwrap();
+    let memory = Box::<[_; ServerLoop::REQUIRED_SIZE]>::leak(memory);
+    let mut event_loop = ServerLoop::new(memory, Server::default(), root)?;
     for line in core::mem::take(&mut event_loop.state_mut().log) {
         println!("{line}");
     }
     println!("commands: stats, quit");
-    // rustix is built without `std`, so its fd types aren't std's: stdin is borrowed by number.
     // SAFETY: fd 0 is stdin, which stays open for the whole process.
     let stdin = unsafe { BorrowedFd::borrow_raw(0) };
     let mut pending = Vec::new();

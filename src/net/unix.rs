@@ -20,9 +20,23 @@ impl UnixListener {
         Ok(Self { fd })
     }
 
-    pub async fn accept<S: State>(
+    pub async fn accept<
+        S: State,
+        const MAX_TASKS_COUNT: usize,
+        const MAX_TASK_SIZE: usize,
+        const MAX_ROOT_TASK_SIZE: usize,
+        const MAX_TIMERS_COUNT: usize,
+        const MAX_IO_COUNT: usize,
+    >(
         &mut self,
-        ctx: &Context<S>,
+        ctx: &Context<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
     ) -> rustix::io::Result<(UnixStream, SocketAddrUnix)> {
         let (fd, addr) = crate::net::accept(ctx, &self.fd).await?;
         Ok((UnixStream { fd }, addr))
@@ -38,25 +52,67 @@ pub struct UnixStream {
 }
 
 impl UnixStream {
-    pub async fn connect<S: State>(
-        ctx: &Context<S>,
+    pub async fn connect<
+        S: State,
+        const MAX_TASKS_COUNT: usize,
+        const MAX_TASK_SIZE: usize,
+        const MAX_ROOT_TASK_SIZE: usize,
+        const MAX_TIMERS_COUNT: usize,
+        const MAX_IO_COUNT: usize,
+    >(
+        ctx: &Context<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
         addr: &SocketAddrUnix,
     ) -> rustix::io::Result<Self> {
         let fd = crate::net::connect(ctx, AddressFamily::UNIX, addr).await?;
         Ok(Self { fd })
     }
 
-    pub async fn read<S: State>(
+    pub async fn read<
+        S: State,
+        const MAX_TASKS_COUNT: usize,
+        const MAX_TASK_SIZE: usize,
+        const MAX_ROOT_TASK_SIZE: usize,
+        const MAX_TIMERS_COUNT: usize,
+        const MAX_IO_COUNT: usize,
+    >(
         &mut self,
-        ctx: &Context<S>,
+        ctx: &Context<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
         buf: &mut [u8],
     ) -> rustix::io::Result<usize> {
         crate::net::read(ctx, &self.fd, buf).await
     }
 
-    pub async fn write<S: State>(
+    pub async fn write<
+        S: State,
+        const MAX_TASKS_COUNT: usize,
+        const MAX_TASK_SIZE: usize,
+        const MAX_ROOT_TASK_SIZE: usize,
+        const MAX_TIMERS_COUNT: usize,
+        const MAX_IO_COUNT: usize,
+    >(
         &mut self,
-        ctx: &Context<S>,
+        ctx: &Context<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
         buf: &[u8],
     ) -> rustix::io::Result<usize> {
         crate::net::write(ctx, &self.fd, buf).await
@@ -94,18 +150,46 @@ impl UnixDatagram {
         Ok(Self { fd })
     }
 
-    pub async fn send_to<S: State>(
+    pub async fn send_to<
+        S: State,
+        const MAX_TASKS_COUNT: usize,
+        const MAX_TASK_SIZE: usize,
+        const MAX_ROOT_TASK_SIZE: usize,
+        const MAX_TIMERS_COUNT: usize,
+        const MAX_IO_COUNT: usize,
+    >(
         &mut self,
-        ctx: &Context<S>,
+        ctx: &Context<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
         buf: &[u8],
         addr: &SocketAddrUnix,
     ) -> rustix::io::Result<usize> {
         crate::net::send_to(ctx, &self.fd, buf, addr).await
     }
 
-    pub async fn recv_from<S: State>(
+    pub async fn recv_from<
+        S: State,
+        const MAX_TASKS_COUNT: usize,
+        const MAX_TASK_SIZE: usize,
+        const MAX_ROOT_TASK_SIZE: usize,
+        const MAX_TIMERS_COUNT: usize,
+        const MAX_IO_COUNT: usize,
+    >(
         &mut self,
-        ctx: &Context<S>,
+        ctx: &Context<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
         buf: &mut [u8],
     ) -> rustix::io::Result<(usize, SocketAddrUnix)> {
         crate::net::recv_from(ctx, &self.fd, buf).await
@@ -115,17 +199,45 @@ impl UnixDatagram {
         rustix::net::connect(&self.fd, addr)
     }
 
-    pub async fn send<S: State>(
+    pub async fn send<
+        S: State,
+        const MAX_TASKS_COUNT: usize,
+        const MAX_TASK_SIZE: usize,
+        const MAX_ROOT_TASK_SIZE: usize,
+        const MAX_TIMERS_COUNT: usize,
+        const MAX_IO_COUNT: usize,
+    >(
         &mut self,
-        ctx: &Context<S>,
+        ctx: &Context<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
         buf: &[u8],
     ) -> rustix::io::Result<usize> {
         crate::net::send(ctx, &self.fd, buf).await
     }
 
-    pub async fn recv<S: State>(
+    pub async fn recv<
+        S: State,
+        const MAX_TASKS_COUNT: usize,
+        const MAX_TASK_SIZE: usize,
+        const MAX_ROOT_TASK_SIZE: usize,
+        const MAX_TIMERS_COUNT: usize,
+        const MAX_IO_COUNT: usize,
+    >(
         &mut self,
-        ctx: &Context<S>,
+        ctx: &Context<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
         buf: &mut [u8],
     ) -> rustix::io::Result<usize> {
         crate::net::recv(ctx, &self.fd, buf).await
@@ -148,8 +260,8 @@ mod tests {
     use crate::{
         net::{UnixDatagram, UnixListener, UnixStream},
         test_utils::{
-            Log, TEST_CAPACITIES, drain_until_readable, peer_read_exact, raw_accept, raw_socket,
-            run_until_events, test_loop,
+            Log, drain_until_readable, peer_read_exact, raw_accept, raw_socket, run_until_events,
+            test_loop,
         },
     };
 
@@ -160,7 +272,6 @@ mod tests {
         fn unlink(path: *const c_char) -> i32;
     }
 
-    // `/tmp/edar-<pid>-<name>`, removed before use (left over from a killed run) and on drop.
     struct TempPath {
         bytes: [u8; 104],
     }
@@ -217,7 +328,7 @@ mod tests {
         let listener = raw_socket(AddressFamily::UNIX, SocketType::STREAM);
         rustix::net::bind(&listener, &server_addr).unwrap();
         rustix::net::listen(&listener, 1).unwrap();
-        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
             let mut stream = UnixStream::connect(ctx, &server_addr).await.unwrap();
             assert_eq!(path_of(&stream.peer_addr().unwrap()), path_of(&server_addr));
             assert!(path_of(&stream.local_addr().unwrap()).is_empty());
@@ -254,7 +365,7 @@ mod tests {
             path_of(&listener.local_addr().unwrap()),
             path_of(&listener_addr)
         );
-        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
             let (mut stream, peer) = listener.accept(ctx).await.unwrap();
             assert!(path_of(&peer).is_empty());
             let mut buf = [0; 4];
@@ -284,7 +395,7 @@ mod tests {
         let (ours_addr, theirs_addr) = (ours.addr(), theirs.addr());
         let peer = raw_socket(AddressFamily::UNIX, SocketType::DGRAM);
         rustix::net::bind(&peer, &theirs_addr).unwrap();
-        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
             let mut socket = UnixDatagram::bind(&ours_addr).unwrap();
             assert_eq!(path_of(&socket.local_addr().unwrap()), path_of(&ours_addr));
             let mut buf = [0; 64];
@@ -321,7 +432,7 @@ mod tests {
     fn unbound_datagram_sender_has_an_unnamed_address() {
         let path = TempPath::new("dgram-unbound");
         let bound_addr = path.addr();
-        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
             let mut bound = UnixDatagram::bind(&bound_addr).unwrap();
             let mut unbound = UnixDatagram::unbound().unwrap();
             unbound.send_to(ctx, b"hi", &bound_addr).await.unwrap();

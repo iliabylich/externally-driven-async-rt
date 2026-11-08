@@ -24,9 +24,23 @@ impl TcpListener {
         Ok(Self { fd })
     }
 
-    pub async fn accept<S: State>(
+    pub async fn accept<
+        S: State,
+        const MAX_TASKS_COUNT: usize,
+        const MAX_TASK_SIZE: usize,
+        const MAX_ROOT_TASK_SIZE: usize,
+        const MAX_TIMERS_COUNT: usize,
+        const MAX_IO_COUNT: usize,
+    >(
         &mut self,
-        ctx: &Context<S>,
+        ctx: &Context<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
     ) -> rustix::io::Result<(TcpStream, SocketAddr)> {
         let (fd, addr) = crate::net::accept(ctx, &self.fd).await?;
         Ok((TcpStream { fd }, addr))
@@ -42,22 +56,67 @@ pub struct TcpStream {
 }
 
 impl TcpStream {
-    pub async fn connect<S: State>(ctx: &Context<S>, addr: SocketAddr) -> rustix::io::Result<Self> {
+    pub async fn connect<
+        S: State,
+        const MAX_TASKS_COUNT: usize,
+        const MAX_TASK_SIZE: usize,
+        const MAX_ROOT_TASK_SIZE: usize,
+        const MAX_TIMERS_COUNT: usize,
+        const MAX_IO_COUNT: usize,
+    >(
+        ctx: &Context<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
+        addr: SocketAddr,
+    ) -> rustix::io::Result<Self> {
         let fd = crate::net::connect(ctx, crate::net::ip_family(&addr), &addr).await?;
         Ok(Self { fd })
     }
 
-    pub async fn read<S: State>(
+    pub async fn read<
+        S: State,
+        const MAX_TASKS_COUNT: usize,
+        const MAX_TASK_SIZE: usize,
+        const MAX_ROOT_TASK_SIZE: usize,
+        const MAX_TIMERS_COUNT: usize,
+        const MAX_IO_COUNT: usize,
+    >(
         &mut self,
-        ctx: &Context<S>,
+        ctx: &Context<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
         buf: &mut [u8],
     ) -> rustix::io::Result<usize> {
         crate::net::read(ctx, &self.fd, buf).await
     }
 
-    pub async fn write<S: State>(
+    pub async fn write<
+        S: State,
+        const MAX_TASKS_COUNT: usize,
+        const MAX_TASK_SIZE: usize,
+        const MAX_ROOT_TASK_SIZE: usize,
+        const MAX_TIMERS_COUNT: usize,
+        const MAX_IO_COUNT: usize,
+    >(
         &mut self,
-        ctx: &Context<S>,
+        ctx: &Context<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
         buf: &[u8],
     ) -> rustix::io::Result<usize> {
         crate::net::write(ctx, &self.fd, buf).await
@@ -93,8 +152,8 @@ mod tests {
     use crate::{
         net::{TcpListener, TcpStream},
         test_utils::{
-            self, Log, TEST_CAPACITIES, drain_until_readable, is_writable, peer_read_exact,
-            raw_accept, run_until_events, test_loop,
+            self, Log, drain_until_readable, is_writable, peer_read_exact, raw_accept,
+            run_until_events, test_loop,
         },
     };
 
@@ -116,7 +175,7 @@ mod tests {
     #[test]
     fn echo_with_a_raw_peer() {
         let (listener, addr) = raw_listener();
-        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
             let mut stream = TcpStream::connect(ctx, addr).await.unwrap();
             assert_eq!(stream.peer_addr().unwrap(), addr);
             assert!(stream.local_addr().unwrap().ip().is_loopback());
@@ -148,7 +207,7 @@ mod tests {
     fn listener_accepts_a_raw_client() {
         let mut listener = TcpListener::bind(LOCALHOST).unwrap();
         let addr = listener.local_addr().unwrap();
-        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
             let (mut stream, peer) = listener.accept(ctx).await.unwrap();
             assert_eq!(stream.peer_addr().unwrap(), peer);
             let mut buf = [0; 4];
@@ -178,7 +237,7 @@ mod tests {
     #[test]
     fn connect_to_a_closed_port_fails() {
         let addr = TcpListener::bind(LOCALHOST).unwrap().local_addr().unwrap();
-        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
             let errno = TcpStream::connect(ctx, addr).await.err().unwrap();
             ctx.dispatch(errno.raw_os_error() as u32);
             pending::<()>().await;
@@ -197,7 +256,7 @@ mod tests {
         const CHUNK: usize = 512;
         let mut listener = TcpListener::bind(LOCALHOST).unwrap();
         let addr = listener.local_addr().unwrap();
-        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        let mut event_loop = test_loop!(Log::default(), async move |ctx| {
             ctx.spawn(async move |ctx| {
                 let (mut stream, _) = listener.accept(ctx).await.unwrap();
                 let mut buf = [0; CHUNK];

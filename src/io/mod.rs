@@ -8,8 +8,6 @@ use crate::{
     storage::{IoIndex, IoWaiters, Storage},
 };
 
-// Runs a non-blocking syscall until it doesn't return `EAGAIN`, waiting for `$direction`
-// readiness of `$fd` in between. Must be used inside an `async` block.
 macro_rules! io_loop {
     ($ctx:expr, $fd:expr, $direction:expr, $syscall:expr) => {{
         let mut registration = $crate::io::IoRegistration::new($ctx.storage(), $fd, $direction);
@@ -25,15 +23,28 @@ macro_rules! io_loop {
 
 pub(crate) use io_loop;
 
-pub(crate) struct IoRegistration<'a> {
-    io_waiters: &'a IoWaiters,
+pub(crate) struct IoRegistration<'a, const MAX_IO_COUNT: usize> {
+    io_waiters: &'a IoWaiters<MAX_IO_COUNT>,
     selector: &'a Selector,
     index: IoIndex,
 }
 
-impl<'a> IoRegistration<'a> {
-    pub(crate) fn new<S: State>(
-        storage: &'a Storage<S>,
+impl<'a, const MAX_IO_COUNT: usize> IoRegistration<'a, MAX_IO_COUNT> {
+    pub(crate) fn new<
+        S: State,
+        const MAX_TASKS_COUNT: usize,
+        const MAX_TASK_SIZE: usize,
+        const MAX_ROOT_TASK_SIZE: usize,
+        const MAX_TIMERS_COUNT: usize,
+    >(
+        storage: &'a Storage<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
         fd: BorrowedFd<'a>,
         direction: Direction,
     ) -> Self {
@@ -44,7 +55,7 @@ impl<'a> IoRegistration<'a> {
         }
     }
 
-    pub(crate) fn wait(&mut self) -> Wait<'_, 'a> {
+    pub(crate) fn wait(&mut self) -> Wait<'_, 'a, MAX_IO_COUNT> {
         Wait {
             registration: self,
             waiting: false,
@@ -52,22 +63,20 @@ impl<'a> IoRegistration<'a> {
     }
 }
 
-impl Drop for IoRegistration<'_> {
+impl<const MAX_IO_COUNT: usize> Drop for IoRegistration<'_, MAX_IO_COUNT> {
     fn drop(&mut self) {
-        // On failure the slot is released anyway, so a filter left armed can only produce one
-        // ignored event (its index no longer matches) until the fd is closed.
         if let Some(change) = self.io_waiters.release(self.index) {
             let _ = self.selector.apply_now(change);
         }
     }
 }
 
-pub(crate) struct Wait<'r, 'a> {
-    registration: &'r mut IoRegistration<'a>,
+pub(crate) struct Wait<'r, 'a, const MAX_IO_COUNT: usize> {
+    registration: &'r mut IoRegistration<'a, MAX_IO_COUNT>,
     waiting: bool,
 }
 
-impl Future for Wait<'_, '_> {
+impl<const MAX_IO_COUNT: usize> Future for Wait<'_, '_, MAX_IO_COUNT> {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {
@@ -85,7 +94,7 @@ impl Future for Wait<'_, '_> {
     }
 }
 
-impl Drop for Wait<'_, '_> {
+impl<const MAX_IO_COUNT: usize> Drop for Wait<'_, '_, MAX_IO_COUNT> {
     fn drop(&mut self) {
         if self.waiting {
             self.registration

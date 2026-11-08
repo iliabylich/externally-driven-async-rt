@@ -15,7 +15,6 @@ use crate::{
 };
 
 const TIMER_IDENT: isize = 0;
-// Small in tests, so a handful of fds exercises submitting more than one changelist.
 const CHANGES_PER_CALL: usize = if cfg!(test) { 4 } else { 64 };
 
 pub(crate) struct Selector {
@@ -33,9 +32,6 @@ impl Selector {
         })
     }
 
-    /// Applies `change` right away instead of in the next `flush`. Used to delete the filter of
-    /// a registration that ends: by the next `flush` its fd may be closed and its number reused
-    /// by another socket, whose filter a batched delete would remove. `change.fd` must be open.
     pub(crate) fn apply_now(&self, change: IoChange) -> rustix::io::Result<()> {
         self.submit([change.kevent()])
     }
@@ -48,8 +44,6 @@ impl Selector {
         self.timer.borrow_mut().disarm_in_memory();
     }
 
-    /// Submits `io_changes` and the pending timer change, in changelists of up to
-    /// `CHANGES_PER_CALL` entries. Every fd in `io_changes` must be open.
     pub(crate) fn flush(
         &self,
         io_changes: impl IntoIterator<Item = IoChange>,
@@ -62,8 +56,6 @@ impl Selector {
         self.submit(changes)
     }
 
-    /// Fills `out` with one batch of events, followed by `None`s. Returns whether the batch was
-    /// full, i.e. more events may be pending.
     pub(crate) fn poll_nonblocking(
         &self,
         out: &mut [Option<SelectorEvent>; EVENTS_PER_CALL],
@@ -87,12 +79,10 @@ impl Selector {
 
     fn submit(&self, changes: impl IntoIterator<Item = Event>) -> rustix::io::Result<()> {
         let mut changes = changes.into_iter();
-        // Only the first `len` entries are ever submitted, the filler is never read.
         let mut list = [TimerChange::Disarm.kevent(); CHANGES_PER_CALL];
         let mut receipts = [MaybeUninit::<Event>::uninit(); CHANGES_PER_CALL];
         loop {
             let mut len = 0;
-            // `zip` pulls from `list` first, so no change is taken without a free entry for it.
             for (entry, change) in list.iter_mut().zip(&mut changes) {
                 *entry = change;
                 len += 1;
@@ -118,8 +108,6 @@ impl Selector {
         let result = unsafe { kevent(&self.kq, changes, receipts, Some(Duration::ZERO)) };
         let receipts = match result {
             Ok((receipts, _)) => receipts,
-            // kevent applies the whole changelist before it can be interrupted (documented on
-            // FreeBSD, relied upon by mio), so EINTR here means the changes are in place.
             Err(Errno::INTR) => return Ok(()),
             Err(errno) => return Err(errno),
         };
@@ -150,9 +138,6 @@ impl Selector {
 impl TimerChange {
     fn kevent(self) -> Event {
         let (timer, flags) = match self {
-            // `after` is whole milliseconds (see `Timer::flush`): rustix truncates
-            // sub-ms parts for some durations (e.g. 1.0005s becomes 1s), but converts these
-            // exactly.
             TimerChange::Arm(after) => (Some(after), EventFlags::ADD | EventFlags::ONESHOT),
             TimerChange::Disarm => (None, EventFlags::DELETE),
         };
