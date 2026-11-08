@@ -4,7 +4,7 @@ use rustix::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
 use crate::{
     context::Context,
-    ready::ReadyQueue,
+    ready::{ReadyLinks, ReadyQueue},
     selectors::Selector,
     state::State,
     storage::{Root, RootStatus, Storage},
@@ -67,7 +67,7 @@ impl<
     >
 {
     pub const QUEUE_REQUIRED_SIZE: usize =
-        size_of::<ReadyQueue<MAX_TASKS_COUNT>>() + align_of::<ReadyQueue<MAX_TASKS_COUNT>>() - 1;
+        size_of::<ReadyLinks<MAX_TASKS_COUNT>>() + align_of::<ReadyLinks<MAX_TASKS_COUNT>>() - 1;
 
     pub const REQUIRED_SIZE: usize = size_of::<
         Storage<
@@ -141,7 +141,8 @@ impl<
         // SAFETY: the queue is only reached through the loop, which `'a` bounds, and through its
         // wakers, which the caller guarantees aren't woken once the loop is gone, so treating it
         // as never freed is fine.
-        let ready = unsafe { &*core::ptr::from_ref(ReadyQueue::init(place(queue))) };
+        let ready =
+            ReadyQueue::new(unsafe { &*core::ptr::from_ref(ReadyLinks::init(place(queue))) });
         let storage = Storage::init(place(memory), ready, selector, state);
         let event_loop = Self { storage };
         Context::spawn_root(storage, f);

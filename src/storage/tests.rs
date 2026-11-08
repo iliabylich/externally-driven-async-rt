@@ -1,6 +1,6 @@
 use crate::{
     instant::Instant,
-    ready::ReadyQueue,
+    ready::{ReadyLinks, ReadyQueue},
     selectors::Direction,
     storage::Storage,
     test_utils::{counting_waker, flagged_task, static_within_current_test},
@@ -15,7 +15,7 @@ fn clearing_drops_live_wakers() {
     let mut place = MaybeUninit::uninit();
     let storage = TestStorage::init(
         &mut place,
-        ReadyQueue::init(static_within_current_test!(ReadyQueue<1>)),
+        ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<1>))),
         (),
         (),
     );
@@ -35,7 +35,7 @@ fn clearing_drops_live_tasks() {
     let mut place = MaybeUninit::uninit();
     let storage = TestStorage::init(
         &mut place,
-        ReadyQueue::init(static_within_current_test!(ReadyQueue<1>)),
+        ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<1>))),
         (),
         (),
     );

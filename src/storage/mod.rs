@@ -65,7 +65,7 @@ impl<
 {
     pub(crate) fn init<'p>(
         place: &'p mut MaybeUninit<Self>,
-        ready: &'static ReadyQueue<MAX_TASKS_COUNT>,
+        ready: ReadyQueue<MAX_TASKS_COUNT>,
         selector: Sel,
         state: S,
     ) -> &'p Self {

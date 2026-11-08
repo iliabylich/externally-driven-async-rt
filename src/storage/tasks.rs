@@ -11,20 +11,38 @@ use crate::{
     pool::{Index, ObjectPool},
     ready::ReadyQueue,
     storage::store_waker,
-    task::{JoinStatus, OwnedTask, TaskPtr},
+    task::{JoinStatus, Task},
 };
 
 #[derive(Default)]
+enum TaskSlot {
+    #[default]
+    Empty,
+    Idle(Task),
+    Polling,
+}
+
+#[derive(Default)]
 pub(crate) struct TaskEntry {
-    future: Cell<Option<OwnedTask>>,
+    task: Cell<TaskSlot>,
     join_waiter: Cell<Option<Waker>>,
 }
 
-fn is_some<T>(cell: &Cell<Option<T>>) -> bool {
-    let value = cell.take();
-    let some = value.is_some();
-    cell.set(value);
-    some
+impl TaskEntry {
+    fn peek<R>(&self, f: impl FnOnce(&TaskSlot) -> R) -> R {
+        let slot = self.task.take();
+        let result = f(&slot);
+        self.task.set(slot);
+        result
+    }
+
+    fn has_task(&self) -> bool {
+        self.peek(|slot| !matches!(slot, TaskSlot::Empty))
+    }
+
+    fn is_idle(&self) -> bool {
+        self.peek(|slot| matches!(slot, TaskSlot::Idle(_)))
+    }
 }
 
 pub(crate) type TaskId = Index<TaskEntry>;
@@ -52,7 +70,7 @@ pub(crate) struct Tasks<
     const MAX_ROOT_TASK_SIZE: usize,
 > {
     pool: ObjectPool<TaskEntry, MAX_TASKS_COUNT>,
-    ready: &'static ReadyQueue<MAX_TASKS_COUNT>,
+    ready: ReadyQueue<MAX_TASKS_COUNT>,
     slab: [Aligned16<MAX_TASK_SIZE>; MAX_TASKS_COUNT],
     root_region: Aligned16<MAX_ROOT_TASK_SIZE>,
     root: Cell<Root>,
@@ -64,7 +82,7 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
 {
     pub(crate) fn init<'p>(
         place: &'p mut MaybeUninit<Self>,
-        ready: &'static ReadyQueue<MAX_TASKS_COUNT>,
+        ready: ReadyQueue<MAX_TASKS_COUNT>,
     ) -> &'p Self {
         let ptr = place.as_mut_ptr();
         // SAFETY: `ptr` points to `place`, borrowed exclusively until the end; the fields are
@@ -96,7 +114,7 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
     }
 
     #[cfg(test)]
-    pub(crate) fn ready(&self) -> &'static ReadyQueue<MAX_TASKS_COUNT> {
+    pub(crate) fn ready(&self) -> ReadyQueue<MAX_TASKS_COUNT> {
         self.ready
     }
 
@@ -123,7 +141,7 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
         // reserved until this future is dropped. Futures are only polled and dropped through
         // `&self`, which can't outlive `'a`, and `Tasks` is invariant in `'a`, so `'a` can't be
         // shortened to accept futures that live less than the other ones.
-        let future = unsafe { OwnedTask::write(memory, future) };
+        let future = unsafe { Task::write(memory, future) };
         self.occupy(id, entry, future);
         id
     }
@@ -153,39 +171,48 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
         // SAFETY: `Fut` fits the root region (asserted above), and the region is unused: the root
         // is still `Unset` (asserted above), and leaves that state below, so this is the only
         // call that gets here. `'a` holds as in `insert`.
-        let future = unsafe { OwnedTask::write(NonNull::from(&self.root_region.0).cast(), future) };
+        let future = unsafe { Task::write(NonNull::from(&self.root_region.0).cast(), future) };
         self.occupy(id, entry, future);
         self.ready.push(id.slot());
         self.root.set(Root::Running(id));
     }
 
-    fn occupy(&self, id: TaskId, entry: &TaskEntry, future: OwnedTask) {
-        entry.future.set(Some(future));
+    fn occupy(&self, id: TaskId, entry: &TaskEntry, future: Task) {
+        entry.task.set(TaskSlot::Idle(future));
         entry.join_waiter.set(None);
         self.ready.track(id);
     }
 
-    pub(crate) fn get(&self, id: TaskId) -> Option<TaskPtr> {
-        let entry = self.pool.get(id)?;
-        let future = entry.future.take()?;
-        let ptr = future.ptr();
-        entry.future.set(Some(future));
-        Some(ptr)
+    #[cfg(test)]
+    pub(crate) fn contains(&self, id: TaskId) -> bool {
+        self.pool.get(id).is_some_and(TaskEntry::has_task)
     }
 
     pub(crate) fn remove(&self, id: TaskId) -> Option<Option<Waker>> {
         let entry = self.pool.get(id)?;
-        let future = entry.future.take()?;
+        let task = match entry.task.take() {
+            TaskSlot::Idle(task) => task,
+            TaskSlot::Polling => {
+                entry.task.set(TaskSlot::Polling);
+                return None;
+            }
+            TaskSlot::Empty => return None,
+        };
+        Some(self.free(id, entry, task))
+    }
+
+    fn free(&self, id: TaskId, entry: &TaskEntry, task: Task) -> Option<Waker> {
+        entry.task.set(TaskSlot::Empty);
         let join_waiter = entry.join_waiter.take();
         self.ready.untrack(id);
-        drop(future);
+        drop(task);
         self.pool.free(id);
-        Some(join_waiter)
+        join_waiter
     }
 
     pub(crate) fn set_join_waiter(&self, id: TaskId, waker: &Waker) -> JoinStatus {
         match self.pool.get(id) {
-            Some(entry) if is_some(&entry.future) => {
+            Some(entry) if entry.has_task() => {
                 store_waker(&entry.join_waiter, waker);
                 JoinStatus::Running
             }
@@ -211,22 +238,21 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
             let Some(id) = self.ready.pop() else {
                 return RootStatus::Running;
             };
-            let Some(task) = self.get(id) else {
+            let Some(entry) = self.pool.get(id) else {
                 continue;
+            };
+            let mut task = match entry.task.replace(TaskSlot::Polling) {
+                TaskSlot::Idle(task) => task,
+                TaskSlot::Polling => panic!("a task can't be polled re-entrantly"),
+                TaskSlot::Empty => unreachable!("an allocated task always has a future"),
             };
             let waker = self.ready.waker(id.slot());
             let mut cx = core::task::Context::from_waker(&waker);
-            // SAFETY: tasks are removed only right below (after the poll) and by `drop_all`,
-            // which is never called from inside a task; `run_ready` isn't either, so the task
-            // isn't polled re-entrantly. `&self` can't outlive `'a`, which the task was written
-            // for.
-            if unsafe { task.poll(&mut cx) }.is_pending() {
+            if task.poll(&mut cx).is_pending() {
+                entry.task.set(TaskSlot::Idle(task));
                 continue;
             }
-            let join_waiter = self
-                .remove(id)
-                .expect("a finished task is still in storage");
-            if let Some(join_waiter) = join_waiter {
+            if let Some(join_waiter) = self.free(id, entry, task) {
                 join_waiter.wake();
             }
             if let Root::Running(root) = self.root.get()
@@ -239,7 +265,7 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
     }
 
     pub(crate) fn drop_all(&self) {
-        while let Some((id, _)) = self.pool.iter().next() {
+        while let Some((id, _)) = self.pool.iter().find(|(_, entry)| entry.is_idle()) {
             self.remove(id);
         }
     }
@@ -255,8 +281,8 @@ mod tests {
     use core::{cell::Cell, mem::MaybeUninit, task::Waker};
 
     use crate::{
-        ready::ReadyQueue,
-        storage::{Root, TaskId, Tasks},
+        ready::{ReadyLinks, ReadyQueue},
+        storage::{Root, RootStatus, TaskId, Tasks},
         task::JoinStatus,
         test_utils::{DropFlag, flagged_task, static_within_current_test},
     };
@@ -271,10 +297,10 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<2>::init(
             &mut place,
-            ReadyQueue::init(static_within_current_test!(ReadyQueue<2>)),
+            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<2>))),
         );
         let id = tasks.insert(flagged_task(&dropped));
-        assert!(tasks.get(id).is_some());
+        assert!(tasks.contains(id));
         assert_eq!(
             tasks.set_join_waiter(id, Waker::noop()),
             JoinStatus::Running
@@ -282,7 +308,7 @@ mod tests {
         let join_waiter = tasks.remove(id).unwrap();
         assert!(dropped.get());
         assert!(join_waiter.is_some());
-        assert!(tasks.get(id).is_none());
+        assert!(!tasks.contains(id));
         assert_eq!(
             tasks.set_join_waiter(id, Waker::noop()),
             JoinStatus::Finished
@@ -294,13 +320,13 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<1>::init(
             &mut place,
-            ReadyQueue::init(static_within_current_test!(ReadyQueue<1>)),
+            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<1>))),
         );
         let first = tasks.insert(async {});
         tasks.remove(first);
         let second = tasks.insert(async {});
         assert_ne!(first, second);
-        assert!(tasks.get(first).is_none());
+        assert!(!tasks.contains(first));
         assert_eq!(
             tasks.set_join_waiter(first, Waker::noop()),
             JoinStatus::Finished
@@ -313,7 +339,7 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<1>::init(
             &mut place,
-            ReadyQueue::init(static_within_current_test!(ReadyQueue<1>)),
+            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<1>))),
         );
         tasks.insert(async {});
         tasks.insert(async {});
@@ -325,7 +351,7 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<2>::init(
             &mut place,
-            ReadyQueue::init(static_within_current_test!(ReadyQueue<2>)),
+            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<2>))),
         );
         tasks.insert(flagged_task(&dropped));
         tasks.drop_all();
@@ -343,7 +369,7 @@ mod tests {
         fn drop(&mut self) {
             let id = self.id.get().unwrap();
             let tasks = self.tasks;
-            assert!(tasks.get(id).is_none());
+            assert!(!tasks.contains(id));
             assert_eq!(
                 tasks.set_join_waiter(id, Waker::noop()),
                 JoinStatus::Finished
@@ -359,7 +385,7 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<2>::init(
             &mut place,
-            ReadyQueue::init(static_within_current_test!(ReadyQueue<2>)),
+            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<2>))),
         );
         let guard = SpawnOnDrop {
             tasks,
@@ -373,7 +399,7 @@ mod tests {
         tasks.remove(dropping).unwrap();
         let spawned = spawned.get().unwrap();
         assert_ne!(spawned.slot(), dropping.slot());
-        assert!(tasks.get(spawned).is_some());
+        assert!(tasks.contains(spawned));
     }
 
     #[test]
@@ -381,19 +407,16 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<2>::init(
             &mut place,
-            ReadyQueue::init(static_within_current_test!(ReadyQueue<2>)),
+            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<2>))),
         );
         let ids = [1u8, 2].map(|byte| {
             let data = [byte; MAX_TASK_SIZE - 16];
-            tasks.insert(async move {
+            tasks.spawn(async move {
                 assert!(data.iter().all(|b| *b == byte));
             })
         });
-        let mut cx = core::task::Context::from_waker(Waker::noop());
-        for id in ids {
-            // SAFETY: the task is alive and not polled re-entrantly.
-            assert!(unsafe { tasks.get(id).unwrap().poll(&mut cx) }.is_ready());
-        }
+        assert_eq!(tasks.run_ready(), RootStatus::Running);
+        assert!(ids.iter().all(|id| !tasks.contains(*id)));
     }
 
     #[test]
@@ -402,7 +425,7 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<1>::init(
             &mut place,
-            ReadyQueue::init(static_within_current_test!(ReadyQueue<1>)),
+            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<1>))),
         );
         let data = [0u8; 8192];
         tasks.insert(async move {
@@ -431,17 +454,14 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = Tasks::<2, 100, 0>::init(
             &mut place,
-            ReadyQueue::init(static_within_current_test!(ReadyQueue<2>)),
+            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<2>))),
         );
         let ids = [
-            tasks.insert(FixedFuture([1u8; 100])),
-            tasks.insert(FixedFuture((Align16, [2u8; 80]))),
+            tasks.spawn(FixedFuture([1u8; 100])),
+            tasks.spawn(FixedFuture((Align16, [2u8; 80]))),
         ];
-        let mut cx = core::task::Context::from_waker(Waker::noop());
-        for id in ids {
-            // SAFETY: the task is alive and not polled re-entrantly.
-            assert!(unsafe { tasks.get(id).unwrap().poll(&mut cx) }.is_ready());
-        }
+        assert_eq!(tasks.run_ready(), RootStatus::Running);
+        assert!(ids.iter().all(|id| !tasks.contains(*id)));
     }
 
     #[test]
@@ -450,7 +470,7 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = Tasks::<1, 100, 0>::init(
             &mut place,
-            ReadyQueue::init(static_within_current_test!(ReadyQueue<1>)),
+            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<1>))),
         );
         tasks.insert(FixedFuture([0u8; 101]));
     }
@@ -463,7 +483,7 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<1>::init(
             &mut place,
-            ReadyQueue::init(static_within_current_test!(ReadyQueue<1>)),
+            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<1>))),
         );
         let aligned = Aligned;
         tasks.insert(async move {
@@ -494,7 +514,7 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = Tasks::<2, MAX_TASK_SIZE, { size_of::<BigRoot>() }>::init(
             &mut place,
-            ReadyQueue::init(static_within_current_test!(ReadyQueue<2>)),
+            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<2>))),
         );
         let root = BigRoot {
             data: [3; 9000],
@@ -506,9 +526,8 @@ mod tests {
         };
         let sibling = tasks.insert(async {});
         assert_ne!(sibling.slot(), id.slot());
-        let mut cx = core::task::Context::from_waker(Waker::noop());
-        // SAFETY: the task is alive and not polled re-entrantly.
-        assert!(unsafe { tasks.get(id).unwrap().poll(&mut cx) }.is_pending());
+        assert_eq!(tasks.run_ready(), RootStatus::Running);
+        assert!(tasks.contains(id));
         assert!(!dropped.get());
         tasks.drop_all();
         assert!(dropped.get());
@@ -522,7 +541,7 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<1>::init(
             &mut place,
-            ReadyQueue::init(static_within_current_test!(ReadyQueue<1>)),
+            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<1>))),
         );
         tasks.spawn_root(FixedFuture(0u8));
     }
@@ -533,7 +552,7 @@ mod tests {
         let mut place = MaybeUninit::uninit();
         let tasks = TestTasks::<2>::init(
             &mut place,
-            ReadyQueue::init(static_within_current_test!(ReadyQueue<2>)),
+            ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<2>))),
         );
         tasks.spawn_root(core::future::pending::<()>());
         tasks.spawn_root(core::future::pending::<()>());

@@ -258,10 +258,7 @@ impl UnixDatagram {
 
 #[cfg(test)]
 mod tests {
-    use core::{
-        ffi::{CStr, c_char},
-        future::pending,
-    };
+    use core::{ffi::CStr, future::pending};
 
     use rustix::net::{AddressFamily, RecvFlags, SendFlags, Shutdown, SocketAddrUnix, SocketType};
 
@@ -272,13 +269,6 @@ mod tests {
             test_loop,
         },
     };
-
-    // SAFETY: match `pid_t getpid(void)` and `int unlink(const char *)` from libc (`pid_t` is
-    // `i32` on macOS).
-    unsafe extern "C" {
-        safe fn getpid() -> i32;
-        fn unlink(path: *const c_char) -> i32;
-    }
 
     struct TempPath {
         bytes: [u8; 104],
@@ -293,7 +283,10 @@ mod tests {
                 len += part.len();
             };
             push(b"/tmp/edar-");
-            let pid = getpid().unsigned_abs();
+            let pid = rustix::process::getpid()
+                .as_raw_nonzero()
+                .get()
+                .unsigned_abs();
             let digits = pid.checked_ilog10().unwrap_or(0) + 1;
             for i in (0..digits).rev() {
                 push(&[b'0' + (pid / 10u32.pow(i) % 10) as u8]);
@@ -314,8 +307,7 @@ mod tests {
         }
 
         fn unlink(&self) {
-            // SAFETY: a valid nul-terminated path. Failing (nothing to remove) is fine.
-            unsafe { unlink(self.as_c_str().as_ptr()) };
+            let _ = rustix::fs::unlink(self.as_c_str());
         }
     }
 

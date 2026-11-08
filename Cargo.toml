@@ -6,3 +6,6 @@ rust-version = "1.99"
 
 [dependencies]
 rustix = { version = "1", default-features = false, features = ["event", "net"] }
+
+[dev-dependencies]
+rustix = { version = "1", default-features = false, features = ["fs", "process"] }

@@ -460,7 +460,7 @@ fn finished_task_is_removed() {
     let event_loop = &owned;
     let id = event_loop.storage.tasks.spawn(async {});
     assert_eq!(event_loop.storage.tasks.run_ready(), RootStatus::Running);
-    assert!(event_loop.storage.tasks.get(id).is_none());
+    assert!(!event_loop.storage.tasks.contains(id));
 }
 
 #[test]

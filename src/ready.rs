@@ -1,22 +1,18 @@
-use core::{cell::Cell, mem::MaybeUninit, task::Waker};
+use core::{cell::Cell, task::Waker};
 
 use crate::{current_thread_queue::CurrentThreadQueue, storage::TaskId};
 
-pub(crate) struct ReadyQueue<const N: usize>(CurrentThreadQueue<Cell<Option<u32>>, N>);
+pub(crate) type ReadyLinks<const N: usize> = CurrentThreadQueue<Cell<Option<u32>>, N>;
+
+#[derive(Clone, Copy)]
+pub(crate) struct ReadyQueue<const N: usize>(&'static ReadyLinks<N>);
 
 impl<const N: usize> ReadyQueue<N> {
-    pub(crate) fn init(place: &mut MaybeUninit<Self>) -> &Self {
-        let ptr = place.as_mut_ptr();
-        // SAFETY: `ptr` points to `place`, borrowed exclusively until the end; `&raw mut` creates
-        // no reference to the field while it's uninitialized, and `MaybeUninit<T>` has `T`'s
-        // layout.
-        let queue = unsafe { &mut *(&raw mut (*ptr).0).cast::<MaybeUninit<_>>() };
-        CurrentThreadQueue::<Cell<Option<u32>>, N>::init(queue);
-        // SAFETY: the only field was written above.
-        unsafe { place.assume_init_ref() }
+    pub(crate) fn new(queue: &'static ReadyLinks<N>) -> Self {
+        Self(queue)
     }
 
-    pub(crate) fn waker(&'static self, slot: u32) -> Waker {
+    pub(crate) fn waker(self, slot: u32) -> Waker {
         self.0.waker(slot)
     }
 
@@ -53,23 +49,25 @@ impl<const N: usize> ReadyQueue<N> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{ready::ReadyQueue, storage::TaskId, test_utils::assert_yields};
-    use core::mem::MaybeUninit;
+    use crate::{
+        ready::{ReadyLinks, ReadyQueue},
+        storage::TaskId,
+        test_utils::{assert_yields, static_within_current_test},
+    };
 
-    fn tracked<const N: usize>(queue: &ReadyQueue<N>, slot: u32, generation: u32) -> TaskId {
+    fn tracked<const N: usize>(queue: ReadyQueue<N>, slot: u32, generation: u32) -> TaskId {
         let id = TaskId::from_parts(slot, generation);
         queue.track(id);
         id
     }
 
-    fn drain<const N: usize>(queue: &ReadyQueue<N>) -> impl Iterator<Item = TaskId> + '_ {
-        core::iter::from_fn(|| queue.pop())
+    fn drain<const N: usize>(queue: ReadyQueue<N>) -> impl Iterator<Item = TaskId> {
+        core::iter::from_fn(move || queue.pop())
     }
 
     #[test]
     fn pushing_an_empty_slot_is_ignored() {
-        let mut place = MaybeUninit::uninit();
-        let queue = ReadyQueue::<1>::init(&mut place);
+        let queue = ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<1>)));
         queue.push(0);
         assert!(queue.is_empty());
         let old = tracked(queue, 0, 0);
@@ -80,8 +78,7 @@ mod tests {
 
     #[test]
     fn a_reused_slot_pops_its_new_task() {
-        let mut place = MaybeUninit::uninit();
-        let queue = ReadyQueue::<1>::init(&mut place);
+        let queue = ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<1>)));
         let old = tracked(queue, 0, 0);
         queue.untrack(old);
         let new = tracked(queue, 0, 1);
@@ -91,8 +88,7 @@ mod tests {
 
     #[test]
     fn a_task_finished_while_queued_is_skipped() {
-        let mut place = MaybeUninit::uninit();
-        let queue = ReadyQueue::<2>::init(&mut place);
+        let queue = ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<2>)));
         let a = tracked(queue, 0, 0);
         let b = tracked(queue, 1, 0);
         queue.push(a.slot());
@@ -104,8 +100,7 @@ mod tests {
 
     #[test]
     fn untracking_a_newer_task_is_ignored() {
-        let mut place = MaybeUninit::uninit();
-        let queue = ReadyQueue::<1>::init(&mut place);
+        let queue = ReadyQueue::new(ReadyLinks::init(static_within_current_test!(ReadyLinks<1>)));
         let old = TaskId::from_parts(0, 0);
         let new = tracked(queue, 0, 1);
         queue.untrack(old);
