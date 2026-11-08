@@ -2,18 +2,19 @@ use core::{future::Future, pin::Pin, task::Poll};
 
 use crate::{
     instant::Instant,
+    state::State,
     storage::{Storage, TimerIndex},
 };
 
 #[must_use = "futures do nothing unless you `.await` or poll them"]
-pub struct Sleep<'ctx> {
-    storage: &'ctx Storage,
+pub struct Sleep<'ctx, S: State> {
+    storage: &'ctx Storage<S>,
     deadline: Instant,
     timer: Option<TimerIndex>,
 }
 
-impl<'ctx> Sleep<'ctx> {
-    pub(crate) fn new(storage: &'ctx Storage, deadline: Instant) -> Self {
+impl<'ctx, S: State> Sleep<'ctx, S> {
+    pub(crate) fn new(storage: &'ctx Storage<S>, deadline: Instant) -> Self {
         Self {
             storage,
             deadline,
@@ -22,7 +23,7 @@ impl<'ctx> Sleep<'ctx> {
     }
 }
 
-impl Future for Sleep<'_> {
+impl<S: State> Future for Sleep<'_, S> {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {
@@ -40,7 +41,7 @@ impl Future for Sleep<'_> {
     }
 }
 
-impl Drop for Sleep<'_> {
+impl<S: State> Drop for Sleep<'_, S> {
     fn drop(&mut self) {
         if let Some(timer) = self.timer {
             self.storage.release_timer(timer);

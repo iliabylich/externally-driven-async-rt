@@ -4,6 +4,7 @@ use rustix::fd::BorrowedFd;
 
 use crate::{
     selectors::Direction,
+    state::State,
     storage::{IoIndex, Storage},
 };
 
@@ -24,20 +25,20 @@ macro_rules! io_loop {
 
 pub(crate) use io_loop;
 
-pub(crate) struct IoRegistration<'a> {
-    storage: &'a Storage,
+pub(crate) struct IoRegistration<'a, S: State> {
+    storage: &'a Storage<S>,
     index: IoIndex,
 }
 
-impl<'a> IoRegistration<'a> {
-    pub(crate) fn new(storage: &'a Storage, fd: BorrowedFd<'a>, direction: Direction) -> Self {
+impl<'a, S: State> IoRegistration<'a, S> {
+    pub(crate) fn new(storage: &'a Storage<S>, fd: BorrowedFd<'a>, direction: Direction) -> Self {
         Self {
             storage,
             index: storage.register_io(fd, direction),
         }
     }
 
-    pub(crate) fn wait(&mut self) -> Wait<'_, 'a> {
+    pub(crate) fn wait(&mut self) -> Wait<'_, 'a, S> {
         Wait {
             registration: self,
             waiting: false,
@@ -45,7 +46,7 @@ impl<'a> IoRegistration<'a> {
     }
 }
 
-impl Drop for IoRegistration<'_> {
+impl<S: State> Drop for IoRegistration<'_, S> {
     fn drop(&mut self) {
         // On failure the slot is released anyway, so a filter left armed can only produce one
         // ignored event (its index no longer matches) until the fd is closed.
@@ -53,12 +54,12 @@ impl Drop for IoRegistration<'_> {
     }
 }
 
-pub(crate) struct Wait<'r, 'a> {
-    registration: &'r mut IoRegistration<'a>,
+pub(crate) struct Wait<'r, 'a, S: State> {
+    registration: &'r mut IoRegistration<'a, S>,
     waiting: bool,
 }
 
-impl Future for Wait<'_, '_> {
+impl<S: State> Future for Wait<'_, '_, S> {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {
@@ -74,7 +75,7 @@ impl Future for Wait<'_, '_> {
     }
 }
 
-impl Drop for Wait<'_, '_> {
+impl<S: State> Drop for Wait<'_, '_, S> {
     fn drop(&mut self) {
         if self.waiting {
             let IoRegistration { storage, index } = *self.registration;

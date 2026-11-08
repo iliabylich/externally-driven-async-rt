@@ -42,13 +42,13 @@ fn counting_waker(drops: &Cell<u32>) -> Waker {
 }
 
 #[track_caller]
-fn assert_expires(storage: Storage<()>, now: Instant, ids: impl IntoIterator<Item = usize>) {
+fn assert_expires(storage: Storage<(), ()>, now: Instant, ids: impl IntoIterator<Item = usize>) {
     let expired = core::iter::from_fn(|| storage.take_expired_timer(now));
     assert_yields(expired.map(|waker| waker.data().addr()), ids);
 }
 
 #[track_caller]
-fn assert_pending_changes(storage: Storage<()>, expected: impl IntoIterator<Item = IoChange>) {
+fn assert_pending_changes(storage: Storage<(), ()>, expected: impl IntoIterator<Item = IoChange>) {
     let pending = storage
         .io_waiters()
         .iter()
@@ -345,7 +345,7 @@ fn drop_all_tasks_and_drop_free_the_futures() {
 }
 
 struct SpawnOnDrop {
-    storage: Storage<()>,
+    storage: Storage<(), ()>,
     // Set once the task was inserted.
     id: *mut Option<TaskId>,
     spawned: *mut Option<TaskId>,
@@ -548,8 +548,8 @@ fn root_region_holds_a_root_bigger_than_a_slab_block() {
     assert!(unsafe { storage.task(id).unwrap().poll(&mut cx) }.is_pending());
     // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
     assert!(!unsafe { DROPPED });
-    // SAFETY: created with the state `()`, destroyed once, no task is being polled.
-    unsafe { storage.destroy::<()>() };
+    // SAFETY: destroyed once, no task is being polled.
+    unsafe { storage.destroy() };
     // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
     assert!(unsafe { DROPPED });
 }
@@ -575,22 +575,22 @@ fn worst_aligned(buffer: &mut [MaybeUninit<u8>], len: usize) -> NonNull<[MaybeUn
 #[test]
 fn required_size_is_enough_at_the_worst_aligned_start() {
     let root_layout = Layout::new::<()>();
-    let size = Storage::<()>::required_size::<()>(SMALL, root_layout);
+    let size = Storage::<(), ()>::required_size(SMALL, root_layout);
     let mut buffer = stack_memory();
     let memory = worst_aligned(&mut buffer, size);
     // SAFETY: `memory` is only used by this storage, and outlives it.
     let storage = unsafe { Storage::new(memory, (), (), SMALL, root_layout) };
     let id = storage.insert_task(async {}).ok().unwrap();
     assert!(storage.remove_task(id).is_some());
-    // SAFETY: created with the state `()`, destroyed once, no task is being polled.
-    unsafe { storage.destroy::<()>() };
+    // SAFETY: destroyed once, no task is being polled.
+    unsafe { storage.destroy() };
 }
 
 #[test]
 #[should_panic(expected = "the EventLoop memory is too small")]
 fn one_byte_less_than_required_panics() {
     let root_layout = Layout::new::<()>();
-    let size = Storage::<()>::required_size::<()>(SMALL, root_layout);
+    let size = Storage::<(), ()>::required_size(SMALL, root_layout);
     let mut buffer = stack_memory();
     let memory = worst_aligned(&mut buffer, size - 1);
     // SAFETY: `memory` is only used by this storage (which panics before using it).
@@ -600,16 +600,11 @@ fn one_byte_less_than_required_panics() {
 #[test]
 fn state_region_is_aligned_usable_and_dropped() {
     #[repr(align(64))]
-    struct AlignedState<'a> {
+    struct AlignedState {
         value: u32,
-        dropped: &'a Cell<bool>,
+        _flag: DropFlag,
     }
-    impl Drop for AlignedState<'_> {
-        fn drop(&mut self) {
-            self.dropped.set(true);
-        }
-    }
-    let dropped = Cell::new(false);
+    static mut DROPPED: bool = false;
     let capacities = Capacities {
         max_tasks: 1,
         max_timers: 1,
@@ -620,7 +615,7 @@ fn state_region_is_aligned_usable_and_dropped() {
     let mut memory = stack_memory();
     let state = AlignedState {
         value: 7,
-        dropped: &dropped,
+        _flag: DropFlag(&raw mut DROPPED),
     };
     // SAFETY: `memory` is only used by this storage, and outlives it.
     let storage = unsafe {
@@ -632,15 +627,17 @@ fn state_region_is_aligned_usable_and_dropped() {
             root_layout,
         )
     };
-    // SAFETY: created with `AlignedState`; nothing else references the state.
-    let state = unsafe { storage.state::<AlignedState>().as_mut() };
+    // SAFETY: nothing else references the state.
+    let state = unsafe { &mut *storage.state().get() };
     assert_eq!((state as *const AlignedState).addr() % 64, 0);
     assert_eq!(state.value, 7);
     state.value = 8;
     // SAFETY: as above.
-    assert_eq!(unsafe { storage.state::<AlignedState>().as_ref() }.value, 8);
-    assert!(!dropped.get());
-    // SAFETY: created with `AlignedState`, destroyed once, no task is being polled.
-    unsafe { storage.destroy::<AlignedState>() };
-    assert!(dropped.get());
+    assert_eq!(unsafe { &*storage.state().get() }.value, 8);
+    // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
+    assert!(!unsafe { DROPPED });
+    // SAFETY: destroyed once, no task is being polled.
+    unsafe { storage.destroy() };
+    // SAFETY: as above.
+    assert!(unsafe { DROPPED });
 }

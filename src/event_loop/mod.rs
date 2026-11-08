@@ -1,4 +1,4 @@
-use core::{alloc::Layout, marker::PhantomData, mem::MaybeUninit, ptr::NonNull};
+use core::{alloc::Layout, mem::MaybeUninit, ptr::NonNull};
 
 use rustix::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
@@ -29,8 +29,7 @@ impl core::fmt::Display for Error {
 impl core::error::Error for Error {}
 
 pub struct EventLoop<S: State> {
-    storage: Storage,
-    _state: PhantomData<S>,
+    storage: Storage<S>,
 }
 
 impl<S: State> EventLoop<S> {
@@ -38,7 +37,7 @@ impl<S: State> EventLoop<S> {
     where
         F: AsyncFnOnce(&Context<S>) + 'static,
     {
-        Storage::<Selector>::required_size::<S>(capacities, return_layout(task_future::<S, F>))
+        Storage::<S>::required_size(capacities, return_layout(task_future::<S, F>))
     }
 
     pub fn new<F>(
@@ -61,10 +60,7 @@ impl<S: State> EventLoop<S> {
                 return_layout(task_future::<S, F>),
             )
         };
-        let event_loop = Self {
-            storage,
-            _state: PhantomData,
-        };
+        let event_loop = Self { storage };
         // SAFETY: the future is stored in this storage right away, as its only root.
         let root = unsafe { storage.spawn_root(task_future::<S, F>(storage, f)) };
         match storage.run_ready_tasks(root) {
@@ -93,14 +89,13 @@ impl<S: State> EventLoop<S> {
     }
 
     pub fn state_mut(&mut self) -> &mut S {
-        // SAFETY: the storage was created with `S`. The state is only accessed mutably here and
-        // in `Context::dispatch`, which runs inside tasks, i.e. only while `new`, a drain or
+        // SAFETY: the state is only accessed mutably here and in `Context::dispatch`, which runs inside tasks, i.e. only while `new`, a drain or
         // `drop` holds exclusive access to the loop; `&mut self` rules all of those out.
-        unsafe { self.storage.state::<S>().as_mut() }
+        unsafe { &mut *self.storage.state().get() }
     }
 
     #[cfg(test)]
-    pub(crate) fn storage(&self) -> Storage {
+    pub(crate) fn storage(&self) -> Storage<S> {
         self.storage
     }
 
@@ -125,9 +120,9 @@ fn return_layout<A, B, R>(_: unsafe fn(A, B) -> R) -> Layout {
 
 impl<S: State> Drop for EventLoop<S> {
     fn drop(&mut self) {
-        // SAFETY: the storage was created with `S` and is destroyed exactly once, here, with no
-        // task being polled (`drop` can't run from inside the loop).
-        unsafe { self.storage.destroy::<S>() };
+        // SAFETY: destroyed exactly once, here, with no task being polled (`drop` can't run from
+        // inside the loop).
+        unsafe { self.storage.destroy() };
     }
 }
 

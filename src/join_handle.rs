@@ -1,22 +1,23 @@
 use core::{future::Future, pin::Pin, task::Poll};
 
 use crate::{
+    state::State,
     storage::{Storage, TaskId},
     task::JoinStatus,
 };
 
-pub struct JoinHandle<'ctx> {
-    storage: &'ctx Storage,
+pub struct JoinHandle<'ctx, S: State> {
+    storage: &'ctx Storage<S>,
     id: TaskId,
 }
 
-impl<'ctx> JoinHandle<'ctx> {
-    pub(crate) fn new(storage: &'ctx Storage, id: TaskId) -> Self {
+impl<'ctx, S: State> JoinHandle<'ctx, S> {
+    pub(crate) fn new(storage: &'ctx Storage<S>, id: TaskId) -> Self {
         Self { storage, id }
     }
 }
 
-impl Future for JoinHandle<'_> {
+impl<S: State> Future for JoinHandle<'_, S> {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {

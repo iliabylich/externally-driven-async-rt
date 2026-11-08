@@ -14,11 +14,13 @@ mod join_handle;
 pub mod net;
 mod pool;
 mod ready;
+mod root_region;
 mod selectors;
 mod sleep;
 mod state;
 mod storage;
 mod task;
+mod task_slab;
 #[cfg(test)]
 mod test_utils;
 mod thread_id;

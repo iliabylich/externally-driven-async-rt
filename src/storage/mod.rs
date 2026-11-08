@@ -1,5 +1,10 @@
 use core::{
-    alloc::Layout, cell::Cell, future::Future, mem::MaybeUninit, ptr::NonNull, task::Waker,
+    alloc::Layout,
+    cell::{Cell, UnsafeCell},
+    future::Future,
+    mem::MaybeUninit,
+    ptr::NonNull,
+    task::Waker,
 };
 
 use rustix::fd::{AsRawFd, BorrowedFd, RawFd};
@@ -9,8 +14,10 @@ use crate::{
     instant::Instant,
     pool::{Index, ObjectPool},
     ready::ReadyQueue,
+    root_region::RootRegion,
     selectors::{Direction, EVENTS_PER_CALL, IoAction, IoChange, Selector, SelectorEvent, Token},
     task::{JoinStatus, OwnedTask, TaskPtr},
+    task_slab::{TASK_ALIGN, TaskSlab},
     waker::new_waker,
 };
 
@@ -109,32 +116,27 @@ pub(crate) enum Root {
 }
 
 // At the start of the runtime's single allocation: the inline values, and a pointer to every
-// other part of the allocation (the state, each pool, the ready queue).
-struct StorageHeader<Sel> {
-    state: NonNull<u8>,
+// other part of the allocation (the state, each pool, the ready queue, the task slab, the root
+// region).
+struct StorageHeader<S: 'static, Sel> {
+    // The allocation's base, with provenance over all of it: the only pointer `destroy` may drop
+    // the pools through, since everything else reaches them through shared references.
+    allocation: NonNull<u8>,
     selector: Sel,
     root: Cell<Root>,
     next_timer_seq: Cell<u64>,
     // `'static`: they live as long as the storage, which nothing that can reach the header
-    // outlives. Only shared references: the pools and the queue consist of `Cell`s.
+    // outlives. Only shared references: the pools and the queue consist of `Cell`s, the state,
+    // the slab and the root region are in `UnsafeCell`s.
+    state: &'static UnsafeCell<S>,
     timers: &'static ObjectPool<Timer>,
     io_waiters: &'static ObjectPool<IoWaiter>,
     tasks: &'static ObjectPool<TaskEntry>,
     ready: &'static ReadyQueue,
-    // `max_tasks` blocks of `task_stride` bytes (`max_task_size` rounded up to `TASK_ALIGN`), one
-    // per task slot, each holding its task's future, aligned to `TASK_ALIGN`.
-    task_slab: NonNull<u8>,
-    task_stride: usize,
-    // The root future's own region, laid out exactly for it (any size and alignment), so
-    // `max_task_size` only has to fit spawned tasks. The root's slot still has a slab block, which
-    // stays unused.
-    root_future: NonNull<u8>,
-    root_layout: Layout,
+    task_slab: &'static TaskSlab,
+    // The root's task slot still has a slab block, which stays unused.
+    root_region: &'static RootRegion,
 }
-
-// The alignment of every task slab block: the largest standard alignment on the supported targets
-// (`malloc`'s guarantee), which every future has unless it holds an over-aligned type.
-const TASK_ALIGN: usize = 16;
 
 enum TaskMemory {
     Slab,
@@ -151,19 +153,13 @@ struct StorageLayout {
     tasks: usize,
     ready: usize,
     task_slab: usize,
-    root_future: usize,
-    task_stride: usize,
+    root_region: usize,
 }
 
 impl StorageLayout {
-    fn new<Sel, S>(capacities: Capacities, root_layout: Layout) -> Self {
+    fn new<S: 'static, Sel>(capacities: Capacities, root_layout: Layout) -> Self {
         let extend = |layout: Layout, next: Layout| layout.extend(next).expect("too large");
-        let task_stride = capacities.max_task_size.next_multiple_of(TASK_ALIGN);
-        let task_slab = task_stride
-            .checked_mul(capacities.max_tasks)
-            .and_then(|size| Layout::from_size_align(size, TASK_ALIGN).ok())
-            .expect("too large");
-        let layout = Layout::new::<StorageHeader<Sel>>();
+        let layout = Layout::new::<StorageHeader<S, Sel>>();
         let (layout, state) = extend(layout, Layout::new::<S>());
         let (layout, timers) = extend(layout, ObjectPool::<Timer>::layout(capacities.max_timers));
         let (layout, io_waiters) =
@@ -173,8 +169,11 @@ impl StorageLayout {
             ObjectPool::<TaskEntry>::layout(capacities.max_tasks),
         );
         let (layout, ready) = extend(layout, ReadyQueue::layout(capacities.max_tasks));
-        let (layout, task_slab) = extend(layout, task_slab);
-        let (layout, root_future) = extend(layout, root_layout);
+        let (layout, task_slab) = extend(
+            layout,
+            TaskSlab::layout(capacities.max_tasks, capacities.max_task_size),
+        );
+        let (layout, root_region) = extend(layout, root_layout);
         Self {
             layout: layout.pad_to_align(),
             state,
@@ -183,29 +182,28 @@ impl StorageLayout {
             tasks,
             ready,
             task_slab,
-            root_future,
-            task_stride,
+            root_region,
         }
     }
 }
 
 // The runtime: one block of caller-provided memory that never moves, reached through this pointer to its start (copied
 // into the `EventLoop` and every `Context`). Objects inside are addressed by typed indices.
-pub(crate) struct Storage<Sel = Selector>(NonNull<StorageHeader<Sel>>);
+pub(crate) struct Storage<S: 'static, Sel: 'static = Selector>(&'static StorageHeader<S, Sel>);
 
-impl<Sel> Clone for Storage<Sel> {
+impl<S: 'static, Sel: 'static> Clone for Storage<S, Sel> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<Sel> Copy for Storage<Sel> {}
+impl<S: 'static, Sel: 'static> Copy for Storage<S, Sel> {}
 
-impl<Sel> Storage<Sel> {
+impl<S: 'static, Sel: 'static> Storage<S, Sel> {
     /// The size of the memory `new` needs: the storage's layout plus slack for aligning its start,
     /// so memory of this size works wherever it starts.
-    pub(crate) fn required_size<S>(capacities: Capacities, root_layout: Layout) -> usize {
-        let layout = StorageLayout::new::<Sel, S>(capacities, root_layout).layout;
+    pub(crate) fn required_size(capacities: Capacities, root_layout: Layout) -> usize {
+        let layout = StorageLayout::new::<S, Sel>(capacities, root_layout).layout;
         layout.size() + (layout.align() - 1)
     }
 
@@ -216,14 +214,14 @@ impl<Sel> Storage<Sel> {
     ///
     /// `memory` must be valid for reads and writes and not be used by anything else until
     /// `destroy` returns.
-    pub(crate) unsafe fn new<S>(
+    pub(crate) unsafe fn new(
         memory: NonNull<[MaybeUninit<u8>]>,
         selector: Sel,
         state: S,
         capacities: Capacities,
         root_layout: Layout,
     ) -> Self {
-        let parts = StorageLayout::new::<Sel, S>(capacities, root_layout);
+        let parts = StorageLayout::new::<S, Sel>(capacities, root_layout);
         let start = memory
             .cast::<u8>()
             .as_ptr()
@@ -232,7 +230,7 @@ impl<Sel> Storage<Sel> {
             panic!(
                 "the EventLoop memory is too small: {} bytes, {} needed",
                 memory.len(),
-                Self::required_size::<S>(capacities, root_layout),
+                Self::required_size(capacities, root_layout),
             );
         }
         // SAFETY: `start` is within `memory`, checked right above.
@@ -244,10 +242,10 @@ impl<Sel> Storage<Sel> {
         // holding the header outlives, and are only accessed through shared references (and by
         // `destroy`), hence `'static`.
         unsafe {
-            let state_ptr = base.byte_add(parts.state);
-            state_ptr.cast::<S>().write(state);
+            let state_ptr = base.byte_add(parts.state).cast::<UnsafeCell<S>>();
+            state_ptr.write(UnsafeCell::new(state));
             let header = StorageHeader {
-                state: state_ptr,
+                allocation: base,
                 selector,
                 root: Cell::new(Root::Finished),
                 next_timer_seq: Cell::new(0),
@@ -257,37 +255,36 @@ impl<Sel> Storage<Sel> {
                     .as_ref(),
                 tasks: ObjectPool::init(base.byte_add(parts.tasks), capacities.max_tasks).as_ref(),
                 ready: ReadyQueue::init(base.byte_add(parts.ready), capacities.max_tasks).as_ref(),
-                task_slab: base.byte_add(parts.task_slab),
-                task_stride: parts.task_stride,
-                root_future: base.byte_add(parts.root_future),
-                root_layout,
+                task_slab: TaskSlab::init(
+                    base.byte_add(parts.task_slab),
+                    capacities.max_tasks,
+                    capacities.max_task_size,
+                )
+                .as_ref(),
+                root_region: RootRegion::init(base.byte_add(parts.root_region), root_layout.size())
+                    .as_ref(),
+                state: state_ptr.as_ref(),
             };
-            base.cast::<StorageHeader<Sel>>().write(header);
+            base.cast::<StorageHeader<S, Sel>>().write(header);
+            Self(base.cast().as_ref())
         }
-        Self(base.cast())
     }
 
-    fn header(&self) -> &StorageHeader<Sel> {
-        // SAFETY: the header is initialized in `new` and lives until `destroy`, which no
-        // reference into the storage outlives; it is only ever accessed through `&`.
-        unsafe { self.0.as_ref() }
+    fn header(&self) -> &StorageHeader<S, Sel> {
+        self.0
     }
 
-    /// # Safety
-    ///
-    /// `S` must be the state type the storage was created with.
-    pub(crate) unsafe fn state<S>(&self) -> NonNull<S> {
-        self.header().state.cast()
+    pub(crate) fn state(&self) -> &UnsafeCell<S> {
+        self.header().state
     }
 
-    /// Drops every task, the state, the pools and the header. The memory isn't freed: it's the
+    /// Drops every task, the state, the pools and the selector. The memory isn't freed: it's the
     /// caller's.
     ///
     /// # Safety
     ///
-    /// Called exactly once, with the state type the storage was created with, while no task is
-    /// being polled; the storage isn't used afterwards.
-    pub(crate) unsafe fn destroy<S>(self) {
+    /// Called exactly once, while no task is being polled; the storage isn't used afterwards.
+    pub(crate) unsafe fn destroy(self) {
         // Task futures hold `Context`s pointing at the storage and may use them in their `Drop`
         // impls, so they go first, while everything is intact.
         self.drop_all_tasks();
@@ -299,14 +296,17 @@ impl<Sel> Storage<Sel> {
         );
         // SAFETY: no task (so no `Context` and no reference into the storage) is left; every part
         // was initialized in `new` and is dropped exactly once here (the ready queue holds only
-        // `Copy` data, the task slab and root region no live future), the header last. The
-        // header's references to the pools are never used again.
+        // `Copy` data, the task slab and root region no live future). The header's references to
+        // the pools are never used again. The selector is the header's only field with drop glue;
+        // it's moved out (a read) rather than dropped in place, because dropping needs write
+        // access to the header, which callers may hold protected shared references to (a
+        // `Storage` passed by value, e.g. inside an `EventLoop` given to `mem::drop`).
         unsafe {
-            core::ptr::drop_in_place(self.state::<S>().as_ptr());
+            core::ptr::drop_in_place(header.state.get());
             core::ptr::drop_in_place(pools.0);
             core::ptr::drop_in_place(pools.1);
             core::ptr::drop_in_place(pools.2);
-            core::ptr::drop_in_place(self.0.as_ptr());
+            drop(core::ptr::read(&header.selector));
         }
     }
 
@@ -314,7 +314,7 @@ impl<Sel> Storage<Sel> {
     // mustn't be used to drop it.
     fn writable<T>(&self, pool: &ObjectPool<T>) -> *mut ObjectPool<T> {
         let addr = NonNull::from(pool).cast::<u8>().addr();
-        ObjectPool::raw(self.0.cast::<u8>().with_addr(addr), pool.capacity())
+        ObjectPool::raw(self.header().allocation.with_addr(addr), pool.capacity())
     }
 
     pub(crate) fn root(&self) -> Root {
@@ -351,16 +351,16 @@ impl<Sel> Storage<Sel> {
     where
         Fut: Future<Output = ()> + 'static,
     {
-        let header = self.header();
+        let block_size = self.header().task_slab.block_size();
         let needed = Layout::new::<Fut>();
-        if needed.size() > header.task_stride || needed.align() > TASK_ALIGN {
+        if needed.size() > block_size || needed.align() > TASK_ALIGN {
             drop(future);
             panic!(
                 "a task future of {} bytes (align {}) doesn't fit max_task_size ({} bytes after \
                  rounding up to a multiple of {TASK_ALIGN}, align at most {TASK_ALIGN})",
                 needed.size(),
                 needed.align(),
-                header.task_stride,
+                block_size,
             );
         }
         // SAFETY: `Fut` fits the slab's blocks (checked above).
@@ -376,9 +376,9 @@ impl<Sel> Storage<Sel> {
     where
         Fut: Future<Output = ()> + 'static,
     {
-        assert_eq!(Layout::new::<Fut>(), self.header().root_layout);
-        // SAFETY: `Fut` has exactly the root region's layout (asserted above), and the caller
-        // guarantees the region is unused.
+        assert!(self.header().root_region.fits(Layout::new::<Fut>()));
+        // SAFETY: `Fut` fits the root region (asserted above), and the caller guarantees the
+        // region is unused.
         let Ok(id) = (unsafe { self.insert(future, TaskMemory::Root) }) else {
             unreachable!("the root is the first task, the pool has room for it");
         };
@@ -389,9 +389,9 @@ impl<Sel> Storage<Sel> {
 
     /// # Safety
     ///
-    /// `Fut` must fit `memory`: the slab's blocks (size at most `task_stride`, align at most
-    /// `TASK_ALIGN`), or
-    /// exactly the root region's layout, which must not hold another future.
+    /// `Fut` must fit `memory`: the slab's blocks (size at most `block_size`, align at most
+    /// `TASK_ALIGN`), or the root region (`RootRegion::fits`), which must not hold another
+    /// future.
     unsafe fn insert<Fut>(&self, future: Fut, memory: TaskMemory) -> Result<TaskId, Fut>
     where
         Fut: Future<Output = ()> + 'static,
@@ -401,21 +401,13 @@ impl<Sel> Storage<Sel> {
             return Err(future);
         };
         let memory = match memory {
-            // SAFETY: `slot < max_tasks_count`, so the block lies inside the slab.
-            TaskMemory::Slab => unsafe {
-                header
-                    .task_slab
-                    .byte_add(id.slot() as usize * header.task_stride)
-            },
-            TaskMemory::Root => header.root_future,
+            TaskMemory::Slab => header.task_slab.block(id.slot()),
+            TaskMemory::Root => header.root_region.memory(),
         };
-        // SAFETY: blocks are `task_stride` (a multiple of `TASK_ALIGN`) apart from a base aligned
-        // to `TASK_ALIGN`, and the
-        // root region is laid out for exactly `root_layout`, so `memory` is aligned and big enough
-        // for `Fut` (guaranteed by the caller). It's unused: a slab block belongs to the slot,
-        // which was free, and a slot is only freed after its future was dropped; the root region
-        // is used once (guaranteed by the caller). The slot stays reserved until this future is
-        // dropped.
+        // SAFETY: `Fut` fits `memory` (guaranteed by the caller). It's unused: a slab block
+        // belongs to the slot, which was free, and a slot is only freed after its future was
+        // dropped; the root region is used once (guaranteed by the caller). The slot stays
+        // reserved until this future is dropped.
         let future = unsafe { OwnedTask::write(memory, future) };
         entry.future.set(Some(future));
         entry.join_waiter.set(None);
@@ -607,7 +599,7 @@ impl<Sel> Storage<Sel> {
     }
 }
 
-impl Storage<Selector> {
+impl<S: 'static> Storage<S, Selector> {
     pub(crate) fn selector(&self) -> &Selector {
         &self.header().selector
     }
