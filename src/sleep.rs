@@ -56,7 +56,7 @@ mod tests {
         instant::Instant,
         test_utils::{
             First, Log, TEST_MAX_IO_COUNT, TEST_MAX_ROOT_TASK_SIZE, TEST_MAX_TASK_SIZE,
-            TEST_MAX_TASKS_COUNT, Winner, has_timers, is_readable, pair, readable,
+            TEST_MAX_TASKS_COUNT, Winner, has_timers, is_readable, socketpair, wait_readable,
             run_until_root_finishes, test_loop, wake_by_writing,
         },
     };
@@ -126,10 +126,10 @@ mod tests {
 
     #[test]
     fn losing_sleep_leaves_no_timer_behind() {
-        let (a, b) = pair();
+        let (a, b) = socketpair();
         let mut event_loop = test_loop!(Log::default(), async move |ctx| {
             let winner = First(
-                pin!(readable(ctx, &a)),
+                pin!(wait_readable(ctx, &a)),
                 ctx.sleep(Duration::from_millis(50)),
             )
             .await;
@@ -151,11 +151,11 @@ mod tests {
 
     #[test]
     fn winning_sleep_drops_the_other_future() {
-        let (a, b) = pair();
+        let (a, b) = socketpair();
         let a_outside = rustix::io::dup(&a).unwrap();
         let mut event_loop = test_loop!(Log::default(), async move |ctx| {
             let winner = First(
-                pin!(readable(ctx, &a)),
+                pin!(wait_readable(ctx, &a)),
                 ctx.sleep(Duration::from_millis(10)),
             )
             .await;

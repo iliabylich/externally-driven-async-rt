@@ -6,6 +6,7 @@ compile_error!(
 );
 
 mod context;
+mod current_thread_queue;
 mod event_loop;
 mod instant;
 mod io;

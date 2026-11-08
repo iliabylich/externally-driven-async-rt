@@ -16,7 +16,7 @@ use crate::{
     test_utils::{
         Log, TEST_MAX_IO_COUNT, TEST_MAX_ROOT_TASK_SIZE, TEST_MAX_TASK_SIZE, TEST_MAX_TASKS_COUNT,
         TEST_MAX_TIMERS_COUNT, TEST_MEMORY, TestContext, TestLoop, assert_yields, is_readable,
-        pair, readable, test_loop, test_loop_in, test_memory_within_current_test, wake_by_writing,
+        socketpair, wait_readable, test_loop, test_loop_in, test_memory_within_current_test, wake_by_writing,
     },
     waker::new_waker,
 };
@@ -47,10 +47,10 @@ fn idle_loop_is_not_readable_and_drains_to_nothing() {
 
 #[test]
 fn root_finishing_inside_a_drain() {
-    let (a, b) = pair();
+    let (a, b) = socketpair();
     let mut event_loop = test_loop!(Log::default(), async move |ctx| {
         ctx.dispatch(1);
-        readable(ctx, &a).await;
+        wait_readable(ctx, &a).await;
         ctx.dispatch(2);
         ctx.dispatch(3);
     },)
@@ -72,11 +72,11 @@ fn root_finishing_inside_a_drain() {
 
 #[test]
 fn root_progresses_across_drains() {
-    let (a, b) = pair();
+    let (a, b) = socketpair();
     let mut event_loop = test_loop!(Log::default(), async move |ctx| {
         let mut i = 0;
         loop {
-            readable(ctx, &a).await;
+            wait_readable(ctx, &a).await;
             let mut buf = [0; 16];
             rustix::io::read(&a, &mut buf).unwrap();
             ctx.dispatch(i);
@@ -94,9 +94,9 @@ fn root_progresses_across_drains() {
 
 #[test]
 fn handle_survives_moves_and_an_opaque_pointer_round_trip() {
-    let (a, b) = pair();
+    let (a, b) = socketpair();
     let event_loop = test_loop!(Log::default(), async move |ctx| {
-        readable(ctx, &a).await;
+        wait_readable(ctx, &a).await;
         ctx.dispatch(1);
     },)
     .unwrap();
@@ -116,15 +116,15 @@ fn handle_survives_moves_and_an_opaque_pointer_round_trip() {
 
 #[test]
 fn two_loops_on_one_thread_are_independent() {
-    let (a1, b1) = pair();
-    let (a2, _b2) = pair();
+    let (a1, b1) = socketpair();
+    let (a2, _b2) = socketpair();
     let mut first = test_loop!(Log::default(), async move |ctx| {
-        readable(ctx, &a1).await;
+        wait_readable(ctx, &a1).await;
         ctx.dispatch(1);
     },)
     .unwrap();
     let mut second = test_loop!(Log::default(), async move |ctx| {
-        readable(ctx, &a2).await;
+        wait_readable(ctx, &a2).await;
         ctx.dispatch(2);
     },)
     .unwrap();
@@ -149,9 +149,9 @@ fn panic_propagates_out_of_new() {
 #[test]
 #[should_panic(expected = "boom in drain")]
 fn panic_propagates_out_of_drain() {
-    let (a, b) = pair();
+    let (a, b) = socketpair();
     let mut event_loop = test_loop!(Log::default(), async move |ctx| {
-        readable(ctx, &a).await;
+        wait_readable(ctx, &a).await;
         panic!("boom in drain");
     },)
     .unwrap();
@@ -260,7 +260,7 @@ fn spawned_task_runs_in_the_same_drain() {
 
 #[test]
 fn tasks_are_dropped_when_the_root_finishes() {
-    let (a, b) = pair();
+    let (a, b) = socketpair();
     let mut event_loop = test_loop!(Log::default(), async move |ctx| {
         ctx.spawn(async |ctx| {
             let _guard = DispatchOnDrop(ctx, 10);
@@ -270,7 +270,7 @@ fn tasks_are_dropped_when_the_root_finishes() {
             let _guard = DispatchOnDrop(ctx, 20);
             pending::<()>().await;
         });
-        readable(ctx, &a).await;
+        wait_readable(ctx, &a).await;
         ctx.dispatch(1);
     },)
     .unwrap();
@@ -296,13 +296,13 @@ impl Drop for SpawnOnDrop<'_> {
 
 #[test]
 fn spawning_and_dispatching_from_drop_during_teardown() {
-    let (a, b) = pair();
+    let (a, b) = socketpair();
     let mut event_loop = test_loop!(Log::default(), async move |ctx| {
         ctx.spawn(async |ctx| {
             let _guard = SpawnOnDrop(ctx);
             pending::<()>().await;
         });
-        readable(ctx, &a).await;
+        wait_readable(ctx, &a).await;
         ctx.dispatch(1);
     },)
     .unwrap();
@@ -525,7 +525,7 @@ fn dropping_the_loop_drops_tasks_spawned_from_drop() {
 fn readable_event_wakes_the_reader_once() {
     let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
-    let (a, b) = pair();
+    let (a, b) = socketpair();
     let (task, waker) = parked_task(event_loop);
     let io = event_loop
         .storage
@@ -546,7 +546,7 @@ fn readable_event_wakes_the_reader_once() {
 fn removed_io_waker_arms_nothing() {
     let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
-    let (a, b) = pair();
+    let (a, b) = socketpair();
     let (_, waker) = parked_task(event_loop);
     let io = event_loop
         .storage
@@ -563,7 +563,7 @@ fn removed_io_waker_arms_nothing() {
 fn deregistered_io_produces_no_events() {
     let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
-    let (a, b) = pair();
+    let (a, b) = socketpair();
     let (_, waker) = parked_task(event_loop);
     let io = event_loop
         .storage

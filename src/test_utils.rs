@@ -10,7 +10,7 @@ use core::{
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     fd::{AsFd, OwnedFd},
-    net::{AddressFamily, SocketFlags, SocketType, socketpair},
+    net::{AddressFamily, SocketFlags, SocketType},
 };
 
 use crate::{Context, Error, EventLoop, State, io::IoRegistration, selectors::Direction};
@@ -64,8 +64,8 @@ impl State for Log {
     }
 }
 
-pub(crate) fn pair() -> (OwnedFd, OwnedFd) {
-    let (a, b) = socketpair(
+pub(crate) fn socketpair() -> (OwnedFd, OwnedFd) {
+    let (a, b) = rustix::net::socketpair(
         AddressFamily::UNIX,
         SocketType::STREAM,
         SocketFlags::empty(),
@@ -102,7 +102,7 @@ pub(crate) fn sleep(duration: Duration) {
     assert_eq!(poll(&mut [], Some(&timeout)).unwrap(), 0);
 }
 
-pub(crate) async fn readable<
+pub(crate) async fn wait_readable<
     S: State,
     const MAX_TASKS_COUNT: usize,
     const MAX_TASK_SIZE: usize,

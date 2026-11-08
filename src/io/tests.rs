@@ -16,7 +16,7 @@ use crate::{
     selectors::Direction,
     test_utils::{
         First, Log, TEST_MAX_ROOT_TASK_SIZE, TEST_MAX_TASK_SIZE, TEST_MAX_TASKS_COUNT,
-        TEST_MAX_TIMERS_COUNT, TestContext, TestLoop, Winner, is_readable, pair,
+        TEST_MAX_TIMERS_COUNT, TestContext, TestLoop, Winner, is_readable, socketpair,
         run_until_root_finishes, test_loop,
     },
 };
@@ -74,7 +74,7 @@ fn registrations(event_loop: &TestLoop<Log>) -> usize {
 
 #[test]
 fn read_waits_until_the_peer_writes() {
-    let (a, b) = pair();
+    let (a, b) = socketpair();
     let mut event_loop = test_loop!(Log::default(), async move |ctx| {
         let n = read_some(ctx, &a).await.unwrap();
         ctx.dispatch(n as u32);
@@ -93,7 +93,7 @@ fn read_waits_until_the_peer_writes() {
 
 #[test]
 fn write_waits_on_a_full_buffer() {
-    let (a, b) = pair();
+    let (a, b) = socketpair();
     fill_send_buffer(&a);
     let mut event_loop = test_loop!(Log::default(), async move |ctx| {
         let n = write_some(ctx, &a).await.unwrap();
@@ -110,7 +110,7 @@ fn write_waits_on_a_full_buffer() {
 
 #[test]
 fn ready_fd_arms_nothing() {
-    let (a, b) = pair();
+    let (a, b) = socketpair();
     rustix::io::write(&b, b"abc").unwrap();
     let mut event_loop = test_loop!(Log::default(), async move |ctx| {
         let n = read_some(ctx, &a).await.unwrap();
@@ -126,7 +126,7 @@ fn ready_fd_arms_nothing() {
 
 #[test]
 fn dropping_a_pending_read_deregisters() {
-    let (a, b) = pair();
+    let (a, b) = socketpair();
     let mut event_loop = test_loop!(Log::default(), async move |ctx| {
         let winner = First(
             pin!(read_some(ctx, &a)),
@@ -150,7 +150,7 @@ fn dropping_a_pending_read_deregisters() {
 
 #[test]
 fn read_survives_a_spurious_wake() {
-    let (a, b) = pair();
+    let (a, b) = socketpair();
     let mut event_loop = test_loop!(Log::default(), async move |ctx| {
         let mut woken = false;
         let wake_once = poll_fn(move |cx| {
@@ -178,7 +178,7 @@ fn read_survives_a_spurious_wake() {
 #[test]
 fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
     let mut event_loop = test_loop!(Log::default(), async |ctx| {
-        let (a, _b) = pair();
+        let (a, _b) = socketpair();
         let winner = First(
             pin!(read_some(ctx, &a)),
             ctx.sleep(Duration::from_millis(5)),
@@ -187,7 +187,7 @@ fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
         assert_eq!(winner, Winner::B);
         drop(a);
 
-        let (c, d) = pair();
+        let (c, d) = socketpair();
         ctx.spawn(async move |ctx| {
             ctx.sleep(Duration::from_millis(5)).await;
             rustix::io::write(&d, b"abc").unwrap();
@@ -203,8 +203,8 @@ fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
 #[test]
 #[should_panic(expected = "more than 1 concurrent IO operations")]
 fn exceeding_max_io_count_panics() {
-    let (a, _b) = pair();
-    let (c, _d) = pair();
+    let (a, _b) = socketpair();
+    let (c, _d) = socketpair();
     let _ = test_loop!(
         [
             TEST_MAX_TASKS_COUNT,
@@ -222,7 +222,7 @@ fn exceeding_max_io_count_panics() {
 
 #[test]
 fn sequential_io_reuses_the_slot() {
-    let (a, b) = pair();
+    let (a, b) = socketpair();
     let mut event_loop = test_loop!(
         [
             TEST_MAX_TASKS_COUNT,

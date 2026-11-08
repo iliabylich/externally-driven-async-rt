@@ -7,7 +7,7 @@ use crate::{
     selectors::{
         Direction, EVENTS_PER_CALL, IoAction, IoChange, SelectorEvent, Token, kqueue::Selector,
     },
-    test_utils::{assert_yields, is_readable, pair},
+    test_utils::{assert_yields, is_readable, socketpair},
 };
 
 fn change(token: u64, fd: &OwnedFd, direction: Direction, action: IoAction) -> IoChange {
@@ -49,7 +49,7 @@ fn events(selector: &Selector) -> impl Iterator<Item = SelectorEvent> + '_ {
 #[test]
 fn nothing_armed_produces_no_events() {
     let selector = Selector::new().unwrap();
-    let (_a, b) = pair();
+    let (_a, b) = socketpair();
     selector.flush([]).unwrap();
     rustix::io::write(&b, b"x").unwrap();
     assert!(!is_readable(&selector, 0));
@@ -59,7 +59,7 @@ fn nothing_armed_produces_no_events() {
 #[test]
 fn armed_write_is_reported_with_its_token() {
     let selector = Selector::new().unwrap();
-    let (a, _b) = pair();
+    let (a, _b) = socketpair();
     selector.flush([arm(1, &a, Direction::Write)]).unwrap();
     assert_yields(events(&selector), [SelectorEvent::Writable(Token(1))]);
 }
@@ -67,7 +67,7 @@ fn armed_write_is_reported_with_its_token() {
 #[test]
 fn read_interest_is_one_shot() {
     let selector = Selector::new().unwrap();
-    let (a, b) = pair();
+    let (a, b) = socketpair();
     selector.flush([arm(2, &a, Direction::Read)]).unwrap();
 
     rustix::io::write(&b, b"hello").unwrap();
@@ -83,7 +83,7 @@ fn read_interest_is_one_shot() {
 #[test]
 fn data_that_arrived_before_arming_is_reported() {
     let selector = Selector::new().unwrap();
-    let (a, b) = pair();
+    let (a, b) = socketpair();
     rustix::io::write(&b, b"early").unwrap();
     selector.flush([arm(3, &a, Direction::Read)]).unwrap();
     assert_yields(events(&selector), [SelectorEvent::Readable(Token(3))]);
@@ -92,7 +92,7 @@ fn data_that_arrived_before_arming_is_reported() {
 #[test]
 fn disarming_prevents_events() {
     let selector = Selector::new().unwrap();
-    let (a, b) = pair();
+    let (a, b) = socketpair();
     selector.flush([arm(4, &a, Direction::Read)]).unwrap();
     selector.flush([disarm(4, &a, Direction::Read)]).unwrap();
     rustix::io::write(&b, b"x").unwrap();
@@ -102,7 +102,7 @@ fn disarming_prevents_events() {
 #[test]
 fn apply_now_deletes_an_armed_filter_without_flush() {
     let selector = Selector::new().unwrap();
-    let (a, b) = pair();
+    let (a, b) = socketpair();
     selector.flush([arm(5, &a, Direction::Read)]).unwrap();
     selector.apply_now(disarm(5, &a, Direction::Read)).unwrap();
     rustix::io::write(&b, b"x").unwrap();
@@ -112,7 +112,7 @@ fn apply_now_deletes_an_armed_filter_without_flush() {
 #[test]
 fn deleted_then_closed_fd_produces_no_events() {
     let selector = Selector::new().unwrap();
-    let (a, b) = pair();
+    let (a, b) = socketpair();
     selector.flush([arm(6, &a, Direction::Read)]).unwrap();
     selector.apply_now(disarm(6, &a, Direction::Read)).unwrap();
     drop(a);
@@ -123,7 +123,7 @@ fn deleted_then_closed_fd_produces_no_events() {
 #[test]
 fn disarming_a_filter_that_already_fired_is_ok() {
     let selector = Selector::new().unwrap();
-    let (a, _b) = pair();
+    let (a, _b) = socketpair();
     selector.flush([arm(7, &a, Direction::Write)]).unwrap();
     assert_yields(events(&selector), [SelectorEvent::Writable(Token(7))]);
     selector.apply_now(disarm(7, &a, Direction::Write)).unwrap();
@@ -132,12 +132,12 @@ fn disarming_a_filter_that_already_fired_is_ok() {
 #[test]
 fn reused_fd_number_reports_the_new_token() {
     let selector = Selector::new().unwrap();
-    let (a, _b) = pair();
+    let (a, _b) = socketpair();
     selector.flush([arm(8, &a, Direction::Write)]).unwrap();
     selector.apply_now(disarm(8, &a, Direction::Write)).unwrap();
     drop(a);
 
-    let (c, _d) = pair();
+    let (c, _d) = socketpair();
     selector.flush([arm(9, &c, Direction::Write)]).unwrap();
     assert_yields(events(&selector), [SelectorEvent::Writable(Token(9))]);
 }
@@ -145,7 +145,7 @@ fn reused_fd_number_reports_the_new_token() {
 #[test]
 fn changes_and_events_beyond_one_batch_are_all_delivered() {
     let selector = Selector::new().unwrap();
-    let [(a0, b0), (a1, b1), (a2, b2)] = core::array::from_fn(|_| pair());
+    let [(a0, b0), (a1, b1), (a2, b2)] = core::array::from_fn(|_| socketpair());
     let fds = [&a0, &b0, &a1, &b1, &a2, &b2];
     let arm_first = |count: usize| {
         fds[..count]

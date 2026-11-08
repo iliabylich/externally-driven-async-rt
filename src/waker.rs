@@ -3,11 +3,7 @@ use core::{
     task::{RawWaker, RawWakerVTable, Waker},
 };
 
-use crate::{
-    ready::{Link, ReadyQueue},
-    storage::TaskId,
-    thread_id::ThreadId,
-};
+use crate::{ready::ReadyQueue, storage::TaskId, thread_id::ThreadId};
 
 fn vtable<const N: usize>() -> &'static RawWakerVTable {
     const { &RawWakerVTable::new(clone::<N>, wake::<N>, wake::<N>, drop_waker) }
@@ -35,12 +31,12 @@ unsafe fn clone<const N: usize>(ptr: *const ()) -> RawWaker {
 
 unsafe fn wake<const N: usize>(ptr: *const ()) {
     // SAFETY: `ptr` comes from `ReadyQueue::link` in `new_waker`, which is non-null.
-    let link = unsafe { NonNull::new_unchecked(ptr.cast::<Link>().cast_mut()) };
+    let link = unsafe { NonNull::new_unchecked(ptr.cast_mut().cast()) };
     // SAFETY: `new_waker`'s caller guarantees the queue is alive while wakers may be woken, and
     // only `thread` is accessed before it's checked.
     let (queue, slot) = unsafe { ReadyQueue::<N>::of_link(link) };
     assert_eq!(
-        queue.thread,
+        queue.initial_thread_id(),
         ThreadId::current(),
         "a Waker must only be woken on the thread of its EventLoop"
     );

@@ -1,0 +1,205 @@
+use core::{
+    cell::Cell,
+    mem::{MaybeUninit, offset_of},
+    ptr::NonNull,
+};
+
+use crate::thread_id::ThreadId;
+
+pub(crate) struct Link<T> {
+    slot: u32,
+    queued: Cell<bool>,
+    next: Cell<Option<u32>>,
+    value: T,
+}
+
+pub(crate) struct CurrentThreadQueue<T: Default, const N: usize> {
+    pub(crate) thread: ThreadId,
+    head: Cell<Option<u32>>,
+    tail: Cell<Option<u32>>,
+    links: [Link<T>; N],
+}
+
+impl<T: Default, const N: usize> CurrentThreadQueue<T, N> {
+    pub(crate) fn init(place: &mut MaybeUninit<Self>) -> &Self {
+        const {
+            assert!(N > 0, "current thread queue capacity must not be zero");
+            assert!(
+                N <= u32::MAX as usize,
+                "current thread queue capacity must fit in u32"
+            );
+        }
+
+        let ptr = place.as_mut_ptr();
+        // SAFETY: `ptr` points to `place`, borrowed exclusively until the end; the fields are
+        // disjoint, `&raw mut` creates no reference to them while they're uninitialized, and
+        // `MaybeUninit<T>` has `T`'s layout.
+        let (thread, head, tail, links) = unsafe {
+            (
+                &mut *(&raw mut (*ptr).thread).cast::<MaybeUninit<_>>(),
+                &mut *(&raw mut (*ptr).head).cast::<MaybeUninit<_>>(),
+                &mut *(&raw mut (*ptr).tail).cast::<MaybeUninit<_>>(),
+                &mut *(&raw mut (*ptr).links).cast::<[MaybeUninit<_>; N]>(),
+            )
+        };
+        thread.write(ThreadId::current());
+        head.write(Cell::new(None::<u32>));
+        tail.write(Cell::new(None::<u32>));
+        for (slot, link) in links.iter_mut().enumerate() {
+            link.write(Link {
+                slot: slot as u32,
+                queued: Cell::new(false),
+                next: Cell::new(None),
+                value: T::default(),
+            });
+        }
+        // SAFETY: every field was written above.
+        unsafe { place.assume_init_ref() }
+    }
+
+    pub(crate) fn link(&self, slot: u32) -> NonNull<Link<T>> {
+        assert!((slot as usize) < N, "slot {slot} is out of bounds");
+        // SAFETY: `links[slot]` is inside `self`; the pointer is derived from all of `self` (not
+        // just the link) so that `of_link` may step back to the queue from it.
+        unsafe {
+            NonNull::from(self)
+                .byte_add(offset_of!(Self, links))
+                .cast::<Link<T>>()
+                .add(slot as usize)
+        }
+    }
+
+    /// # Safety
+    ///
+    /// `link` must come from `Self::link` of a queue that stays alive for `'a`. Until `thread` is
+    /// checked to be the current thread, nothing but `thread` may be accessed through the queue.
+    pub(crate) unsafe fn of_link<'a>(link: NonNull<Link<T>>) -> (&'a Self, u32) {
+        // SAFETY: the caller guarantees the queue is alive; `slot` isn't written after `init`, and
+        // it's read through a raw pointer, so no reference to the link's `Cell`s is created.
+        let slot = unsafe { (*link.as_ptr()).slot };
+        // SAFETY: `link` points to `links[slot]` of the queue and carries the provenance of the
+        // whole queue (see `link`), so stepping back by its offset stays inside the queue, which
+        // the caller keeps alive for `'a`. After `init` the queue is only ever accessed through
+        // shared references, so creating one reads only bytes outside `UnsafeCell`s, which are
+        // never written again, and doesn't race with the queue's thread.
+        let queue = unsafe {
+            link.byte_sub(offset_of!(Self, links) + slot as usize * size_of::<Link<T>>())
+                .cast::<Self>()
+                .as_ref()
+        };
+        (queue, slot)
+    }
+
+    pub(crate) fn get(&self, slot: u32) -> &T {
+        &self.links[slot as usize].value
+    }
+
+    pub(crate) fn push(&self, slot: u32) {
+        let link = &self.links[slot as usize];
+        if link.queued.get() {
+            return;
+        }
+        link.queued.set(true);
+        link.next.set(None);
+        match self.tail.get() {
+            Some(tail) => self.links[tail as usize].next.set(Some(slot)),
+            None => self.head.set(Some(slot)),
+        }
+        self.tail.set(Some(slot));
+    }
+
+    pub(crate) fn pop(&self) -> Option<u32> {
+        let slot = self.head.get()?;
+        let link = &self.links[slot as usize];
+        self.head.set(link.next.get());
+        if self.head.get().is_none() {
+            self.tail.set(None);
+        }
+        link.queued.set(false);
+        link.next.set(None);
+        Some(slot)
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.head.get().is_none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        current_thread_queue::CurrentThreadQueue, test_utils::assert_yields, thread_id::ThreadId,
+    };
+    use core::{cell::Cell, mem::MaybeUninit};
+
+    fn drain<T: Default, const N: usize>(
+        queue: &CurrentThreadQueue<T, N>,
+    ) -> impl Iterator<Item = u32> + '_ {
+        core::iter::from_fn(|| queue.pop())
+    }
+
+    #[test]
+    fn pops_in_push_order() {
+        let mut place = MaybeUninit::uninit();
+        let queue = CurrentThreadQueue::<(), 4>::init(&mut place);
+        for slot in [2, 0, 3] {
+            queue.push(slot);
+        }
+        assert!(!queue.is_empty());
+        assert_yields(drain(queue), [2, 0, 3]);
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn a_queued_slot_is_pushed_once() {
+        let mut place = MaybeUninit::uninit();
+        let queue = CurrentThreadQueue::<(), 2>::init(&mut place);
+        queue.push(0);
+        queue.push(1);
+        queue.push(0);
+        assert_yields(drain(queue), [0, 1]);
+        queue.push(0);
+        assert_yields(drain(queue), [0]);
+    }
+
+    #[test]
+    fn re_push_during_draining_goes_to_the_back() {
+        let mut place = MaybeUninit::uninit();
+        let queue = CurrentThreadQueue::<(), 2>::init(&mut place);
+        queue.push(0);
+        queue.push(1);
+        assert_eq!(queue.pop(), Some(0));
+        queue.push(0);
+        assert_yields(drain(queue), [1, 0]);
+    }
+
+    #[test]
+    fn values_are_per_slot() {
+        let mut place = MaybeUninit::uninit();
+        let queue = CurrentThreadQueue::<Cell<u32>, 2>::init(&mut place);
+        queue.get(1).set(7);
+        assert_eq!(queue.get(0).get(), 0);
+        assert_eq!(queue.get(1).get(), 7);
+    }
+
+    #[test]
+    fn of_link_finds_the_queue_and_the_slot() {
+        let mut place = MaybeUninit::uninit();
+        let queue = CurrentThreadQueue::<Cell<u32>, 3>::init(&mut place);
+        // SAFETY: `queue` outlives the call.
+        let (found, slot) = unsafe { CurrentThreadQueue::of_link(queue.link(2)) };
+        assert!(core::ptr::eq(found, queue));
+        assert_eq!(slot, 2);
+        assert_eq!(found.thread, ThreadId::current());
+        found.push(slot);
+        assert_yields(drain(queue), [2]);
+    }
+
+    #[test]
+    #[should_panic(expected = "slot 2 is out of bounds")]
+    fn link_out_of_bounds_panics() {
+        let mut place = MaybeUninit::uninit();
+        let queue = CurrentThreadQueue::<(), 2>::init(&mut place);
+        queue.link(2);
+    }
+}

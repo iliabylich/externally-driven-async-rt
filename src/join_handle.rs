@@ -49,15 +49,15 @@ mod tests {
 
     use crate::{
         Error,
-        test_utils::{Log, pair, readable, test_loop, wake_by_writing},
+        test_utils::{Log, socketpair, test_loop, wait_readable, wake_by_writing},
     };
 
     #[test]
     fn joining_a_running_task_waits_for_it() {
-        let (a, b) = pair();
+        let (a, b) = socketpair();
         let mut event_loop = test_loop!(Log::default(), async move |ctx| {
             ctx.spawn(async move |ctx| {
-                readable(ctx, &a).await;
+                wait_readable(ctx, &a).await;
                 ctx.dispatch(1);
             })
             .await;
@@ -75,10 +75,10 @@ mod tests {
 
     #[test]
     fn joining_a_finished_task_resolves_immediately() {
-        let (a, b) = pair();
+        let (a, b) = socketpair();
         let mut event_loop = test_loop!(Log::default(), async move |ctx| {
             let handle = ctx.spawn(async |ctx| ctx.dispatch(1));
-            readable(ctx, &a).await;
+            wait_readable(ctx, &a).await;
             handle.await;
             ctx.dispatch(2);
         },)
@@ -94,10 +94,10 @@ mod tests {
 
     #[test]
     fn dropped_handle_detaches_the_task() {
-        let (a, b) = pair();
+        let (a, b) = socketpair();
         let mut event_loop = test_loop!(Log::default(), async move |ctx| {
             ctx.spawn(async move |ctx| {
-                readable(ctx, &a).await;
+                wait_readable(ctx, &a).await;
                 ctx.dispatch(1);
             });
             pending::<()>().await;
