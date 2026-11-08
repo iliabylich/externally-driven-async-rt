@@ -85,24 +85,10 @@ impl<
         unsafe { place.assume_init_ref() }
     }
 
-    /// # Safety
-    ///
-    /// Called exactly once, while no task is being polled; the storage isn't used afterwards.
-    pub(crate) unsafe fn destroy(&self) {
+    pub(crate) fn clear(&self) {
         self.tasks.drop_all();
         self.timers.clear();
         self.io_waiters.clear();
-        // SAFETY: no task (so no `Context` and no reference into the storage) is left; the state
-        // was initialized in `init` and is dropped exactly once here, the other parts hold nothing
-        // that needs dropping (the ready queue holds only `Copy` data, the blocks no live future,
-        // the pools nothing after `drop_all` and `clear`). The selector is
-        // this struct's only field with drop glue; it's moved out (a read) rather than dropped in
-        // place, because dropping needs write access to the struct, which callers hold protected
-        // shared references to (`&self`, and e.g. an `EventLoop` given to `mem::drop`).
-        unsafe {
-            core::ptr::drop_in_place(self.state.get());
-            drop(core::ptr::read(&self.selector));
-        }
     }
 }
 

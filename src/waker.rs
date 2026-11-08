@@ -25,7 +25,7 @@ pub(crate) unsafe fn new_waker<const N: usize>(ready: &ReadyQueue<N>, task: Task
     }
 }
 
-unsafe fn clone<const N: usize>(ptr: *const ()) -> RawWaker {
+fn clone<const N: usize>(ptr: *const ()) -> RawWaker {
     RawWaker::new(ptr, vtable::<N>())
 }
 
@@ -43,7 +43,7 @@ unsafe fn wake<const N: usize>(ptr: *const ()) {
     queue.push(slot);
 }
 
-unsafe fn drop_waker(_: *const ()) {}
+fn drop_waker(_: *const ()) {}
 
 #[cfg(test)]
 mod tests {

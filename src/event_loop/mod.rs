@@ -3,7 +3,7 @@ use core::mem::MaybeUninit;
 use rustix::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
 use crate::{
-    context::{Context, task_future},
+    context::Context,
     selectors::Selector,
     state::State,
     storage::{Root, RootStatus, Storage},
@@ -131,9 +131,7 @@ impl<
         let place = unsafe { &mut *memory.as_mut_ptr().add(start).cast() };
         let storage = Storage::init(place, selector, state);
         let event_loop = Self { storage };
-        // SAFETY: the future is stored in this storage right away, as its root.
-        let root = unsafe { task_future(storage, f) };
-        storage.tasks.spawn_root(root);
+        Context::spawn_root(storage, f);
         match storage.tasks.run_ready() {
             RootStatus::Running => {}
             RootStatus::Finished => return Err(Error::RootFinished),
@@ -198,9 +196,19 @@ impl<
     >
 {
     fn drop(&mut self) {
-        // SAFETY: destroyed exactly once, here, with no task being polled (`drop` can't run from
-        // inside the loop).
-        unsafe { self.storage.destroy() };
+        self.storage.clear();
+        // SAFETY: this loop is the only one using the storage, and `drop` runs at most once, so
+        // the state and the selector are dropped exactly once, and never used again. No task (so
+        // no `Context` and no reference into the storage) is left after `clear`; the state was
+        // initialized in `new`, and the storage's other parts hold nothing that needs dropping
+        // (the ready queue holds only `Copy` data, the blocks no live future, the pools nothing
+        // after `clear`). The selector is moved out (a read) rather than dropped in place,
+        // because dropping needs write access to the storage, which only shared references (like
+        // `self.storage`) point to.
+        unsafe {
+            core::ptr::drop_in_place(self.storage.state.get());
+            drop(core::ptr::read(&self.storage.selector));
+        }
     }
 }
 

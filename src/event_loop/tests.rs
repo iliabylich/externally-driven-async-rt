@@ -368,6 +368,33 @@ fn dropping_the_loop_drops_its_tasks() {
     assert!(dropped.get());
 }
 
+#[test]
+fn dropping_the_loop_drops_its_state() {
+    struct Flagged<'a> {
+        _flag: DropFlag<'a>,
+    }
+
+    impl State for Flagged<'_> {
+        type Event = ();
+
+        fn apply(&mut self, (): ()) {}
+    }
+
+    let dropped = Cell::new(false);
+    let event_loop = test_loop!(
+        Flagged {
+            _flag: DropFlag(&dropped)
+        },
+        async |_| {
+            pending::<()>().await;
+        },
+    )
+    .unwrap();
+    assert!(!dropped.get());
+    drop(event_loop);
+    assert!(dropped.get());
+}
+
 fn parked_loop<'a>(memory: &'static mut [MaybeUninit<u8>; TEST_MEMORY]) -> TestLoop<'a, Log> {
     test_loop_in(memory, Log::default(), async |_| pending().await).unwrap()
 }
