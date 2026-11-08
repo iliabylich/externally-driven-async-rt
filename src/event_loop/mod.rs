@@ -1,16 +1,14 @@
-use core::alloc::Layout;
-use core::fmt;
-use core::marker::PhantomData;
-use core::mem::MaybeUninit;
-use core::ptr::NonNull;
+use core::{alloc::Layout, marker::PhantomData, mem::MaybeUninit, ptr::NonNull};
 
 use rustix::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
-use crate::capacities::Capacities;
-use crate::context::{Context, task_future};
-use crate::selectors::Selector;
-use crate::state::State;
-use crate::storage::{Root, RootStatus, Storage};
+use crate::{
+    capacities::Capacities,
+    context::{Context, task_future},
+    selectors::Selector,
+    state::State,
+    storage::{Root, RootStatus, Storage},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
@@ -18,8 +16,8 @@ pub enum Error {
     RootFinished,
 }
 
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Io(errno) => write!(f, "event loop IO error: {errno}"),
             Self::RootFinished => f.write_str("the root future has finished"),

@@ -7,8 +7,10 @@ mod kqueue_tests;
 mod timer;
 mod token;
 
-pub(crate) use clock::monotonic_nanos;
-pub(crate) use event::{EVENTS_PER_CALL, SelectorEvent};
-pub(crate) use io_change::{Direction, IoAction, IoChange};
-pub(crate) use kqueue::Selector;
-pub(crate) use token::Token;
+pub(crate) use self::{
+    clock::monotonic_nanos,
+    event::{EVENTS_PER_CALL, SelectorEvent},
+    io_change::{Direction, IoAction, IoChange},
+    kqueue::Selector,
+    token::Token,
+};

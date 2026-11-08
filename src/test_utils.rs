@@ -1,21 +1,18 @@
-use core::alloc::Layout;
-use core::future::Future;
-use core::marker::PhantomData;
-use core::mem::MaybeUninit;
-use core::pin::Pin;
-use core::ptr::NonNull;
-use core::task::Poll;
-use core::time::Duration;
+use core::{
+    alloc::Layout, future::Future, marker::PhantomData, mem::MaybeUninit, pin::Pin, ptr::NonNull,
+    task::Poll, time::Duration,
+};
 
-use rustix::event::{PollFd, PollFlags, Timespec, poll};
-use rustix::fd::{AsFd, OwnedFd};
-use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
+use rustix::{
+    event::{PollFd, PollFlags, Timespec, poll},
+    fd::{AsFd, OwnedFd},
+    net::{AddressFamily, SocketFlags, SocketType, socketpair},
+};
 
-use crate::io::IoRegistration;
-use crate::ready::ReadyQueue;
-use crate::selectors::Direction;
-use crate::storage::Storage;
-use crate::{Capacities, Context, Error, EventLoop, State};
+use crate::{
+    Capacities, Context, Error, EventLoop, State, io::IoRegistration, ready::ReadyQueue,
+    selectors::Direction, storage::Storage,
+};
 
 pub(crate) const TEST_CAPACITIES: Capacities = Capacities {
     max_tasks: 16,

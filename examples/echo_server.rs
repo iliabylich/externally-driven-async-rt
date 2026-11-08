@@ -1,9 +1,15 @@
-use core::mem;
-use core::net::SocketAddr;
-use core::time::Duration;
+use core::{net::SocketAddr, time::Duration};
 
-use externally_driven_async_rt::net::{TcpListener, TcpStream};
-use externally_driven_async_rt::{Capacities, Context, Error, EventLoop, State};
+use externally_driven_async_rt::{
+    Capacities, Context, Error, EventLoop, State,
+    net::{TcpListener, TcpStream},
+};
+
+use rustix::{
+    event::{PollFd, PollFlags, poll},
+    fd::BorrowedFd,
+    io::Errno,
+};
 
 const CAPACITIES: Capacities = Capacities {
     max_tasks: 1024,
@@ -13,9 +19,6 @@ const CAPACITIES: Capacities = Capacities {
 };
 
 type ServerContext = Context<Server>;
-use rustix::event::{PollFd, PollFlags, poll};
-use rustix::fd::BorrowedFd;
-use rustix::io::Errno;
 
 #[derive(Default)]
 struct Server {
@@ -166,7 +169,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let size = EventLoop::<Server>::required_size(CAPACITIES, &root);
     let memory = Box::leak(Box::new_uninit_slice(size));
     let mut event_loop = EventLoop::new(memory, Server::default(), CAPACITIES, root)?;
-    for line in mem::take(&mut event_loop.state_mut().log) {
+    for line in core::mem::take(&mut event_loop.state_mut().log) {
         println!("{line}");
     }
     println!("commands: stats, quit");
@@ -192,7 +195,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if loop_ready {
             let result = event_loop.drain_events_without_blocking();
-            for line in mem::take(&mut event_loop.state_mut().log) {
+            for line in core::mem::take(&mut event_loop.state_mut().log) {
                 println!("{line}");
             }
             match result {

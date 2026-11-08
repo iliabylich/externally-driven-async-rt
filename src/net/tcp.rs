@@ -1,12 +1,15 @@
 use core::net::SocketAddr;
 
-use rustix::fd::OwnedFd;
-use rustix::net::sockopt::set_socket_reuseaddr;
-use rustix::net::{Shutdown, SocketType};
+use rustix::{
+    fd::OwnedFd,
+    net::{Shutdown, SocketType, sockopt::set_socket_reuseaddr},
+};
 
-use super::{ReadHalf, WriteHalf};
-use crate::context::Context;
-use crate::state::State;
+use crate::{
+    context::Context,
+    net::{ReadHalf, WriteHalf},
+    state::State,
+};
 
 pub struct TcpListener {
     fd: OwnedFd,
@@ -14,10 +17,10 @@ pub struct TcpListener {
 
 impl TcpListener {
     pub fn bind(addr: SocketAddr) -> rustix::io::Result<Self> {
-        let fd = super::socket(super::ip_family(&addr), SocketType::STREAM)?;
+        let fd = crate::net::socket(crate::net::ip_family(&addr), SocketType::STREAM)?;
         set_socket_reuseaddr(&fd, true)?;
         rustix::net::bind(&fd, &addr)?;
-        super::listen(&fd)?;
+        crate::net::listen(&fd)?;
         Ok(Self { fd })
     }
 
@@ -25,12 +28,12 @@ impl TcpListener {
         &mut self,
         ctx: &Context<S>,
     ) -> rustix::io::Result<(TcpStream, SocketAddr)> {
-        let (fd, addr) = super::accept(ctx, &self.fd).await?;
+        let (fd, addr) = crate::net::accept(ctx, &self.fd).await?;
         Ok((TcpStream { fd }, addr))
     }
 
     pub fn local_addr(&self) -> rustix::io::Result<SocketAddr> {
-        super::local_addr(&self.fd)
+        crate::net::local_addr(&self.fd)
     }
 }
 
@@ -40,7 +43,7 @@ pub struct TcpStream {
 
 impl TcpStream {
     pub async fn connect<S: State>(ctx: &Context<S>, addr: SocketAddr) -> rustix::io::Result<Self> {
-        let fd = super::connect(ctx, super::ip_family(&addr), &addr).await?;
+        let fd = crate::net::connect(ctx, crate::net::ip_family(&addr), &addr).await?;
         Ok(Self { fd })
     }
 
@@ -49,7 +52,7 @@ impl TcpStream {
         ctx: &Context<S>,
         buf: &mut [u8],
     ) -> rustix::io::Result<usize> {
-        super::read(ctx, &self.fd, buf).await
+        crate::net::read(ctx, &self.fd, buf).await
     }
 
     pub async fn write<S: State>(
@@ -57,7 +60,7 @@ impl TcpStream {
         ctx: &Context<S>,
         buf: &[u8],
     ) -> rustix::io::Result<usize> {
-        super::write(ctx, &self.fd, buf).await
+        crate::net::write(ctx, &self.fd, buf).await
     }
 
     pub fn shutdown(&self, how: Shutdown) -> rustix::io::Result<()> {
@@ -65,29 +68,34 @@ impl TcpStream {
     }
 
     pub fn local_addr(&self) -> rustix::io::Result<SocketAddr> {
-        super::local_addr(&self.fd)
+        crate::net::local_addr(&self.fd)
     }
 
     pub fn peer_addr(&self) -> rustix::io::Result<SocketAddr> {
-        super::peer_addr(&self.fd)
+        crate::net::peer_addr(&self.fd)
     }
 
     pub fn into_split(self) -> rustix::io::Result<(ReadHalf, WriteHalf)> {
-        super::split(self.fd)
+        crate::net::split(self.fd)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use core::future::pending;
+    use core::{future::pending, net::SocketAddr};
 
-    use rustix::io::Errno;
-    use rustix::net::AddressFamily;
+    use rustix::{
+        fd::OwnedFd,
+        io::Errno,
+        net::{AddressFamily, Shutdown, SocketType},
+    };
 
-    use super::*;
-    use crate::test_utils::{
-        self, Log, TEST_CAPACITIES, drain_until_readable, is_writable, peer_read_exact, raw_accept,
-        run_until_events, test_loop,
+    use crate::{
+        net::{TcpListener, TcpStream},
+        test_utils::{
+            self, Log, TEST_CAPACITIES, drain_until_readable, is_writable, peer_read_exact,
+            raw_accept, run_until_events, test_loop,
+        },
     };
 
     const LOCALHOST: SocketAddr =

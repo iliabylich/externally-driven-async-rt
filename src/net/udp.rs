@@ -1,10 +1,8 @@
 use core::net::SocketAddr;
 
-use rustix::fd::OwnedFd;
-use rustix::net::SocketType;
+use rustix::{fd::OwnedFd, net::SocketType};
 
-use crate::context::Context;
-use crate::state::State;
+use crate::{context::Context, state::State};
 
 pub struct UdpSocket {
     fd: OwnedFd,
@@ -12,7 +10,7 @@ pub struct UdpSocket {
 
 impl UdpSocket {
     pub fn bind(addr: SocketAddr) -> rustix::io::Result<Self> {
-        let fd = super::bind(super::ip_family(&addr), SocketType::DGRAM, &addr)?;
+        let fd = crate::net::bind(crate::net::ip_family(&addr), SocketType::DGRAM, &addr)?;
         Ok(Self { fd })
     }
 
@@ -22,7 +20,7 @@ impl UdpSocket {
         buf: &[u8],
         addr: SocketAddr,
     ) -> rustix::io::Result<usize> {
-        super::send_to(ctx, &self.fd, buf, &addr).await
+        crate::net::send_to(ctx, &self.fd, buf, &addr).await
     }
 
     pub async fn recv_from<S: State>(
@@ -30,7 +28,7 @@ impl UdpSocket {
         ctx: &Context<S>,
         buf: &mut [u8],
     ) -> rustix::io::Result<(usize, SocketAddr)> {
-        super::recv_from(ctx, &self.fd, buf).await
+        crate::net::recv_from(ctx, &self.fd, buf).await
     }
 
     pub fn connect(&self, addr: SocketAddr) -> rustix::io::Result<()> {
@@ -42,7 +40,7 @@ impl UdpSocket {
         ctx: &Context<S>,
         buf: &[u8],
     ) -> rustix::io::Result<usize> {
-        super::send(ctx, &self.fd, buf).await
+        crate::net::send(ctx, &self.fd, buf).await
     }
 
     pub async fn recv<S: State>(
@@ -50,24 +48,31 @@ impl UdpSocket {
         ctx: &Context<S>,
         buf: &mut [u8],
     ) -> rustix::io::Result<usize> {
-        super::recv(ctx, &self.fd, buf).await
+        crate::net::recv(ctx, &self.fd, buf).await
     }
 
     pub fn local_addr(&self) -> rustix::io::Result<SocketAddr> {
-        super::local_addr(&self.fd)
+        crate::net::local_addr(&self.fd)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use core::future::pending;
-    use core::net::{IpAddr, Ipv4Addr};
+    use core::{
+        future::pending,
+        net::{IpAddr, Ipv4Addr, SocketAddr},
+    };
 
-    use rustix::net::{AddressFamily, RecvFlags, SendFlags};
+    use rustix::{
+        fd::OwnedFd,
+        net::{AddressFamily, RecvFlags, SendFlags, SocketType},
+    };
 
-    use super::*;
-    use crate::test_utils::{
-        Log, TEST_CAPACITIES, drain_until_readable, raw_socket, run_until_events, test_loop,
+    use crate::{
+        net::UdpSocket,
+        test_utils::{
+            Log, TEST_CAPACITIES, drain_until_readable, raw_socket, run_until_events, test_loop,
+        },
     };
 
     const LOCALHOST: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);

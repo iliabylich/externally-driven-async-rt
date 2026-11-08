@@ -5,21 +5,29 @@ mod unix;
 
 use core::net::SocketAddr;
 
-use rustix::fd::{AsFd, OwnedFd};
-use rustix::io::{Errno, FdFlags, fcntl_setfd, ioctl_fionbio};
-use rustix::net::addr::SocketAddrArg;
-use rustix::net::sockopt::{set_socket_nosigpipe, socket_error};
-use rustix::net::{AddressFamily, RecvFlags, SendFlags, SocketAddrAny, SocketAddrUnix, SocketType};
+use rustix::{
+    fd::{AsFd, OwnedFd},
+    io::{Errno, FdFlags, fcntl_setfd, ioctl_fionbio},
+    net::{
+        AddressFamily, RecvFlags, SendFlags, SocketAddrAny, SocketAddrUnix, SocketType,
+        addr::SocketAddrArg,
+        sockopt::{set_socket_nosigpipe, socket_error},
+    },
+};
 
-use crate::context::Context;
-use crate::io::{IoRegistration, io_loop};
-use crate::selectors::Direction;
-use crate::state::State;
+use crate::{
+    context::Context,
+    io::{IoRegistration, io_loop},
+    selectors::Direction,
+    state::State,
+};
 
-pub use halves::{ReadHalf, WriteHalf};
-pub use tcp::{TcpListener, TcpStream};
-pub use udp::UdpSocket;
-pub use unix::{UnixDatagram, UnixListener, UnixStream};
+pub use self::{
+    halves::{ReadHalf, WriteHalf},
+    tcp::{TcpListener, TcpStream},
+    udp::UdpSocket,
+    unix::{UnixDatagram, UnixListener, UnixStream},
+};
 
 const LISTEN_BACKLOG: i32 = 1024;
 

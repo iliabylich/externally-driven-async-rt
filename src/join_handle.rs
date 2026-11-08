@@ -1,9 +1,9 @@
-use core::future::Future;
-use core::pin::Pin;
-use core::task::Poll;
+use core::{future::Future, pin::Pin, task::Poll};
 
-use crate::storage::{Storage, TaskId};
-use crate::task::JoinStatus;
+use crate::{
+    storage::{Storage, TaskId},
+    task::JoinStatus,
+};
 
 pub struct JoinHandle<'ctx> {
     storage: &'ctx Storage,
@@ -31,8 +31,10 @@ impl Future for JoinHandle<'_> {
 mod tests {
     use core::future::pending;
 
-    use crate::Error;
-    use crate::test_utils::{Log, TEST_CAPACITIES, pair, readable, test_loop, wake_by_writing};
+    use crate::{
+        Error,
+        test_utils::{Log, TEST_CAPACITIES, pair, readable, test_loop, wake_by_writing},
+    };
 
     #[test]
     fn joining_a_running_task_waits_for_it() {

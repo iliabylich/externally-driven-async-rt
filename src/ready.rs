@@ -1,9 +1,6 @@
-use core::alloc::Layout;
-use core::cell::Cell;
-use core::ptr::{self, NonNull};
+use core::{alloc::Layout, cell::Cell, ptr::NonNull};
 
-use crate::storage::TaskId;
-use crate::thread_id::ThreadId;
+use crate::{storage::TaskId, thread_id::ThreadId};
 
 // A waker is a pointer to its task's link, so the link knows its queue and slot (both never
 // written after `init`).
@@ -20,7 +17,7 @@ pub(crate) struct Link {
 
 // FIFO of ready tasks threaded through one link per task slot: bounded by the task capacity,
 // a task is queued at most once, and push/pop are O(1). Only `Cell`s, so wakers can use it
-// through a shared reference at any time, independently of the `RefCell` around the storage.
+// through a shared reference at any time.
 // `repr(C)` so `layout` can compute the size and `init` can place it in raw memory.
 #[repr(C)]
 pub(crate) struct ReadyQueue {
@@ -50,7 +47,8 @@ impl ReadyQueue {
     /// `ptr` must be valid for writes of `Self::layout(len)` bytes, aligned to it, and stay valid
     /// (and otherwise unused) for as long as the returned queue is used.
     pub(crate) unsafe fn init(ptr: NonNull<u8>, len: usize) -> NonNull<Self> {
-        let queue = ptr::slice_from_raw_parts_mut(ptr.as_ptr().cast::<Link>(), len) as *mut Self;
+        let queue =
+            core::ptr::slice_from_raw_parts_mut(ptr.as_ptr().cast::<Link>(), len) as *mut Self;
         // SAFETY: the caller guarantees `ptr` is valid for `Self::layout(len)`, which (`repr(C)`)
         // covers every field; every link is written without reading the uninitialized memory.
         unsafe {
@@ -151,9 +149,12 @@ impl ReadyQueue {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::test_utils::{aligned_in, assert_yields, stack_memory};
-    use core::mem::MaybeUninit;
+    use crate::{
+        ready::ReadyQueue,
+        storage::TaskId,
+        test_utils::{aligned_in, assert_yields, stack_memory},
+    };
+    use core::{alloc::Layout, mem::MaybeUninit};
 
     // The queue needs no drop (it's all `Cell`s of `Copy` values).
     fn queue_in(memory: &mut [MaybeUninit<u8>], len: usize) -> &ReadyQueue {

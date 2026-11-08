@@ -1,7 +1,9 @@
-use core::future::Future;
-use core::pin::Pin;
-use core::ptr::{self, NonNull};
-use core::task::{Context, Poll};
+use core::{
+    future::Future,
+    pin::Pin,
+    ptr::NonNull,
+    task::{Context, Poll},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum JoinStatus {
@@ -55,15 +57,19 @@ impl Drop for OwnedTask {
     fn drop(&mut self) {
         // SAFETY: the future was written by `write`, its memory is still valid (guaranteed by
         // `write`'s caller), and `drop` runs at most once.
-        unsafe { ptr::drop_in_place(self.0.0.as_ptr()) };
+        unsafe { core::ptr::drop_in_place(self.0.0.as_ptr()) };
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use core::mem::MaybeUninit;
-    use core::task::Waker;
+    use core::{
+        mem::MaybeUninit,
+        ptr::NonNull,
+        task::{Context, Poll, Waker},
+    };
+
+    use crate::task::OwnedTask;
 
     struct DropFlag(*mut bool);
 

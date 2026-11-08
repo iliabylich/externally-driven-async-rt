@@ -1,11 +1,8 @@
-use core::marker::PhantomData;
-use core::time::Duration;
+use core::{marker::PhantomData, time::Duration};
 
-use crate::instant::Instant;
-use crate::join_handle::JoinHandle;
-use crate::sleep::Sleep;
-use crate::state::State;
-use crate::storage::Storage;
+use crate::{
+    instant::Instant, join_handle::JoinHandle, sleep::Sleep, state::State, storage::Storage,
+};
 
 pub struct Context<S: State> {
     storage: Storage,

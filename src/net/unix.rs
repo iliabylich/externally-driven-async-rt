@@ -1,9 +1,13 @@
-use rustix::fd::OwnedFd;
-use rustix::net::{AddressFamily, Shutdown, SocketAddrUnix, SocketType};
+use rustix::{
+    fd::OwnedFd,
+    net::{AddressFamily, Shutdown, SocketAddrUnix, SocketType},
+};
 
-use super::{ReadHalf, WriteHalf};
-use crate::context::Context;
-use crate::state::State;
+use crate::{
+    context::Context,
+    net::{ReadHalf, WriteHalf},
+    state::State,
+};
 
 pub struct UnixListener {
     fd: OwnedFd,
@@ -11,8 +15,8 @@ pub struct UnixListener {
 
 impl UnixListener {
     pub fn bind(addr: &SocketAddrUnix) -> rustix::io::Result<Self> {
-        let fd = super::bind(AddressFamily::UNIX, SocketType::STREAM, addr)?;
-        super::listen(&fd)?;
+        let fd = crate::net::bind(AddressFamily::UNIX, SocketType::STREAM, addr)?;
+        crate::net::listen(&fd)?;
         Ok(Self { fd })
     }
 
@@ -20,12 +24,12 @@ impl UnixListener {
         &mut self,
         ctx: &Context<S>,
     ) -> rustix::io::Result<(UnixStream, SocketAddrUnix)> {
-        let (fd, addr) = super::accept(ctx, &self.fd).await?;
+        let (fd, addr) = crate::net::accept(ctx, &self.fd).await?;
         Ok((UnixStream { fd }, addr))
     }
 
     pub fn local_addr(&self) -> rustix::io::Result<SocketAddrUnix> {
-        super::local_addr(&self.fd)
+        crate::net::local_addr(&self.fd)
     }
 }
 
@@ -38,7 +42,7 @@ impl UnixStream {
         ctx: &Context<S>,
         addr: &SocketAddrUnix,
     ) -> rustix::io::Result<Self> {
-        let fd = super::connect(ctx, AddressFamily::UNIX, addr).await?;
+        let fd = crate::net::connect(ctx, AddressFamily::UNIX, addr).await?;
         Ok(Self { fd })
     }
 
@@ -47,7 +51,7 @@ impl UnixStream {
         ctx: &Context<S>,
         buf: &mut [u8],
     ) -> rustix::io::Result<usize> {
-        super::read(ctx, &self.fd, buf).await
+        crate::net::read(ctx, &self.fd, buf).await
     }
 
     pub async fn write<S: State>(
@@ -55,7 +59,7 @@ impl UnixStream {
         ctx: &Context<S>,
         buf: &[u8],
     ) -> rustix::io::Result<usize> {
-        super::write(ctx, &self.fd, buf).await
+        crate::net::write(ctx, &self.fd, buf).await
     }
 
     pub fn shutdown(&self, how: Shutdown) -> rustix::io::Result<()> {
@@ -63,15 +67,15 @@ impl UnixStream {
     }
 
     pub fn local_addr(&self) -> rustix::io::Result<SocketAddrUnix> {
-        super::local_addr(&self.fd)
+        crate::net::local_addr(&self.fd)
     }
 
     pub fn peer_addr(&self) -> rustix::io::Result<SocketAddrUnix> {
-        super::peer_addr(&self.fd)
+        crate::net::peer_addr(&self.fd)
     }
 
     pub fn into_split(self) -> rustix::io::Result<(ReadHalf, WriteHalf)> {
-        super::split(self.fd)
+        crate::net::split(self.fd)
     }
 }
 
@@ -81,12 +85,12 @@ pub struct UnixDatagram {
 
 impl UnixDatagram {
     pub fn bind(addr: &SocketAddrUnix) -> rustix::io::Result<Self> {
-        let fd = super::bind(AddressFamily::UNIX, SocketType::DGRAM, addr)?;
+        let fd = crate::net::bind(AddressFamily::UNIX, SocketType::DGRAM, addr)?;
         Ok(Self { fd })
     }
 
     pub fn unbound() -> rustix::io::Result<Self> {
-        let fd = super::socket(AddressFamily::UNIX, SocketType::DGRAM)?;
+        let fd = crate::net::socket(AddressFamily::UNIX, SocketType::DGRAM)?;
         Ok(Self { fd })
     }
 
@@ -96,7 +100,7 @@ impl UnixDatagram {
         buf: &[u8],
         addr: &SocketAddrUnix,
     ) -> rustix::io::Result<usize> {
-        super::send_to(ctx, &self.fd, buf, addr).await
+        crate::net::send_to(ctx, &self.fd, buf, addr).await
     }
 
     pub async fn recv_from<S: State>(
@@ -104,7 +108,7 @@ impl UnixDatagram {
         ctx: &Context<S>,
         buf: &mut [u8],
     ) -> rustix::io::Result<(usize, SocketAddrUnix)> {
-        super::recv_from(ctx, &self.fd, buf).await
+        crate::net::recv_from(ctx, &self.fd, buf).await
     }
 
     pub fn connect(&self, addr: &SocketAddrUnix) -> rustix::io::Result<()> {
@@ -116,7 +120,7 @@ impl UnixDatagram {
         ctx: &Context<S>,
         buf: &[u8],
     ) -> rustix::io::Result<usize> {
-        super::send(ctx, &self.fd, buf).await
+        crate::net::send(ctx, &self.fd, buf).await
     }
 
     pub async fn recv<S: State>(
@@ -124,25 +128,29 @@ impl UnixDatagram {
         ctx: &Context<S>,
         buf: &mut [u8],
     ) -> rustix::io::Result<usize> {
-        super::recv(ctx, &self.fd, buf).await
+        crate::net::recv(ctx, &self.fd, buf).await
     }
 
     pub fn local_addr(&self) -> rustix::io::Result<SocketAddrUnix> {
-        super::local_addr(&self.fd)
+        crate::net::local_addr(&self.fd)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use core::ffi::{CStr, c_char};
-    use core::future::pending;
+    use core::{
+        ffi::{CStr, c_char},
+        future::pending,
+    };
 
-    use rustix::net::{AddressFamily, RecvFlags, SendFlags};
+    use rustix::net::{AddressFamily, RecvFlags, SendFlags, Shutdown, SocketAddrUnix, SocketType};
 
-    use super::*;
-    use crate::test_utils::{
-        Log, TEST_CAPACITIES, drain_until_readable, peer_read_exact, raw_accept, raw_socket,
-        run_until_events, test_loop,
+    use crate::{
+        net::{UnixDatagram, UnixListener, UnixStream},
+        test_utils::{
+            Log, TEST_CAPACITIES, drain_until_readable, peer_read_exact, raw_accept, raw_socket,
+            run_until_events, test_loop,
+        },
     };
 
     // SAFETY: match `pid_t getpid(void)` and `int unlink(const char *)` from libc (`pid_t` is

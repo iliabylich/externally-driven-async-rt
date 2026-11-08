@@ -2,10 +2,13 @@ use core::time::Duration;
 
 use rustix::fd::{AsRawFd, OwnedFd};
 
-use super::kqueue::Selector;
-use super::{Direction, EVENTS_PER_CALL, IoAction, IoChange, SelectorEvent, Token};
-use crate::instant::Instant;
-use crate::test_utils::{assert_yields, is_readable, pair};
+use crate::{
+    instant::Instant,
+    selectors::{
+        Direction, EVENTS_PER_CALL, IoAction, IoChange, SelectorEvent, Token, kqueue::Selector,
+    },
+    test_utils::{assert_yields, is_readable, pair},
+};
 
 fn change(token: u64, fd: &OwnedFd, direction: Direction, action: IoAction) -> IoChange {
     IoChange {

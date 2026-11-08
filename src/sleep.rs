@@ -1,9 +1,9 @@
-use core::future::Future;
-use core::pin::Pin;
-use core::task::Poll;
+use core::{future::Future, pin::Pin, task::Poll};
 
-use crate::instant::Instant;
-use crate::storage::{Storage, TimerIndex};
+use crate::{
+    instant::Instant,
+    storage::{Storage, TimerIndex},
+};
 
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 pub struct Sleep<'ctx> {
@@ -33,12 +33,7 @@ impl Future for Sleep<'_> {
             return Poll::Ready(());
         }
         match self.timer {
-            Some(timer) => self
-                .storage
-                .get_timer_mut(timer)
-                .expect("a pending sleep's timer is in storage")
-                .waker
-                .clone_from(cx.waker()),
+            Some(timer) => self.storage.set_timer_waker(timer, cx.waker()),
             None => self.timer = Some(self.storage.alloc_timer(self.deadline, cx.waker().clone())),
         }
         Poll::Pending
@@ -55,15 +50,15 @@ impl Drop for Sleep<'_> {
 
 #[cfg(test)]
 mod tests {
-    use core::future::pending;
-    use core::pin::pin;
-    use core::time::Duration;
+    use core::{future::pending, pin::pin, time::Duration};
 
-    use crate::Capacities;
-    use crate::instant::Instant;
-    use crate::test_utils::{
-        First, Log, TEST_CAPACITIES, Winner, has_timers, is_readable, pair, readable,
-        run_until_root_finishes, test_loop, wake_by_writing,
+    use crate::{
+        Capacities,
+        instant::Instant,
+        test_utils::{
+            First, Log, TEST_CAPACITIES, Winner, has_timers, is_readable, pair, readable,
+            run_until_root_finishes, test_loop, wake_by_writing,
+        },
     };
 
     #[test]

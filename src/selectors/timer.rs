@@ -3,13 +3,13 @@ use core::time::Duration;
 use crate::instant::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum TimerChange {
+pub(crate) enum TimerChange {
     Arm(Duration),
     Disarm,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) enum Timer {
+pub(crate) enum Timer {
     #[default]
     Disarmed,
     Armed(Instant),
@@ -18,20 +18,20 @@ pub(super) enum Timer {
 }
 
 impl Timer {
-    pub(super) fn arm_in_memory(&mut self, deadline: Instant) {
+    pub(crate) fn arm_in_memory(&mut self, deadline: Instant) {
         if *self != Self::Armed(deadline) {
             *self = Self::ArmPending(deadline);
         }
     }
 
-    pub(super) fn disarm_in_memory(&mut self) {
+    pub(crate) fn disarm_in_memory(&mut self) {
         *self = match self {
             Self::Disarmed => Self::Disarmed,
             Self::Armed(_) | Self::ArmPending(_) | Self::DisarmPending => Self::DisarmPending,
         };
     }
 
-    pub(super) fn flush(&mut self, now: Instant) -> Option<TimerChange> {
+    pub(crate) fn flush(&mut self, now: Instant) -> Option<TimerChange> {
         match *self {
             Self::ArmPending(deadline) => {
                 *self = Self::Armed(deadline);
@@ -47,7 +47,7 @@ impl Timer {
         }
     }
 
-    pub(super) fn fired(&mut self) {
+    pub(crate) fn fired(&mut self) {
         *self = match *self {
             Self::Armed(_) | Self::DisarmPending | Self::Disarmed => Self::Disarmed,
             Self::ArmPending(deadline) => Self::ArmPending(deadline),
@@ -62,7 +62,12 @@ fn round_up_to_millis(d: Duration) -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use core::time::Duration;
+
+    use crate::{
+        instant::Instant,
+        selectors::timer::{Timer, TimerChange},
+    };
 
     fn ms(millis: u64) -> Duration {
         Duration::from_millis(millis)

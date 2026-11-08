@@ -1,9 +1,13 @@
-use core::ptr::NonNull;
-use core::task::{RawWaker, RawWakerVTable, Waker};
+use core::{
+    ptr::NonNull,
+    task::{RawWaker, RawWakerVTable, Waker},
+};
 
-use crate::ready::{Link, ReadyQueue};
-use crate::storage::TaskId;
-use crate::thread_id::ThreadId;
+use crate::{
+    ready::{Link, ReadyQueue},
+    storage::TaskId,
+    thread_id::ThreadId,
+};
 
 // The data pointer is the task's `Link` in the ready queue: nothing is owned, so `wake` and
 // `wake_by_ref` are the same and dropping is a no-op.
@@ -39,9 +43,12 @@ unsafe fn drop_waker(_: *const ()) {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::test_utils::{TestStorage, assert_yields, stack_memory};
-    use core::mem::MaybeUninit;
+    use crate::{
+        storage::TaskId,
+        test_utils::{TestStorage, assert_yields, stack_memory},
+        waker::new_waker,
+    };
+    use core::{mem::MaybeUninit, task::Waker};
 
     fn storage_with_task(memory: &mut [MaybeUninit<u8>]) -> (TestStorage<'_>, TaskId) {
         let storage = TestStorage::new(memory, 2, 1, 1);

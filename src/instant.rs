@@ -1,10 +1,9 @@
-use core::ops::Add;
-use core::time::Duration;
+use core::{ops::Add, time::Duration};
 
 use crate::selectors::monotonic_nanos;
 
 // Nanoseconds on the selector's monotonic clock.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct Instant(u64);
 
 impl Instant {
@@ -29,8 +28,9 @@ impl Add<Duration> for Instant {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::test_utils::sleep;
+    use core::time::Duration;
+
+    use crate::{instant::Instant, test_utils::sleep};
 
     #[test]
     fn now_is_monotonic() {

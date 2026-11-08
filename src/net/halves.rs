@@ -1,15 +1,17 @@
-use rustix::fd::OwnedFd;
-use rustix::net::Shutdown;
+use rustix::{fd::OwnedFd, net::Shutdown};
 
-use crate::context::Context;
-use crate::state::State;
+use crate::{
+    context::Context,
+    net::{read, write},
+    state::State,
+};
 
 pub struct ReadHalf {
     fd: OwnedFd,
 }
 
 impl ReadHalf {
-    pub(super) fn new(fd: OwnedFd) -> Self {
+    pub(crate) fn new(fd: OwnedFd) -> Self {
         Self { fd }
     }
 
@@ -18,7 +20,7 @@ impl ReadHalf {
         ctx: &Context<S>,
         buf: &mut [u8],
     ) -> rustix::io::Result<usize> {
-        super::read(ctx, &self.fd, buf).await
+        read(ctx, &self.fd, buf).await
     }
 }
 
@@ -27,7 +29,7 @@ pub struct WriteHalf {
 }
 
 impl WriteHalf {
-    pub(super) fn new(fd: OwnedFd) -> Self {
+    pub(crate) fn new(fd: OwnedFd) -> Self {
         Self { fd }
     }
 
@@ -36,7 +38,7 @@ impl WriteHalf {
         ctx: &Context<S>,
         buf: &[u8],
     ) -> rustix::io::Result<usize> {
-        super::write(ctx, &self.fd, buf).await
+        write(ctx, &self.fd, buf).await
     }
 
     pub fn shutdown(&self) -> rustix::io::Result<()> {

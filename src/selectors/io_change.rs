@@ -1,6 +1,6 @@
 use rustix::fd::RawFd;
 
-use super::Token;
+use crate::selectors::Token;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Direction {

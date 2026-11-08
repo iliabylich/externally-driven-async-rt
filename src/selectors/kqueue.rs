@@ -1,14 +1,18 @@
-use core::cell::RefCell;
-use core::mem::MaybeUninit;
-use core::time::Duration;
+use core::{cell::RefCell, mem::MaybeUninit, time::Duration};
 
-use rustix::event::kqueue::{Event, EventFilter, EventFlags, kevent, kqueue};
-use rustix::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
-use rustix::io::{Errno, FdFlags, fcntl_setfd};
+use rustix::{
+    event::kqueue::{Event, EventFilter, EventFlags, kevent, kqueue},
+    fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd},
+    io::{Errno, FdFlags, fcntl_setfd},
+};
 
-use super::timer::{Timer, TimerChange};
-use super::{Direction, EVENTS_PER_CALL, IoAction, IoChange, SelectorEvent, Token};
-use crate::instant::Instant;
+use crate::{
+    instant::Instant,
+    selectors::{
+        Direction, EVENTS_PER_CALL, IoAction, IoChange, SelectorEvent, Token,
+        timer::{Timer, TimerChange},
+    },
+};
 
 const TIMER_IDENT: isize = 0;
 // Small in tests, so a handful of fds exercises submitting more than one changelist.
