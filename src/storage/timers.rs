@@ -90,3 +90,126 @@ impl Timers {
         waker
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use core::{cell::Cell, mem::MaybeUninit, task::Waker, time::Duration};
+
+    use crate::{
+        instant::Instant,
+        storage::Timers,
+        test_utils::{aligned_in, assert_yields, counting_waker, stack_memory, waker},
+    };
+
+    // No cleanup needed: the tests' wakers do nothing when dropped, or are released explicitly.
+    fn timers_in(memory: &mut [MaybeUninit<u8>], len: usize) -> Timers {
+        let ptr = aligned_in(memory, Timers::layout(len));
+        // SAFETY: `ptr` is aligned and valid for the layout, and every test keeps `memory` alive
+        // for as long as the returned timers.
+        unsafe { Timers::init(ptr, len) }
+    }
+
+    #[track_caller]
+    fn assert_expires(timers: &Timers, now: Instant, ids: impl IntoIterator<Item = usize>) {
+        let expired = core::iter::from_fn(|| timers.take_expired(now));
+        assert_yields(expired.map(|waker| waker.data().addr()), ids);
+    }
+
+    #[test]
+    fn alloc_and_release() {
+        let now = Instant::now();
+        let drops = Cell::new(0);
+        let mut memory = stack_memory();
+        let timers = timers_in(&mut memory, 2);
+        let index = timers.alloc(now, counting_waker(&drops));
+        assert_eq!(timers.next_deadline(), Some(now));
+
+        timers.release(index);
+        assert_eq!(drops.get(), 1);
+        assert_eq!(timers.next_deadline(), None);
+        timers.release(index);
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "more than 1 concurrent sleeps")]
+    fn capacity_is_bounded() {
+        let now = Instant::now();
+        let mut memory = stack_memory();
+        let timers = timers_in(&mut memory, 1);
+        timers.alloc(now, Waker::noop().clone());
+        timers.alloc(now, Waker::noop().clone());
+    }
+
+    #[test]
+    fn expire_wakes_due_timers_in_deadline_order() {
+        let earliest = Instant::now();
+        let now = earliest + Duration::from_millis(1);
+        let mut memory = stack_memory();
+        let timers = timers_in(&mut memory, 8);
+        timers.alloc(now + Duration::from_millis(5), waker(3));
+        timers.alloc(now, waker(2));
+        timers.alloc(now + Duration::from_millis(5), waker(4));
+        timers.alloc(now + Duration::from_millis(10), waker(5));
+        timers.alloc(earliest, waker(1));
+
+        assert_expires(&timers, now + Duration::from_millis(5), [1, 2, 3, 4]);
+        assert_expires(&timers, now + Duration::from_millis(9), []);
+        assert_eq!(
+            timers.next_deadline(),
+            Some(now + Duration::from_millis(10))
+        );
+    }
+
+    #[test]
+    fn equal_deadlines_expire_in_insertion_order_across_slot_reuse() {
+        let now = Instant::now();
+        let mut memory = stack_memory();
+        let timers = timers_in(&mut memory, 2);
+        let first = timers.alloc(now, Waker::noop().clone());
+        timers.alloc(now, waker(1));
+        timers.release(first);
+        timers.alloc(now, waker(2));
+        assert_expires(&timers, now, [1, 2]);
+    }
+
+    #[test]
+    fn released_timer_is_not_woken() {
+        let now = Instant::now();
+        let mut memory = stack_memory();
+        let timers = timers_in(&mut memory, 1);
+        let index = timers.alloc(now, waker(1));
+        timers.release(index);
+        assert_expires(&timers, now, []);
+        assert_eq!(timers.next_deadline(), None);
+    }
+
+    #[test]
+    fn replaced_waker_is_the_one_woken() {
+        let now = Instant::now();
+        let mut memory = stack_memory();
+        let timers = timers_in(&mut memory, 1);
+        let index = timers.alloc(now, waker(1));
+        timers.set_waker(index, &waker(2));
+        assert_expires(&timers, now, [2]);
+    }
+
+    #[test]
+    fn next_deadline_is_the_earliest_one() {
+        let now = Instant::now();
+        let mut memory = stack_memory();
+        let timers = timers_in(&mut memory, 4);
+        assert_eq!(timers.next_deadline(), None);
+        let later = now + Duration::from_millis(30);
+        let earlier = now + Duration::from_millis(10);
+        timers.alloc(later, Waker::noop().clone());
+        let earliest = timers.alloc(earlier, Waker::noop().clone());
+        timers.alloc(now + Duration::from_millis(20), Waker::noop().clone());
+        assert_eq!(timers.next_deadline(), Some(earlier));
+        timers.release(earliest);
+        assert_eq!(
+            timers.next_deadline(),
+            Some(now + Duration::from_millis(20))
+        );
+    }
+}

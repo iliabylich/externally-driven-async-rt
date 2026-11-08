@@ -1,11 +1,13 @@
 use core::{alloc::Layout, cell::Cell, future::Future, ptr::NonNull, task::Waker};
 
 use crate::{
-    capacities::Capacities,
     pool::{Index, ObjectPool},
     ready::ReadyQueue,
     root_region::RootRegion,
-    storage::store_waker,
+    storage::{
+        layout::{offset_by, sequence},
+        store_waker,
+    },
     task::{JoinStatus, OwnedTask, TaskPtr},
     task_slab::{TASK_ALIGN, TaskSlab},
     waker::new_waker,
@@ -56,24 +58,40 @@ pub(crate) struct Tasks {
 }
 
 impl Tasks {
+    pub(crate) fn layout(max_tasks: usize, max_task_size: usize, root_layout: Layout) -> Layout {
+        Self::plan(max_tasks, max_task_size, root_layout).0
+    }
+
+    // The layout and the offset of each part: the pool, the ready queue, the slab, the root region.
+    fn plan(max_tasks: usize, max_task_size: usize, root_layout: Layout) -> (Layout, [usize; 4]) {
+        sequence([
+            ObjectPool::<TaskEntry>::layout(max_tasks),
+            ReadyQueue::layout(max_tasks),
+            TaskSlab::layout(max_tasks, max_task_size),
+            root_layout,
+        ])
+    }
+
     /// # Safety
     ///
-    /// As `ObjectPool::init`, `ReadyQueue::init`, `TaskSlab::init` and `RootRegion::init` for
-    /// each pointer, with the memory valid (and otherwise unused) forever.
+    /// `ptr` must be valid for writes of `Self::layout(max_tasks, max_task_size, root_layout)`
+    /// bytes, aligned to it, and stay valid (and otherwise unused) forever.
     pub(crate) unsafe fn init(
-        pool_ptr: NonNull<u8>,
-        ready_ptr: NonNull<u8>,
-        slab_ptr: NonNull<u8>,
-        root_region_ptr: NonNull<u8>,
-        capacities: Capacities,
+        ptr: NonNull<u8>,
+        max_tasks: usize,
+        max_task_size: usize,
         root_layout: Layout,
     ) -> Self {
-        // SAFETY: guaranteed by the caller.
+        let (_, offsets) = Self::plan(max_tasks, max_task_size, root_layout);
+        let [pool_ptr, ready_ptr, slab_ptr, root_region_ptr] =
+            offsets.map(|offset| offset_by(ptr, offset));
+        // SAFETY: `plan` puts each part inside the layout the caller guarantees `ptr` is valid
+        // for, aligned for it and not overlapping the others.
         unsafe {
             Self {
-                pool: ObjectPool::init(pool_ptr, capacities.max_tasks),
-                ready: ReadyQueue::init(ready_ptr, capacities.max_tasks),
-                slab: TaskSlab::init(slab_ptr, capacities.max_tasks, capacities.max_task_size),
+                pool: ObjectPool::init(pool_ptr, max_tasks),
+                ready: ReadyQueue::init(ready_ptr, max_tasks),
+                slab: TaskSlab::init(slab_ptr, max_tasks, max_task_size),
                 root_region: RootRegion::init(root_region_ptr, root_layout.size()),
                 root: Cell::new(Root::Unset),
             }
@@ -240,5 +258,294 @@ impl Tasks {
     #[cfg(test)]
     pub(crate) fn count(&self) -> usize {
         self.pool.iter().count()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::{alloc::Layout, mem::MaybeUninit, task::Waker};
+
+    use crate::{
+        storage::{Root, TaskId, Tasks},
+        task::JoinStatus,
+        test_utils::{TEST_CAPACITIES, aligned_in, flagged_task, stack_memory},
+    };
+
+    // No cleanup needed: the tests' futures don't allocate, and those whose drop is checked are
+    // dropped explicitly.
+    fn tasks_in(memory: &mut [MaybeUninit<u8>], max_tasks: usize) -> Tasks {
+        let root_layout = Layout::new::<()>();
+        sized_tasks_in(
+            memory,
+            max_tasks,
+            TEST_CAPACITIES.max_task_size,
+            root_layout,
+        )
+    }
+
+    fn sized_tasks_in(
+        memory: &mut [MaybeUninit<u8>],
+        max_tasks: usize,
+        max_task_size: usize,
+        root_layout: Layout,
+    ) -> Tasks {
+        let ptr = aligned_in(memory, Tasks::layout(max_tasks, max_task_size, root_layout));
+        // SAFETY: `ptr` is aligned and valid for the layout, and every test keeps `memory` alive
+        // for as long as the returned tasks.
+        unsafe { Tasks::init(ptr, max_tasks, max_task_size, root_layout) }
+    }
+
+    #[test]
+    fn removing_a_task_drops_its_future_and_returns_its_join_waiter() {
+        let mut memory = stack_memory();
+        let tasks = tasks_in(&mut memory, 2);
+        static mut DROPPED: bool = false;
+        let id = tasks.insert(flagged_task(&raw mut DROPPED));
+        assert!(tasks.get(id).is_some());
+        assert_eq!(
+            tasks.set_join_waiter(id, Waker::noop()),
+            JoinStatus::Running
+        );
+        let join_waiter = tasks.remove(id).unwrap();
+        // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
+        assert!(unsafe { DROPPED });
+        assert!(join_waiter.is_some());
+        assert!(tasks.get(id).is_none());
+        assert_eq!(
+            tasks.set_join_waiter(id, Waker::noop()),
+            JoinStatus::Finished
+        );
+    }
+
+    #[test]
+    fn finished_task_id_never_matches_a_reused_slot() {
+        let mut memory = stack_memory();
+        let tasks = tasks_in(&mut memory, 1);
+        let first = tasks.insert(async {});
+        tasks.remove(first);
+        let second = tasks.insert(async {});
+        assert_ne!(first, second);
+        assert!(tasks.get(first).is_none());
+        assert_eq!(
+            tasks.set_join_waiter(first, Waker::noop()),
+            JoinStatus::Finished
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "more than 1 concurrent tasks")]
+    fn full_task_pool_panics() {
+        let mut memory = stack_memory();
+        let tasks = tasks_in(&mut memory, 1);
+        tasks.insert(async {});
+        tasks.insert(async {});
+    }
+
+    #[test]
+    fn drop_all_drops_every_future() {
+        let mut memory = stack_memory();
+        let tasks = tasks_in(&mut memory, 2);
+        static mut DROPPED: bool = false;
+        tasks.insert(flagged_task(&raw mut DROPPED));
+        tasks.drop_all();
+        // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
+        assert!(unsafe { DROPPED });
+        assert_eq!(tasks.count(), 0);
+    }
+
+    struct SpawnOnDrop {
+        // The test's `Tasks`, which outlive the task.
+        tasks: *const Tasks,
+        // Set once the task was inserted.
+        id: *mut Option<TaskId>,
+        spawned: *mut Option<TaskId>,
+    }
+
+    impl Drop for SpawnOnDrop {
+        fn drop(&mut self) {
+            // SAFETY: points to a `static mut` of the running test, which only that test's thread
+            // uses, and no reference to it exists.
+            let id = unsafe { *self.id }.unwrap();
+            // SAFETY: the test's `Tasks` outlive the task, and are only accessed through shared
+            // references.
+            let tasks = unsafe { &*self.tasks };
+            assert!(tasks.get(id).is_none());
+            assert_eq!(
+                tasks.set_join_waiter(id, Waker::noop()),
+                JoinStatus::Finished
+            );
+            let spawned = tasks.insert(async {});
+            // SAFETY: as above.
+            unsafe { *self.spawned = Some(spawned) };
+        }
+    }
+
+    #[test]
+    fn a_task_spawned_while_one_is_dropped_gets_another_slot() {
+        let mut memory = stack_memory();
+        let tasks = tasks_in(&mut memory, 2);
+        static mut ID: Option<TaskId> = None;
+        static mut SPAWNED: Option<TaskId> = None;
+        let guard = SpawnOnDrop {
+            tasks: &raw const tasks,
+            id: &raw mut ID,
+            spawned: &raw mut SPAWNED,
+        };
+        let dropping = tasks.insert(async move {
+            let _guard = guard;
+        });
+        // SAFETY: only this test's thread uses `ID`, and no reference to it exists.
+        unsafe { ID = Some(dropping) };
+        tasks.remove(dropping).unwrap();
+        // SAFETY: only this test's thread uses `SPAWNED`, and no reference to it exists.
+        let spawned = unsafe { SPAWNED }.unwrap();
+        assert_ne!(spawned.slot(), dropping.slot());
+        assert!(tasks.get(spawned).is_some());
+    }
+
+    #[test]
+    fn full_size_futures_in_neighbouring_slots_do_not_overlap() {
+        let mut memory = stack_memory();
+        let tasks = tasks_in(&mut memory, 2);
+        let ids = [1u8, 2].map(|byte| {
+            let data = [byte; TEST_CAPACITIES.max_task_size - 16];
+            tasks.insert(async move {
+                assert!(data.iter().all(|b| *b == byte));
+            })
+        });
+        let mut cx = core::task::Context::from_waker(Waker::noop());
+        for id in ids {
+            // SAFETY: the task is alive and not polled re-entrantly.
+            assert!(unsafe { tasks.get(id).unwrap().poll(&mut cx) }.is_ready());
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "a task future of 8193 bytes (align 1) doesn't fit max_task_size")]
+    fn a_too_big_future_panics() {
+        let mut memory = stack_memory();
+        let tasks = tasks_in(&mut memory, 1);
+        let data = [0u8; 8192];
+        tasks.insert(async move {
+            let _data = data;
+        });
+    }
+
+    struct FixedFuture<T>(T);
+
+    impl<T> Future for FixedFuture<T> {
+        type Output = ();
+
+        fn poll(
+            self: core::pin::Pin<&mut Self>,
+            _: &mut core::task::Context<'_>,
+        ) -> core::task::Poll<()> {
+            core::task::Poll::Ready(())
+        }
+    }
+
+    #[repr(align(16))]
+    struct Aligned16;
+
+    #[test]
+    fn max_task_size_is_rounded_up_to_whole_16_byte_blocks() {
+        let mut memory = stack_memory();
+        let tasks = sized_tasks_in(&mut memory, 2, 100, Layout::new::<()>());
+        let ids = [
+            tasks.insert(FixedFuture([1u8; 112])),
+            tasks.insert(FixedFuture((Aligned16, [2u8; 96]))),
+        ];
+        let mut cx = core::task::Context::from_waker(Waker::noop());
+        for id in ids {
+            // SAFETY: the task is alive and not polled re-entrantly.
+            assert!(unsafe { tasks.get(id).unwrap().poll(&mut cx) }.is_ready());
+        }
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "a task future of 113 bytes (align 1) doesn't fit max_task_size (112 bytes"
+    )]
+    fn a_future_bigger_than_the_rounded_up_block_panics() {
+        let mut memory = stack_memory();
+        let tasks = sized_tasks_in(&mut memory, 1, 100, Layout::new::<()>());
+        tasks.insert(FixedFuture([0u8; 113]));
+    }
+
+    #[test]
+    #[should_panic(expected = "(align 32) doesn't fit max_task_size")]
+    fn an_overaligned_future_panics() {
+        #[repr(align(32))]
+        struct Aligned;
+        let mut memory = stack_memory();
+        let tasks = tasks_in(&mut memory, 1);
+        let aligned = Aligned;
+        tasks.insert(async move {
+            let _aligned = aligned;
+        });
+    }
+
+    struct BigRoot {
+        data: [u8; 9000],
+        dropped: *mut bool,
+    }
+
+    impl Future for BigRoot {
+        type Output = ();
+
+        fn poll(
+            self: core::pin::Pin<&mut Self>,
+            _: &mut core::task::Context<'_>,
+        ) -> core::task::Poll<()> {
+            assert!(self.data.iter().all(|byte| *byte == 3));
+            core::task::Poll::Pending
+        }
+    }
+
+    impl Drop for BigRoot {
+        fn drop(&mut self) {
+            // SAFETY: points to a `static mut` of the running test, which only that test's thread
+            // uses, and no reference to it exists.
+            unsafe { *self.dropped = true };
+        }
+    }
+
+    #[test]
+    fn root_region_holds_a_root_bigger_than_a_slab_block() {
+        static mut DROPPED: bool = false;
+        let mut memory = stack_memory();
+        let tasks = sized_tasks_in(
+            &mut memory,
+            2,
+            TEST_CAPACITIES.max_task_size,
+            Layout::new::<BigRoot>(),
+        );
+        let root = BigRoot {
+            data: [3; 9000],
+            dropped: &raw mut DROPPED,
+        };
+        tasks.spawn_root(root);
+        let Root::Running(id) = tasks.root() else {
+            panic!("spawning the root makes it running");
+        };
+        let sibling = tasks.insert(async {});
+        assert_ne!(sibling.slot(), id.slot());
+        let mut cx = core::task::Context::from_waker(Waker::noop());
+        // SAFETY: the task is alive and not polled re-entrantly.
+        assert!(unsafe { tasks.get(id).unwrap().poll(&mut cx) }.is_pending());
+        // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
+        assert!(!unsafe { DROPPED });
+        tasks.drop_all();
+        // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
+        assert!(unsafe { DROPPED });
+    }
+
+    #[test]
+    #[should_panic(expected = "the root is already spawned")]
+    fn spawning_a_second_root_panics() {
+        let mut memory = stack_memory();
+        let tasks = tasks_in(&mut memory, 2);
+        tasks.spawn_root(core::future::pending::<()>());
+        tasks.spawn_root(core::future::pending::<()>());
     }
 }

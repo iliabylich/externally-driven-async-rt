@@ -1,6 +1,13 @@
 use core::{
-    alloc::Layout, future::Future, marker::PhantomData, mem::MaybeUninit, pin::Pin, ptr::NonNull,
-    task::Poll, time::Duration,
+    alloc::Layout,
+    cell::Cell,
+    future::Future,
+    marker::PhantomData,
+    mem::MaybeUninit,
+    pin::Pin,
+    ptr::NonNull,
+    task::{Poll, RawWaker, RawWakerVTable, Waker},
+    time::Duration,
 };
 
 use rustix::{
@@ -107,6 +114,50 @@ pub(crate) fn assert_yields<T: PartialEq + core::fmt::Debug>(
             (None, None) => return,
             (actual, expected) => assert_eq!(actual, expected, "item {i}"),
         }
+    }
+}
+
+// Does nothing; told apart by its data pointer, `id` (`Waker::data`).
+pub(crate) fn waker(id: usize) -> Waker {
+    static VTABLE: RawWakerVTable =
+        RawWakerVTable::new(|data| RawWaker::new(data, &VTABLE), |_| {}, |_| {}, |_| {});
+    // SAFETY: the vtable never touches the data pointer, and its functions do nothing.
+    unsafe { Waker::new(core::ptr::without_provenance(id), &VTABLE) }
+}
+
+// Does nothing but count its drops (clones included) in `drops`.
+pub(crate) fn counting_waker(drops: &Cell<u32>) -> Waker {
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(
+        |data| RawWaker::new(data, &VTABLE),
+        |_| {},
+        |_| {},
+        |data| {
+            // SAFETY: the data is the `Cell` from `counting_waker`, which every test keeps
+            // alive for as long as its wakers.
+            let drops = unsafe { &*data.cast::<Cell<u32>>() };
+            drops.set(drops.get() + 1);
+        },
+    );
+    // SAFETY: the vtable only reads the data as a `&Cell<u32>`, and `drops` outlives the
+    // waker (see above).
+    unsafe { Waker::new(core::ptr::from_ref(drops).cast(), &VTABLE) }
+}
+
+pub(crate) struct DropFlag(pub(crate) *mut bool);
+
+impl Drop for DropFlag {
+    fn drop(&mut self) {
+        // SAFETY: points to a `static mut` of the running test, which only that test's thread
+        // uses, and no reference to it exists.
+        unsafe { *self.0 = true };
+    }
+}
+
+// Sets `*dropped` once dropped.
+pub(crate) fn flagged_task(dropped: *mut bool) -> impl Future<Output = ()> {
+    let flag = DropFlag(dropped);
+    async move {
+        let _flag = flag;
     }
 }
 
@@ -296,21 +347,12 @@ impl<'m> TestStorage<'m> {
         max_timers_count: usize,
         max_io_count: usize,
     ) -> Self {
-        Self::with_capacities(
-            memory,
-            Capacities {
-                max_tasks: max_tasks_count,
-                max_task_size: TEST_CAPACITIES.max_task_size,
-                max_timers: max_timers_count,
-                max_io: max_io_count,
-            },
-        )
-    }
-
-    pub(crate) fn with_capacities(
-        memory: &'m mut [MaybeUninit<u8>],
-        capacities: Capacities,
-    ) -> Self {
+        let capacities = Capacities {
+            max_tasks: max_tasks_count,
+            max_task_size: TEST_CAPACITIES.max_task_size,
+            max_timers: max_timers_count,
+            max_io: max_io_count,
+        };
         let root_layout = Layout::new::<()>();
         // SAFETY: `memory` is borrowed for as long as the storage exists (it's destroyed on drop).
         let storage = unsafe {

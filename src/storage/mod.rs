@@ -71,9 +71,6 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
             timers_ptr,
             io_waiters_ptr,
             tasks_ptr,
-            ready_ptr,
-            task_slab_ptr,
-            root_region_ptr,
         } = StorageLayout::new::<S, Sel>(capacities, root_layout, memory);
         // SAFETY: `StorageLayout::new` put every part inside `memory` (it checked the size),
         // aligned for it and not overlapping the others; `memory` is valid and unused (guaranteed
@@ -89,10 +86,8 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
                 io_waiters: IoWaiters::init(io_waiters_ptr, capacities.max_io),
                 tasks: Tasks::init(
                     tasks_ptr,
-                    ready_ptr,
-                    task_slab_ptr,
-                    root_region_ptr,
-                    capacities,
+                    capacities.max_tasks,
+                    capacities.max_task_size,
                     root_layout,
                 ),
                 state: state_ptr.as_ref(),

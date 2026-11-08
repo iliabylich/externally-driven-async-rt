@@ -165,3 +165,110 @@ impl IoWaiters {
         self.pool.iter().count()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use core::{mem::MaybeUninit, task::Waker};
+
+    use crate::{
+        selectors::{Direction, IoAction, IoChange, Token},
+        storage::{IoIndex, IoWaiters},
+        test_utils::{aligned_in, assert_yields, stack_memory, waker},
+    };
+
+    // No cleanup needed: the tests' wakers do nothing when dropped.
+    fn io_waiters_in(memory: &mut [MaybeUninit<u8>], len: usize) -> IoWaiters {
+        let ptr = aligned_in(memory, IoWaiters::layout(len));
+        // SAFETY: `ptr` is aligned and valid for the layout, and every test keeps `memory` alive
+        // for as long as the returned registrations.
+        unsafe { IoWaiters::init(ptr, len) }
+    }
+
+    #[track_caller]
+    fn assert_pending_changes(
+        io_waiters: &IoWaiters,
+        expected: impl IntoIterator<Item = IoChange>,
+    ) {
+        assert_yields(io_waiters.pending_changes(), expected);
+    }
+
+    #[test]
+    fn register_wait_release() {
+        let mut memory = stack_memory();
+        let io_waiters = io_waiters_in(&mut memory, 1);
+        let index = io_waiters.register(3, Direction::Write);
+        assert!(!io_waiters.has_waker(index));
+        io_waiters.set_waker(index, Waker::noop());
+        assert!(io_waiters.has_waker(index));
+        assert_eq!(io_waiters.release(index), None);
+        assert!(!io_waiters.has_waker(index));
+        assert_eq!(io_waiters.count(), 0);
+        let reused = io_waiters.register(3, Direction::Read);
+        assert_ne!(reused, index);
+    }
+
+    #[test]
+    fn changes_follow_the_stored_waker() {
+        let mut memory = stack_memory();
+        let io_waiters = io_waiters_in(&mut memory, 2);
+        let reader = io_waiters.register(3, Direction::Read);
+        let writer = io_waiters.register(4, Direction::Write);
+        assert_pending_changes(&io_waiters, []);
+
+        let change = |action| IoChange {
+            token: Token(reader.to_bits()),
+            fd: 3,
+            direction: Direction::Read,
+            action,
+        };
+        io_waiters.set_waker(reader, Waker::noop());
+        assert_pending_changes(&io_waiters, [change(IoAction::Arm)]);
+        io_waiters.mark_flushed();
+        assert_pending_changes(&io_waiters, []);
+
+        io_waiters.remove_waker(reader);
+        assert_pending_changes(&io_waiters, [change(IoAction::Disarm)]);
+        assert_eq!(IoIndex::from_bits(reader.to_bits()), reader);
+        assert!(!io_waiters.has_waker(writer));
+        assert_eq!(io_waiters.count(), 2);
+    }
+
+    #[test]
+    fn releasing_an_armed_registration_returns_its_disarm() {
+        let mut memory = stack_memory();
+        let io_waiters = io_waiters_in(&mut memory, 1);
+        let index = io_waiters.register(3, Direction::Read);
+        io_waiters.set_waker(index, Waker::noop());
+        io_waiters.mark_flushed();
+        let disarm = IoChange {
+            token: Token(index.to_bits()),
+            fd: 3,
+            direction: Direction::Read,
+            action: IoAction::Disarm,
+        };
+        assert_eq!(io_waiters.release(index), Some(disarm));
+        assert_eq!(io_waiters.release(index), None);
+    }
+
+    #[test]
+    fn an_event_takes_the_waker_of_its_direction_only() {
+        let mut memory = stack_memory();
+        let io_waiters = io_waiters_in(&mut memory, 1);
+        let index = io_waiters.register(3, Direction::Read);
+        io_waiters.set_waker(index, &waker(1));
+        let token = Token(index.to_bits());
+        assert!(io_waiters.take_waker(token, Direction::Write).is_none());
+        let woken = io_waiters.take_waker(token, Direction::Read).unwrap();
+        assert_eq!(woken.data().addr(), 1);
+        assert!(!io_waiters.has_waker(index));
+    }
+
+    #[test]
+    #[should_panic(expected = "more than 1 concurrent IO operations")]
+    fn capacity_is_bounded() {
+        let mut memory = stack_memory();
+        let io_waiters = io_waiters_in(&mut memory, 1);
+        io_waiters.register(3, Direction::Read);
+        io_waiters.register(3, Direction::Write);
+    }
+}

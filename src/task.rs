@@ -69,17 +69,7 @@ mod tests {
         task::{Context, Poll, Waker},
     };
 
-    use crate::task::OwnedTask;
-
-    struct DropFlag(*mut bool);
-
-    impl Drop for DropFlag {
-        fn drop(&mut self) {
-            // SAFETY: points to a `static mut` of the running test, which only that test's thread
-            // uses, and no reference to it exists.
-            unsafe { *self.0 = true };
-        }
-    }
+    use crate::{task::OwnedTask, test_utils::flagged_task};
 
     fn owned<Fut>(memory: &mut MaybeUninit<Fut>, future: Fut) -> OwnedTask
     where
@@ -116,11 +106,8 @@ mod tests {
     #[test]
     fn dropping_drops_the_future_in_place() {
         static mut DROPPED: bool = false;
-        let flag = DropFlag(&raw mut DROPPED);
         let mut memory = MaybeUninit::uninit();
-        let task = owned(&mut memory, async move {
-            let _flag = flag;
-        });
+        let task = owned(&mut memory, flagged_task(&raw mut DROPPED));
         drop(task);
         // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
         assert!(unsafe { DROPPED });
