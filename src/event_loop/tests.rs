@@ -480,7 +480,7 @@ fn root_finishing_stops_the_run() {
 }
 
 struct SpawnRawOnDrop {
-    storage: Storage<Log>,
+    storage: &'static Storage<Log>,
     spawned_dropped: *mut bool,
 }
 

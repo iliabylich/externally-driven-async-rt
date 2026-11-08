@@ -29,7 +29,7 @@ impl core::fmt::Display for Error {
 impl core::error::Error for Error {}
 
 pub struct EventLoop<S: State> {
-    storage: Storage<S>,
+    storage: &'static Storage<S>,
 }
 
 impl<S: State> EventLoop<S> {
@@ -95,7 +95,7 @@ impl<S: State> EventLoop<S> {
     }
 
     #[cfg(test)]
-    pub(crate) fn storage(&self) -> Storage<S> {
+    pub(crate) fn storage(&self) -> &'static Storage<S> {
         self.storage
     }
 

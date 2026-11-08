@@ -42,15 +42,15 @@ fn counting_waker(drops: &Cell<u32>) -> Waker {
 }
 
 #[track_caller]
-fn assert_expires(storage: Storage<(), ()>, now: Instant, ids: impl IntoIterator<Item = usize>) {
+fn assert_expires(storage: &Storage<(), ()>, now: Instant, ids: impl IntoIterator<Item = usize>) {
     let expired = core::iter::from_fn(|| storage.take_expired_timer(now));
     assert_yields(expired.map(|waker| waker.data().addr()), ids);
 }
 
 #[track_caller]
-fn assert_pending_changes(storage: Storage<(), ()>, expected: impl IntoIterator<Item = IoChange>) {
+fn assert_pending_changes(storage: &Storage<(), ()>, expected: impl IntoIterator<Item = IoChange>) {
     let pending = storage
-        .io_waiters()
+        .io_waiters
         .iter()
         .filter_map(|(index, io)| io.pending_change(index));
     assert_yields(pending, expected);
@@ -68,11 +68,11 @@ fn alloc_get_release() {
     let backing = TestStorage::new(&mut memory, 1, 2, 1);
     let storage = backing.storage();
     let index = storage.alloc_timer(now, counting_waker(&drops));
-    assert_eq!(storage.timers().get(index).unwrap().deadline.get(), now);
+    assert_eq!(storage.timers.get(index).unwrap().deadline.get(), now);
 
     storage.release_timer(index);
     assert_eq!(drops.get(), 1);
-    assert!(storage.timers().get(index).is_none());
+    assert!(storage.timers.get(index).is_none());
     storage.release_timer(index);
     assert_eq!(drops.get(), 1);
 }
@@ -151,12 +151,12 @@ fn io_alloc_get_release() {
     let backing = TestStorage::new(&mut memory, 1, 1, 1);
     let storage = backing.storage();
     let index = storage.alloc_io(3, Direction::Write);
-    let io = storage.io_waiters().get(index).unwrap();
+    let io = storage.io_waiters.get(index).unwrap();
     assert_eq!(io.direction.get(), Direction::Write);
     storage.set_io_waker(index, &noop_waker());
     assert!(storage.has_io_waker(index));
-    storage.io_waiters().free(index);
-    assert!(storage.io_waiters().get(index).is_none());
+    storage.io_waiters.free(index);
+    assert!(storage.io_waiters.get(index).is_none());
     assert!(!storage.has_io_waker(index));
     let reused = storage.alloc_io(3, Direction::Read);
     assert_ne!(reused, index);
@@ -179,13 +179,13 @@ fn io_changes_follow_the_stored_waker() {
     };
     storage.set_io_waker(reader, &noop_waker());
     assert_pending_changes(storage, [change(IoAction::Arm)]);
-    storage.io_waiters().get(reader).unwrap().armed.set(true);
+    storage.io_waiters.get(reader).unwrap().armed.set(true);
     assert_pending_changes(storage, []);
 
     storage.remove_io_waker(reader);
     assert_pending_changes(storage, [change(IoAction::Disarm)]);
     assert_eq!(IoIndex::from_bits(reader.to_bits()), reader);
-    assert!(storage.io_waiters().get(writer).is_some());
+    assert!(storage.io_waiters.get(writer).is_some());
 }
 
 #[test]
@@ -333,7 +333,7 @@ fn drop_all_tasks_and_drop_free_the_futures() {
     storage.drop_all_tasks();
     // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
     assert!(unsafe { DROPPED });
-    assert!(storage.tasks().iter().next().is_none());
+    assert!(storage.tasks.iter().next().is_none());
 
     storage
         .insert_task(flagged_task(&raw mut LEFT_OVER))
@@ -345,7 +345,7 @@ fn drop_all_tasks_and_drop_free_the_futures() {
 }
 
 struct SpawnOnDrop {
-    storage: Storage<(), ()>,
+    storage: &'static Storage<(), ()>,
     // Set once the task was inserted.
     id: *mut Option<TaskId>,
     spawned: *mut Option<TaskId>,

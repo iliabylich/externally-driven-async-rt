@@ -285,7 +285,7 @@ pub(crate) fn aligned_in(memory: &mut [MaybeUninit<u8>], layout: Layout) -> NonN
 // A `Storage` without a selector (so no kqueue: usable under Miri) in borrowed memory, destroyed
 // on drop. It starts one byte into the memory, so the storage has to align its start.
 pub(crate) struct TestStorage<'m> {
-    storage: Storage<(), ()>,
+    storage: &'static Storage<(), ()>,
     _memory: PhantomData<&'m mut [MaybeUninit<u8>]>,
 }
 
@@ -328,7 +328,7 @@ impl<'m> TestStorage<'m> {
         }
     }
 
-    pub(crate) fn storage(&self) -> Storage<(), ()> {
+    pub(crate) fn storage(&self) -> &'static Storage<(), ()> {
         self.storage
     }
 

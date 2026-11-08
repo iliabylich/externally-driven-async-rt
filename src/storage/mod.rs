@@ -115,18 +115,19 @@ pub(crate) enum Root {
     Finished,
 }
 
-// At the start of the runtime's single allocation: the inline values, and a pointer to every
-// other part of the allocation (the state, each pool, the ready queue, the task slab, the root
-// region).
-struct StorageHeader<S: 'static, Sel> {
+// The runtime: one block of caller-provided memory that never moves, with this struct at its
+// start, holding the inline values and a reference to every other part of the allocation (the
+// state, each pool, the ready queue, the task slab, the root region). Reached through a
+// `&'static Storage` (in the `EventLoop` and every `Context`) and borrows of it. Objects inside
+// are addressed by typed indices.
+pub(crate) struct Storage<S: 'static, Sel = Selector> {
     // The allocation's base, with provenance over all of it: the only pointer `destroy` may drop
     // the pools through, since everything else reaches them through shared references.
     allocation: NonNull<u8>,
     selector: Sel,
     root: Cell<Root>,
     next_timer_seq: Cell<u64>,
-    // `'static`: they live as long as the storage, which nothing that can reach the header
-    // outlives. Only shared references: the pools and the queue consist of `Cell`s, the state,
+    // `'static`: they live as long as the storage, which nothing that can reach it outlives. Only shared references: the pools and the queue consist of `Cell`s, the state,
     // the slab and the root region are in `UnsafeCell`s.
     state: &'static UnsafeCell<S>,
     timers: &'static ObjectPool<Timer>,
@@ -144,7 +145,7 @@ enum TaskMemory {
 }
 
 // The layout of the runtime's single allocation and the offset of each part in it, laid out one
-// after another like the fields of a C struct, the header first.
+// after another like the fields of a C struct, the `Storage` struct first.
 struct StorageLayout {
     layout: Layout,
     state: usize,
@@ -159,7 +160,7 @@ struct StorageLayout {
 impl StorageLayout {
     fn new<S: 'static, Sel>(capacities: Capacities, root_layout: Layout) -> Self {
         let extend = |layout: Layout, next: Layout| layout.extend(next).expect("too large");
-        let layout = Layout::new::<StorageHeader<S, Sel>>();
+        let layout = Layout::new::<Storage<S, Sel>>();
         let (layout, state) = extend(layout, Layout::new::<S>());
         let (layout, timers) = extend(layout, ObjectPool::<Timer>::layout(capacities.max_timers));
         let (layout, io_waiters) =
@@ -187,18 +188,6 @@ impl StorageLayout {
     }
 }
 
-// The runtime: one block of caller-provided memory that never moves, reached through this pointer to its start (copied
-// into the `EventLoop` and every `Context`). Objects inside are addressed by typed indices.
-pub(crate) struct Storage<S: 'static, Sel: 'static = Selector>(&'static StorageHeader<S, Sel>);
-
-impl<S: 'static, Sel: 'static> Clone for Storage<S, Sel> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<S: 'static, Sel: 'static> Copy for Storage<S, Sel> {}
-
 impl<S: 'static, Sel: 'static> Storage<S, Sel> {
     /// The size of the memory `new` needs: the storage's layout plus slack for aligning its start,
     /// so memory of this size works wherever it starts.
@@ -220,7 +209,7 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
         state: S,
         capacities: Capacities,
         root_layout: Layout,
-    ) -> Self {
+    ) -> &'static Self {
         let parts = StorageLayout::new::<S, Sel>(capacities, root_layout);
         let start = memory
             .cast::<u8>()
@@ -238,13 +227,13 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
         // SAFETY: `base` is aligned to the layout and `memory` holds the whole layout from there
         // (checked above), valid and unused (guaranteed by the caller). `StorageLayout` placed
         // every part inside the layout, aligned for it and not overlapping the others; each is
-        // written exactly once, the header last. The parts live until `destroy`, which nothing
-        // holding the header outlives, and are only accessed through shared references (and by
-        // `destroy`), hence `'static`.
+        // written exactly once, the `Storage` struct last. The parts live until `destroy`, which
+        // nothing holding the storage outlives, and are only accessed through shared references
+        // (and by `destroy`), hence `'static`.
         unsafe {
             let state_ptr = base.byte_add(parts.state).cast::<UnsafeCell<S>>();
             state_ptr.write(UnsafeCell::new(state));
-            let header = StorageHeader {
+            let storage = Self {
                 allocation: base,
                 selector,
                 root: Cell::new(Root::Finished),
@@ -265,17 +254,14 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
                     .as_ref(),
                 state: state_ptr.as_ref(),
             };
-            base.cast::<StorageHeader<S, Sel>>().write(header);
-            Self(base.cast().as_ref())
+            let ptr = base.cast::<Self>();
+            ptr.write(storage);
+            ptr.as_ref()
         }
     }
 
-    fn header(&self) -> &StorageHeader<S, Sel> {
-        self.0
-    }
-
     pub(crate) fn state(&self) -> &UnsafeCell<S> {
-        self.header().state
+        self.state
     }
 
     /// Drops every task, the state, the pools and the selector. The memory isn't freed: it's the
@@ -284,29 +270,28 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
     /// # Safety
     ///
     /// Called exactly once, while no task is being polled; the storage isn't used afterwards.
-    pub(crate) unsafe fn destroy(self) {
+    pub(crate) unsafe fn destroy(&self) {
         // Task futures hold `Context`s pointing at the storage and may use them in their `Drop`
         // impls, so they go first, while everything is intact.
         self.drop_all_tasks();
-        let header = self.header();
         let pools = (
-            self.writable(header.timers),
-            self.writable(header.io_waiters),
-            self.writable(header.tasks),
+            self.writable(self.timers),
+            self.writable(self.io_waiters),
+            self.writable(self.tasks),
         );
         // SAFETY: no task (so no `Context` and no reference into the storage) is left; every part
         // was initialized in `new` and is dropped exactly once here (the ready queue holds only
-        // `Copy` data, the task slab and root region no live future). The header's references to
-        // the pools are never used again. The selector is the header's only field with drop glue;
-        // it's moved out (a read) rather than dropped in place, because dropping needs write
-        // access to the header, which callers may hold protected shared references to (a
-        // `Storage` passed by value, e.g. inside an `EventLoop` given to `mem::drop`).
+        // `Copy` data, the task slab and root region no live future). The references to the pools
+        // are never used again. The selector is this struct's only field with drop glue; it's
+        // moved out (a read) rather than dropped in place, because dropping needs write access to
+        // the struct, which callers hold protected shared references to (`&self`, and e.g. an
+        // `EventLoop` given to `mem::drop`).
         unsafe {
-            core::ptr::drop_in_place(header.state.get());
+            core::ptr::drop_in_place(self.state.get());
             core::ptr::drop_in_place(pools.0);
             core::ptr::drop_in_place(pools.1);
             core::ptr::drop_in_place(pools.2);
-            drop(core::ptr::read(&header.selector));
+            drop(core::ptr::read(&self.selector));
         }
     }
 
@@ -314,35 +299,23 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
     // mustn't be used to drop it.
     fn writable<T>(&self, pool: &ObjectPool<T>) -> *mut ObjectPool<T> {
         let addr = NonNull::from(pool).cast::<u8>().addr();
-        ObjectPool::raw(self.header().allocation.with_addr(addr), pool.capacity())
+        ObjectPool::raw(self.allocation.with_addr(addr), pool.capacity())
     }
 
     pub(crate) fn root(&self) -> Root {
-        self.header().root.get()
+        self.root.get()
     }
 
     pub(crate) fn set_root(&self, root: Root) {
-        self.header().root.set(root);
+        self.root.set(root);
     }
 
     pub(crate) fn ready(&self) -> &ReadyQueue {
-        self.header().ready
-    }
-
-    fn tasks(&self) -> &ObjectPool<TaskEntry> {
-        self.header().tasks
-    }
-
-    fn timers(&self) -> &ObjectPool<Timer> {
-        self.header().timers
-    }
-
-    fn io_waiters(&self) -> &ObjectPool<IoWaiter> {
-        self.header().io_waiters
+        self.ready
     }
 
     pub(crate) fn task_capacity(&self) -> usize {
-        self.tasks().capacity()
+        self.tasks.capacity()
     }
 
     /// On a full pool, the future is handed back. Panics if the future doesn't fit the task slab's
@@ -351,7 +324,7 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
     where
         Fut: Future<Output = ()> + 'static,
     {
-        let block_size = self.header().task_slab.block_size();
+        let block_size = self.task_slab.block_size();
         let needed = Layout::new::<Fut>();
         if needed.size() > block_size || needed.align() > TASK_ALIGN {
             drop(future);
@@ -376,7 +349,7 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
     where
         Fut: Future<Output = ()> + 'static,
     {
-        assert!(self.header().root_region.fits(Layout::new::<Fut>()));
+        assert!(self.root_region.fits(Layout::new::<Fut>()));
         // SAFETY: `Fut` fits the root region (asserted above), and the caller guarantees the
         // region is unused.
         let Ok(id) = (unsafe { self.insert(future, TaskMemory::Root) }) else {
@@ -396,13 +369,12 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
     where
         Fut: Future<Output = ()> + 'static,
     {
-        let header = self.header();
-        let Some((id, entry)) = self.tasks().alloc() else {
+        let Some((id, entry)) = self.tasks.alloc() else {
             return Err(future);
         };
         let memory = match memory {
-            TaskMemory::Slab => header.task_slab.block(id.slot()),
-            TaskMemory::Root => header.root_region.memory(),
+            TaskMemory::Slab => self.task_slab.block(id.slot()),
+            TaskMemory::Root => self.root_region.memory(),
         };
         // SAFETY: `Fut` fits `memory` (guaranteed by the caller). It's unused: a slab block
         // belongs to the slot, which was free, and a slot is only freed after its future was
@@ -416,7 +388,7 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
     }
 
     pub(crate) fn task(&self, id: TaskId) -> Option<TaskPtr> {
-        let entry = self.tasks().get(id)?;
+        let entry = self.tasks.get(id)?;
         let future = entry.future.take()?;
         let ptr = future.ptr();
         entry.future.set(Some(future));
@@ -426,17 +398,17 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
     /// Drops the task's future and frees its slot, returning its join waiter. The future is
     /// dropped while the slot is still reserved, since its `Drop` may use the storage.
     pub(crate) fn remove_task(&self, id: TaskId) -> Option<Option<Waker>> {
-        let entry = self.tasks().get(id)?;
+        let entry = self.tasks.get(id)?;
         let future = entry.future.take()?;
         let join_waiter = entry.join_waiter.take();
         self.ready().untrack(id);
         drop(future);
-        self.tasks().free(id);
+        self.tasks.free(id);
         Some(join_waiter)
     }
 
     pub(crate) fn set_join_waiter(&self, id: TaskId, waker: &Waker) -> JoinStatus {
-        match self.tasks().get(id) {
+        match self.tasks.get(id) {
             Some(entry) if is_some(&entry.future) => {
                 store_waker(&entry.join_waiter, waker);
                 JoinStatus::Running
@@ -446,11 +418,11 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
     }
 
     pub(crate) fn alloc_timer(&self, deadline: Instant, waker: Waker) -> TimerIndex {
-        let Some((index, timer)) = self.timers().alloc() else {
-            panic!("more than {} concurrent sleeps", self.timers().capacity());
+        let Some((index, timer)) = self.timers.alloc() else {
+            panic!("more than {} concurrent sleeps", self.timers.capacity());
         };
-        let seq = self.header().next_timer_seq.get();
-        self.header().next_timer_seq.set(seq + 1);
+        let seq = self.next_timer_seq.get();
+        self.next_timer_seq.set(seq + 1);
         timer.deadline.set(deadline);
         timer.seq.set(seq);
         timer.waker.set(Some(waker));
@@ -459,21 +431,21 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
 
     pub(crate) fn set_timer_waker(&self, index: TimerIndex, waker: &Waker) {
         let timer = self
-            .timers()
+            .timers
             .get(index)
             .expect("a pending sleep's timer is in storage");
         store_waker(&timer.waker, waker);
     }
 
     pub(crate) fn release_timer(&self, index: TimerIndex) {
-        if let Some(timer) = self.timers().get(index) {
+        if let Some(timer) = self.timers.get(index) {
             timer.waker.take();
-            self.timers().free(index);
+            self.timers.free(index);
         }
     }
 
     pub(crate) fn next_timer_deadline(&self) -> Option<Instant> {
-        self.timers()
+        self.timers
             .iter()
             .map(|(_, timer)| timer.deadline.get())
             .min()
@@ -481,20 +453,20 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
 
     pub(crate) fn take_expired_timer(&self, now: Instant) -> Option<Waker> {
         let (index, _) = self
-            .timers()
+            .timers
             .iter()
             .filter(|(_, timer)| timer.deadline.get() <= now)
             .min_by_key(|(_, timer)| (timer.deadline.get(), timer.seq.get()))?;
-        let waker = self.timers().get(index)?.waker.take();
-        self.timers().free(index);
+        let waker = self.timers.get(index)?.waker.take();
+        self.timers.free(index);
         waker
     }
 
     pub(crate) fn alloc_io(&self, fd: RawFd, direction: Direction) -> IoIndex {
-        let Some((index, io)) = self.io_waiters().alloc() else {
+        let Some((index, io)) = self.io_waiters.alloc() else {
             panic!(
                 "more than {} concurrent IO operations",
-                self.io_waiters().capacity()
+                self.io_waiters.capacity()
             );
         };
         io.fd.set(fd);
@@ -506,7 +478,7 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
 
     #[cfg(test)]
     pub(crate) fn io_count(&self) -> usize {
-        self.io_waiters().iter().count()
+        self.io_waiters.iter().count()
     }
 
     pub(crate) fn spawn<Fut>(&self, future: Fut) -> TaskId
@@ -531,24 +503,22 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
     }
 
     pub(crate) fn set_io_waker(&self, index: IoIndex, waker: &Waker) {
-        let io = self.io_waiters().get(index).expect("IO is not registered");
+        let io = self.io_waiters.get(index).expect("IO is not registered");
         store_waker(&io.waker, waker);
     }
 
     pub(crate) fn remove_io_waker(&self, index: IoIndex) {
-        if let Some(io) = self.io_waiters().get(index) {
+        if let Some(io) = self.io_waiters.get(index) {
             io.waker.take();
         }
     }
 
     pub(crate) fn has_io_waker(&self, index: IoIndex) -> bool {
-        self.io_waiters()
-            .get(index)
-            .is_some_and(IoWaiter::is_waiting)
+        self.io_waiters.get(index).is_some_and(IoWaiter::is_waiting)
     }
 
     fn take_io_waker(&self, token: Token, direction: Direction) -> Option<Waker> {
-        let io = self.io_waiters().get(IoIndex::from_bits(token.0))?;
+        let io = self.io_waiters.get(IoIndex::from_bits(token.0))?;
         if io.direction.get() != direction {
             return None;
         }
@@ -593,7 +563,7 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
 
     pub(crate) fn drop_all_tasks(&self) {
         // Dropping a task may spawn new ones, they are dropped in later iterations.
-        while let Some((id, _)) = self.tasks().iter().next() {
+        while let Some((id, _)) = self.tasks.iter().next() {
             self.remove_task(id);
         }
     }
@@ -601,12 +571,12 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
 
 impl<S: 'static> Storage<S, Selector> {
     pub(crate) fn selector(&self) -> &Selector {
-        &self.header().selector
+        &self.selector
     }
 
     /// Must be called while the fd is still open (see `Selector::apply_now`).
     pub(crate) fn deregister_io(&self, index: IoIndex) -> rustix::io::Result<()> {
-        let Some(io) = self.io_waiters().get(index) else {
+        let Some(io) = self.io_waiters.get(index) else {
             return Ok(());
         };
         io.waker.take();
@@ -617,7 +587,7 @@ impl<S: 'static> Storage<S, Selector> {
             direction: io.direction.get(),
             action: IoAction::Disarm,
         };
-        self.io_waiters().free(index);
+        self.io_waiters.free(index);
         if !armed {
             return Ok(());
         }
@@ -660,11 +630,11 @@ impl<S: 'static> Storage<S, Selector> {
             None => self.selector().disarm_timer(),
         }
         let changes = self
-            .io_waiters()
+            .io_waiters
             .iter()
             .filter_map(|(index, io)| io.pending_change(index));
         self.selector().flush(changes)?;
-        for (_, io) in self.io_waiters().iter() {
+        for (_, io) in self.io_waiters.iter() {
             io.armed.set(io.is_waiting());
         }
         Ok(())

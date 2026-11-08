@@ -5,7 +5,7 @@ use crate::{
 };
 
 pub struct Context<S: State> {
-    storage: Storage<S>,
+    storage: &'static Storage<S>,
 }
 
 impl<S: State> Context<S> {
@@ -13,7 +13,7 @@ impl<S: State> Context<S> {
     // which drops every task future before freeing its allocation, so `storage` is valid for as
     // long as the `Context` exists.
     pub(crate) fn storage(&self) -> &Storage<S> {
-        &self.storage
+        self.storage
     }
 
     pub fn dispatch(&self, event: S::Event) {
@@ -30,18 +30,18 @@ impl<S: State> Context<S> {
     {
         // SAFETY: the future is stored in this storage right away.
         let id = self.storage.spawn(unsafe { task_future(self.storage, f) });
-        JoinHandle::new(&self.storage, id)
+        JoinHandle::new(self.storage, id)
     }
 
     pub fn sleep(&self, duration: Duration) -> Sleep<'_, S> {
-        Sleep::new(&self.storage, Instant::now() + duration)
+        Sleep::new(self.storage, Instant::now() + duration)
     }
 }
 
 /// # Safety
 ///
 /// The returned future must be stored in `storage` (and so dropped before the storage is freed).
-pub(crate) async unsafe fn task_future<S, F>(storage: Storage<S>, f: F)
+pub(crate) async unsafe fn task_future<S, F>(storage: &'static Storage<S>, f: F)
 where
     S: State,
     F: AsyncFnOnce(&Context<S>) + 'static,
