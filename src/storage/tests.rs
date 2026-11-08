@@ -1,6 +1,7 @@
 use crate::{
+    WakeQueue,
     instant::Instant,
-    ready::{ReadyLinks, ReadyQueue},
+    ready::ReadyQueue,
     selectors::Direction,
     storage::Storage,
     test_utils::{counting_waker, flagged_task},
@@ -15,12 +16,10 @@ fn clearing_drops_live_wakers() {
     let mut place = MaybeUninit::uninit();
     let storage = TestStorage::init(
         &mut place,
-        ReadyQueue::new(ReadyLinks::init({
-            static mut PLACE: MaybeUninit<ReadyLinks<1>> = MaybeUninit::uninit();
-            // SAFETY: this block runs once, on this test's thread, so this is the only reference to
-            // `PLACE` ever created.
-            unsafe { (&raw mut PLACE).as_mut_unchecked() }
-        })),
+        ReadyQueue::new({
+            static QUEUE: WakeQueue<1> = WakeQueue::new();
+            &QUEUE
+        }),
         (),
         (),
     );
@@ -40,12 +39,10 @@ fn clearing_drops_live_tasks() {
     let mut place = MaybeUninit::uninit();
     let storage = TestStorage::init(
         &mut place,
-        ReadyQueue::new(ReadyLinks::init({
-            static mut PLACE: MaybeUninit<ReadyLinks<1>> = MaybeUninit::uninit();
-            // SAFETY: this block runs once, on this test's thread, so this is the only reference to
-            // `PLACE` ever created.
-            unsafe { (&raw mut PLACE).as_mut_unchecked() }
-        })),
+        ReadyQueue::new({
+            static QUEUE: WakeQueue<1> = WakeQueue::new();
+            &QUEUE
+        }),
         (),
         (),
     );

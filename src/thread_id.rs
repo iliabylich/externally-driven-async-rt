@@ -11,4 +11,8 @@ impl ThreadId {
     pub(crate) fn current() -> Self {
         Self(pthread_self())
     }
+
+    pub(crate) fn to_raw(self) -> usize {
+        self.0
+    }
 }

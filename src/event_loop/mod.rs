@@ -4,10 +4,11 @@ use rustix::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
 use crate::{
     context::Context,
-    ready::{ReadyLinks, ReadyQueue},
+    ready::ReadyQueue,
     selectors::Selector,
     state::State,
     storage::{Root, RootStatus, Storage},
+    wake_queue::WakeQueue,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,9 +67,6 @@ impl<
         MAX_IO_COUNT,
     >
 {
-    pub const QUEUE_REQUIRED_SIZE: usize =
-        size_of::<ReadyLinks<MAX_TASKS_COUNT>>() + align_of::<ReadyLinks<MAX_TASKS_COUNT>>() - 1;
-
     pub const REQUIRED_SIZE: usize = size_of::<
         Storage<
             'a,
@@ -91,35 +89,8 @@ impl<
         >,
     >() - 1;
 
-    pub fn new<const QUEUE: usize, const MEMORY: usize, F>(
-        queue: &'static mut [MaybeUninit<u8>; QUEUE],
-        memory: &'a mut [MaybeUninit<u8>; MEMORY],
-        state: S,
-        f: F,
-    ) -> Result<Self, Error>
-    where
-        F: AsyncFnOnce(
-                &Context<
-                    'a,
-                    S,
-                    MAX_TASKS_COUNT,
-                    MAX_TASK_SIZE,
-                    MAX_ROOT_TASK_SIZE,
-                    MAX_TIMERS_COUNT,
-                    MAX_IO_COUNT,
-                >,
-            ) + 'a,
-    {
-        // SAFETY: `queue` is never freed, so wakers pointing into it stay valid forever.
-        unsafe { Self::new_in(queue, memory, state, f) }
-    }
-
-    /// # Safety
-    ///
-    /// No `Waker` handed to a task may be woken after the loop is dropped (or forgotten), because
-    /// wakers point into `queue`.
-    pub unsafe fn new_in<const QUEUE: usize, const MEMORY: usize, F>(
-        queue: &'a mut [MaybeUninit<u8>; QUEUE],
+    pub fn new<const MEMORY: usize, F>(
+        queue: &'static WakeQueue<MAX_TASKS_COUNT>,
         memory: &'a mut [MaybeUninit<u8>; MEMORY],
         state: S,
         f: F,
@@ -138,12 +109,7 @@ impl<
             ) + 'a,
     {
         let selector = Selector::new().map_err(Error::Io)?;
-        // SAFETY: the queue is only reached through the loop, which `'a` bounds, and through its
-        // wakers, which the caller guarantees aren't woken once the loop is gone, so treating it
-        // as never freed is fine.
-        let ready =
-            ReadyQueue::new(unsafe { &*core::ptr::from_ref(ReadyLinks::init(place(queue))) });
-        let storage = Storage::init(place(memory), ready, selector, state);
+        let storage = Storage::init(place(memory), ReadyQueue::new(queue), selector, state);
         let event_loop = Self { storage };
         Context::spawn_root(storage, f);
         match storage.tasks.run_ready() {
@@ -278,7 +244,7 @@ fn place<T, const SIZE: usize>(memory: &mut [MaybeUninit<u8>; SIZE]) -> &mut May
     const {
         assert!(
             SIZE >= size_of::<T>() + align_of::<T>() - 1,
-            "an EventLoop memory is smaller than its REQUIRED_SIZE (or QUEUE_REQUIRED_SIZE)"
+            "an EventLoop memory is smaller than its REQUIRED_SIZE"
         );
     }
     let addr = memory.as_ptr().addr();

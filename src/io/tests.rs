@@ -17,8 +17,8 @@ use crate::{
     selectors::Direction,
     test_utils::{
         First, Log, TEST_MAX_ROOT_TASK_SIZE, TEST_MAX_TASK_SIZE, TEST_MAX_TASKS_COUNT,
-        TEST_MAX_TIMERS_COUNT, TEST_MEMORY, TEST_QUEUE_MEMORY, TestContext, TestLoop, Winner,
-        is_readable, run_until_root_finishes, socketpair,
+        TEST_MAX_TIMERS_COUNT, TEST_MEMORY, TestContext, TestLoop, TestQueue, Winner, is_readable,
+        run_until_root_finishes, socketpair,
     },
 };
 
@@ -80,11 +80,8 @@ fn read_waits_until_the_peer_writes() {
     let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let mut event_loop = TestLoop::new(
         {
-            static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
-                [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
-            // SAFETY: this block runs once, on this test's thread, so this is the only reference to
-            // `QUEUE` ever created.
-            unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            static QUEUE: TestQueue = TestQueue::new();
+            &QUEUE
         },
         &mut memory,
         Log::default(),
@@ -112,11 +109,8 @@ fn write_waits_on_a_full_buffer() {
     let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let mut event_loop = TestLoop::new(
         {
-            static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
-                [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
-            // SAFETY: this block runs once, on this test's thread, so this is the only reference to
-            // `QUEUE` ever created.
-            unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            static QUEUE: TestQueue = TestQueue::new();
+            &QUEUE
         },
         &mut memory,
         Log::default(),
@@ -141,11 +135,8 @@ fn ready_fd_arms_nothing() {
     let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let mut event_loop = TestLoop::new(
         {
-            static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
-                [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
-            // SAFETY: this block runs once, on this test's thread, so this is the only reference to
-            // `QUEUE` ever created.
-            unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            static QUEUE: TestQueue = TestQueue::new();
+            &QUEUE
         },
         &mut memory,
         Log::default(),
@@ -168,11 +159,8 @@ fn dropping_a_pending_read_deregisters() {
     let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let mut event_loop = TestLoop::new(
         {
-            static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
-                [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
-            // SAFETY: this block runs once, on this test's thread, so this is the only reference to
-            // `QUEUE` ever created.
-            unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            static QUEUE: TestQueue = TestQueue::new();
+            &QUEUE
         },
         &mut memory,
         Log::default(),
@@ -204,11 +192,8 @@ fn read_survives_a_spurious_wake() {
     let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let mut event_loop = TestLoop::new(
         {
-            static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
-                [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
-            // SAFETY: this block runs once, on this test's thread, so this is the only reference to
-            // `QUEUE` ever created.
-            unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            static QUEUE: TestQueue = TestQueue::new();
+            &QUEUE
         },
         &mut memory,
         Log::default(),
@@ -242,11 +227,8 @@ fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
     let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
     let mut event_loop = TestLoop::new(
         {
-            static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
-                [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
-            // SAFETY: this block runs once, on this test's thread, so this is the only reference to
-            // `QUEUE` ever created.
-            unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            static QUEUE: TestQueue = TestQueue::new();
+            &QUEUE
         },
         &mut memory,
         Log::default(),
@@ -290,11 +272,8 @@ fn exceeding_max_io_count_panics() {
         1,
     >::new(
         {
-            static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
-                [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
-            // SAFETY: this block runs once, on this test's thread, so this is the only reference to
-            // `QUEUE` ever created.
-            unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            static QUEUE: TestQueue = TestQueue::new();
+            &QUEUE
         },
         &mut memory,
         Log::default(),
@@ -318,11 +297,8 @@ fn sequential_io_reuses_the_slot() {
         1,
     >::new(
         {
-            static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
-                [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
-            // SAFETY: this block runs once, on this test's thread, so this is the only reference to
-            // `QUEUE` ever created.
-            unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+            static QUEUE: TestQueue = TestQueue::new();
+            &QUEUE
         },
         &mut memory,
         Log::default(),

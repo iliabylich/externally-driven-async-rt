@@ -1,7 +1,7 @@
 use core::{mem::MaybeUninit, net::SocketAddr, time::Duration};
 
 use externally_driven_async_rt::{
-    Context, Error, EventLoop, State,
+    Context, Error, EventLoop, State, WakeQueue,
     net::{TcpListener, TcpStream},
 };
 
@@ -36,7 +36,6 @@ type ServerContext<'a> = Context<
     MAX_IO_COUNT,
 >;
 
-const QSIZE: usize = ServerLoop::QUEUE_REQUIRED_SIZE;
 const MEMSIZE: usize = ServerLoop::REQUIRED_SIZE;
 
 #[derive(Default)]
@@ -182,12 +181,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = async move |ctx: &ServerContext<'_>| {
         accept_loop(ctx, addr).await;
     };
-    let mut queue = [MaybeUninit::uninit(); QSIZE];
+    static QUEUE: WakeQueue<MAX_TASKS_COUNT> = WakeQueue::new();
     let mut memory = [MaybeUninit::uninit(); MEMSIZE];
-    // SAFETY: the loop's wakers live only in its tasks and its state, which the loop drops, and
-    // nothing sends one to another thread or a global, so none is woken after the loop is gone.
-    let mut event_loop =
-        unsafe { ServerLoop::new_in(&mut queue, &mut memory, Server::default(), root) }?;
+    let mut event_loop = ServerLoop::new(&QUEUE, &mut memory, Server::default(), root)?;
     for line in core::mem::take(&mut event_loop.state_mut().log) {
         println!("{line}");
     }

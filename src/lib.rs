@@ -6,7 +6,6 @@ compile_error!(
 );
 
 mod context;
-mod current_thread_queue;
 mod event_loop;
 mod instant;
 mod io;
@@ -22,9 +21,11 @@ mod task;
 #[cfg(test)]
 mod test_utils;
 mod thread_id;
+mod wake_queue;
 
 pub use context::Context;
 pub use event_loop::{Error, EventLoop};
 pub use join_handle::JoinHandle;
 pub use sleep::Sleep;
 pub use state::State;
+pub use wake_queue::WakeQueue;

@@ -156,7 +156,7 @@ mod tests {
     use crate::{
         net::{TcpListener, TcpStream},
         test_utils::{
-            self, Log, TEST_MEMORY, TEST_QUEUE_MEMORY, TestLoop, drain_until_readable, is_writable,
+            self, Log, TEST_MEMORY, TestLoop, TestQueue, drain_until_readable, is_writable,
             peer_read_exact, raw_accept, run_until_events,
         },
     };
@@ -182,11 +182,8 @@ mod tests {
         let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
-                static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
-                    [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
-                // SAFETY: this block runs once, on this test's thread, so this is the only
-                // reference to `QUEUE` ever created.
-                unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+                static QUEUE: TestQueue = TestQueue::new();
+                &QUEUE
             },
             &mut memory,
             Log::default(),
@@ -226,11 +223,8 @@ mod tests {
         let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
-                static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
-                    [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
-                // SAFETY: this block runs once, on this test's thread, so this is the only
-                // reference to `QUEUE` ever created.
-                unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+                static QUEUE: TestQueue = TestQueue::new();
+                &QUEUE
             },
             &mut memory,
             Log::default(),
@@ -268,11 +262,8 @@ mod tests {
         let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
-                static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
-                    [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
-                // SAFETY: this block runs once, on this test's thread, so this is the only
-                // reference to `QUEUE` ever created.
-                unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+                static QUEUE: TestQueue = TestQueue::new();
+                &QUEUE
             },
             &mut memory,
             Log::default(),
@@ -299,11 +290,8 @@ mod tests {
         let mut memory = [MaybeUninit::uninit(); TEST_MEMORY];
         let mut event_loop = TestLoop::new(
             {
-                static mut QUEUE: [MaybeUninit<u8>; TEST_QUEUE_MEMORY] =
-                    [MaybeUninit::uninit(); TEST_QUEUE_MEMORY];
-                // SAFETY: this block runs once, on this test's thread, so this is the only
-                // reference to `QUEUE` ever created.
-                unsafe { (&raw mut QUEUE).as_mut_unchecked() }
+                static QUEUE: TestQueue = TestQueue::new();
+                &QUEUE
             },
             &mut memory,
             Log::default(),

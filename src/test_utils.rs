@@ -12,13 +12,17 @@ use rustix::{
     net::{AddressFamily, SocketFlags, SocketType},
 };
 
-use crate::{Context, Error, EventLoop, State, io::IoRegistration, selectors::Direction};
+use crate::{
+    Context, Error, EventLoop, State, WakeQueue, io::IoRegistration, selectors::Direction,
+};
 
 pub(crate) const TEST_MAX_TASKS_COUNT: usize = 16;
 pub(crate) const TEST_MAX_TASK_SIZE: usize = 1024;
 pub(crate) const TEST_MAX_ROOT_TASK_SIZE: usize = 2048;
 pub(crate) const TEST_MAX_TIMERS_COUNT: usize = 16;
 pub(crate) const TEST_MAX_IO_COUNT: usize = 8;
+
+pub(crate) type TestQueue = WakeQueue<TEST_MAX_TASKS_COUNT>;
 
 pub(crate) type TestLoop<'a, S> = EventLoop<
     'a,
@@ -364,5 +368,4 @@ pub(crate) fn run_until_events<
     }
 }
 
-pub(crate) const TEST_QUEUE_MEMORY: usize = 4 * 1024;
 pub(crate) const TEST_MEMORY: usize = 64 * 1024;
