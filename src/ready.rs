@@ -1,13 +1,19 @@
-use alloc::alloc::Layout;
+use core::alloc::Layout;
 use core::cell::Cell;
 use core::ptr::{self, NonNull};
 
 use crate::storage::TaskId;
+use crate::thread_id::ThreadId;
 
-struct Link {
-    // The generation of the task currently in this slot, so a wake of a finished task (whose
-    // slot may already hold a new one) is ignored.
-    generation: Cell<u32>,
+// A waker is a pointer to its task's link, so the link knows its queue and slot (both never
+// written after `init`).
+pub(crate) struct Link {
+    queue: NonNull<ReadyQueue>,
+    slot: u32,
+    // The generation of the task in this slot, `None` while the slot is empty. Wakers only know
+    // the slot: waking an empty slot is ignored, and a stale wake of a reused slot queues its new
+    // task (a spurious poll, which is harmless).
+    generation: Cell<Option<u32>>,
     queued: Cell<bool>,
     next: Cell<Option<u32>>,
 }
@@ -18,6 +24,9 @@ struct Link {
 // `repr(C)` so `layout` can compute the size and `init` can place it in raw memory.
 #[repr(C)]
 pub(crate) struct ReadyQueue {
+    // The thread that created the queue, the only one wakers may push from. Never written after
+    // `init`, so it can be read from any thread (see `thread_of`).
+    thread: ThreadId,
     head: Cell<Option<u32>>,
     tail: Cell<Option<u32>>,
     links: [Link],
@@ -25,14 +34,16 @@ pub(crate) struct ReadyQueue {
 
 impl ReadyQueue {
     pub(crate) fn layout(len: usize) -> Layout {
+        let thread = Layout::new::<ThreadId>();
         let end = Layout::new::<Cell<Option<u32>>>();
         let links = Layout::array::<Link>(len).expect("ready queue is too large");
-        let (layout, _) = end.extend(end).expect("ready queue is too large");
+        let (layout, _) = thread.extend(end).expect("ready queue is too large");
+        let (layout, _) = layout.extend(end).expect("ready queue is too large");
         let (layout, _) = layout.extend(links).expect("ready queue is too large");
         layout.pad_to_align()
     }
 
-    /// Writes an empty queue with `len` links at `ptr`.
+    /// Writes an empty queue with `len` links at `ptr`, owned by the current thread.
     ///
     /// # Safety
     ///
@@ -43,12 +54,15 @@ impl ReadyQueue {
         // SAFETY: the caller guarantees `ptr` is valid for `Self::layout(len)`, which (`repr(C)`)
         // covers every field; every link is written without reading the uninitialized memory.
         unsafe {
+            (&raw mut (*queue).thread).write(ThreadId::current());
             (&raw mut (*queue).head).write(Cell::new(None));
             (&raw mut (*queue).tail).write(Cell::new(None));
             let links = (&raw mut (*queue).links).cast::<Link>();
             for slot in 0..len {
                 links.add(slot).write(Link {
-                    generation: Cell::new(0),
+                    queue: NonNull::new_unchecked(queue),
+                    slot: slot as u32,
+                    generation: Cell::new(None),
                     queued: Cell::new(false),
                     next: Cell::new(None),
                 });
@@ -57,45 +71,77 @@ impl ReadyQueue {
         }
     }
 
+    pub(crate) fn link(&self, slot: u32) -> NonNull<Link> {
+        NonNull::from(&self.links[slot as usize])
+    }
+
+    /// The thread of `link`'s queue. Unlike the `&self` methods, this may be called from any
+    /// thread.
+    ///
+    /// # Safety
+    ///
+    /// `link` must come from `Self::link` of a queue that is still alive.
+    pub(crate) unsafe fn thread_of(link: NonNull<Link>) -> ThreadId {
+        // SAFETY: the caller guarantees the queue is alive. Only `queue` and `thread` are read,
+        // through raw pointers (no reference to the `Cell`s that the owning thread may be
+        // mutating), and neither is written after `init`, so this doesn't race.
+        unsafe { (*(*link.as_ptr()).queue.as_ptr()).thread }
+    }
+
+    /// # Safety
+    ///
+    /// `link` must come from `Self::link` of a queue that is still alive, and this must run on
+    /// the queue's thread (see `thread_of`).
+    pub(crate) unsafe fn push_link(link: NonNull<Link>) {
+        // SAFETY: the caller guarantees the queue is alive and that this runs on its thread, so
+        // nothing accesses it concurrently.
+        let link = unsafe { link.as_ref() };
+        // SAFETY: as above, `queue` points to the live queue that contains `link`.
+        unsafe { link.queue.as_ref() }.push(link.slot);
+    }
+
     pub(crate) fn track(&self, id: TaskId) {
         self.links[id.slot() as usize]
             .generation
-            .set(id.generation());
+            .set(Some(id.generation()));
     }
 
     pub(crate) fn untrack(&self, id: TaskId) {
         let link = &self.links[id.slot() as usize];
-        if link.generation.get() == id.generation() {
-            link.generation.set(id.generation().wrapping_add(1));
+        if link.generation.get() == Some(id.generation()) {
+            link.generation.set(None);
         }
     }
 
-    pub(crate) fn push(&self, id: TaskId) {
-        let Some(link) = self.links.get(id.slot() as usize) else {
-            return;
-        };
-        if link.generation.get() != id.generation() || link.queued.get() {
+    pub(crate) fn push(&self, slot: u32) {
+        let link = &self.links[slot as usize];
+        if link.generation.get().is_none() || link.queued.get() {
             return;
         }
         link.queued.set(true);
         link.next.set(None);
         match self.tail.get() {
-            Some(tail) => self.links[tail as usize].next.set(Some(id.slot())),
-            None => self.head.set(Some(id.slot())),
+            Some(tail) => self.links[tail as usize].next.set(Some(slot)),
+            None => self.head.set(Some(slot)),
         }
-        self.tail.set(Some(id.slot()));
+        self.tail.set(Some(slot));
     }
 
     pub(crate) fn pop(&self) -> Option<TaskId> {
-        let slot = self.head.get()?;
-        let link = &self.links[slot as usize];
-        self.head.set(link.next.get());
-        if self.head.get().is_none() {
-            self.tail.set(None);
+        loop {
+            let slot = self.head.get()?;
+            let link = &self.links[slot as usize];
+            self.head.set(link.next.get());
+            if self.head.get().is_none() {
+                self.tail.set(None);
+            }
+            link.queued.set(false);
+            link.next.set(None);
+            // A task that finished while queued leaves its slot queued but empty.
+            if let Some(generation) = link.generation.get() {
+                return Some(TaskId::from_parts(slot, generation));
+            }
         }
-        link.queued.set(false);
-        link.next.set(None);
-        Some(TaskId::from_parts(slot, link.generation.get()))
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -106,14 +152,15 @@ impl ReadyQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::{aligned_in, assert_yields, stack_memory};
+    use core::mem::MaybeUninit;
 
-    fn boxed(len: usize) -> Box<ReadyQueue> {
-        let layout = ReadyQueue::layout(len);
-        // SAFETY: `layout` isn't zero-sized (it always holds `head` and `tail`).
-        let ptr = NonNull::new(unsafe { alloc::alloc::alloc(layout) }).unwrap();
-        // SAFETY: `ptr` is a fresh allocation of `layout`. `Box` frees it with the layout of the
-        // value, which equals `layout` (checked by Miri).
-        unsafe { Box::from_raw(ReadyQueue::init(ptr, len).as_ptr()) }
+    // The queue needs no drop (it's all `Cell`s of `Copy` values).
+    fn queue_in(memory: &mut [MaybeUninit<u8>], len: usize) -> &ReadyQueue {
+        let ptr = aligned_in(memory, ReadyQueue::layout(len));
+        // SAFETY: `ptr` is aligned and valid for the layout, and `memory` stays borrowed for as
+        // long as the returned queue.
+        unsafe { ReadyQueue::init(ptr, len).as_ref() }
     }
 
     fn tracked(queue: &ReadyQueue, slot: u32, generation: u32) -> TaskId {
@@ -122,75 +169,101 @@ mod tests {
         id
     }
 
-    fn drain(queue: &ReadyQueue) -> Vec<TaskId> {
-        core::iter::from_fn(|| queue.pop()).collect()
+    fn drain(queue: &ReadyQueue) -> impl Iterator<Item = TaskId> + '_ {
+        core::iter::from_fn(|| queue.pop())
     }
 
     #[test]
     fn layout_matches_the_layout_of_the_value() {
-        let queue = boxed(5);
-        assert_eq!(Layout::for_value(&*queue), ReadyQueue::layout(5));
+        let mut memory = stack_memory();
+        let queue = queue_in(&mut memory, 5);
+        assert_eq!(Layout::for_value(queue), ReadyQueue::layout(5));
     }
 
     #[test]
     fn pops_in_push_order() {
-        let queue = boxed(4);
-        let ids: Vec<_> = [2, 0, 3].map(|slot| tracked(&queue, slot, 0)).into();
-        for id in &ids {
-            queue.push(*id);
+        let mut memory = stack_memory();
+        let queue = queue_in(&mut memory, 4);
+        let ids = [2, 0, 3].map(|slot| tracked(queue, slot, 0));
+        for id in ids {
+            queue.push(id.slot());
         }
         assert!(!queue.is_empty());
-        assert_eq!(drain(&queue), ids);
+        assert_yields(drain(queue), ids);
         assert!(queue.is_empty());
     }
 
     #[test]
     fn a_queued_task_is_pushed_once() {
-        let queue = boxed(2);
-        let a = tracked(&queue, 0, 0);
-        let b = tracked(&queue, 1, 0);
-        queue.push(a);
-        queue.push(b);
-        queue.push(a);
-        assert_eq!(drain(&queue), vec![a, b]);
-        queue.push(a);
-        assert_eq!(drain(&queue), vec![a]);
+        let mut memory = stack_memory();
+        let queue = queue_in(&mut memory, 2);
+        let a = tracked(queue, 0, 0);
+        let b = tracked(queue, 1, 0);
+        queue.push(a.slot());
+        queue.push(b.slot());
+        queue.push(a.slot());
+        assert_yields(drain(queue), [a, b]);
+        queue.push(a.slot());
+        assert_yields(drain(queue), [a]);
     }
 
     #[test]
     fn re_push_during_draining_goes_to_the_back() {
-        let queue = boxed(2);
-        let a = tracked(&queue, 0, 0);
-        let b = tracked(&queue, 1, 0);
-        queue.push(a);
-        queue.push(b);
+        let mut memory = stack_memory();
+        let queue = queue_in(&mut memory, 2);
+        let a = tracked(queue, 0, 0);
+        let b = tracked(queue, 1, 0);
+        queue.push(a.slot());
+        queue.push(b.slot());
         assert_eq!(queue.pop(), Some(a));
-        queue.push(a);
-        assert_eq!(drain(&queue), vec![b, a]);
+        queue.push(a.slot());
+        assert_yields(drain(queue), [b, a]);
     }
 
     #[test]
-    fn wakes_of_finished_tasks_are_ignored() {
-        let queue = boxed(1);
-        let old = tracked(&queue, 0, 0);
+    fn pushing_an_empty_slot_is_ignored() {
+        let mut memory = stack_memory();
+        let queue = queue_in(&mut memory, 1);
+        queue.push(0);
+        assert!(queue.is_empty());
+        let old = tracked(queue, 0, 0);
         queue.untrack(old);
-        queue.push(old);
+        queue.push(0);
         assert!(queue.is_empty());
+    }
 
-        let new = tracked(&queue, 0, 1);
-        queue.push(old);
+    #[test]
+    fn a_reused_slot_pops_its_new_task() {
+        let mut memory = stack_memory();
+        let queue = queue_in(&mut memory, 1);
+        let old = tracked(queue, 0, 0);
+        queue.untrack(old);
+        let new = tracked(queue, 0, 1);
+        queue.push(old.slot());
+        assert_yields(drain(queue), [new]);
+    }
+
+    #[test]
+    fn a_task_finished_while_queued_is_skipped() {
+        let mut memory = stack_memory();
+        let queue = queue_in(&mut memory, 2);
+        let a = tracked(queue, 0, 0);
+        let b = tracked(queue, 1, 0);
+        queue.push(a.slot());
+        queue.push(b.slot());
+        queue.untrack(a);
+        assert_yields(drain(queue), [b]);
         assert!(queue.is_empty());
-        queue.push(new);
-        assert_eq!(drain(&queue), vec![new]);
     }
 
     #[test]
     fn untracking_a_newer_task_is_ignored() {
-        let queue = boxed(1);
+        let mut memory = stack_memory();
+        let queue = queue_in(&mut memory, 1);
         let old = TaskId::from_parts(0, 0);
-        let new = tracked(&queue, 0, 1);
+        let new = tracked(queue, 0, 1);
         queue.untrack(old);
-        queue.push(new);
-        assert_eq!(drain(&queue), vec![new]);
+        queue.push(new.slot());
+        assert_yields(drain(queue), [new]);
     }
 }

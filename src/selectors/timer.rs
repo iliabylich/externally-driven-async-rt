@@ -1,5 +1,6 @@
 use core::time::Duration;
-use std::time::Instant;
+
+use crate::instant::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TimerChange {

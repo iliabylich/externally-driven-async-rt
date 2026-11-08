@@ -1,8 +1,12 @@
+use core::alloc::Layout;
 use core::fmt;
 use core::marker::PhantomData;
+use core::mem::MaybeUninit;
+use core::ptr::NonNull;
 
 use rustix::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
+use crate::capacities::Capacities;
 use crate::context::{Context, task_future};
 use crate::selectors::Selector;
 use crate::state::State;
@@ -23,14 +27,8 @@ impl fmt::Display for Error {
     }
 }
 
-impl core::error::Error for Error {
-    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
-        match self {
-            Self::Io(errno) => Some(errno),
-            Self::RootFinished => None,
-        }
-    }
-}
+// No `source()`: without its `std` feature, rustix's `Errno` doesn't implement `Error`.
+impl core::error::Error for Error {}
 
 pub struct EventLoop<S: State> {
     storage: Storage,
@@ -38,31 +36,39 @@ pub struct EventLoop<S: State> {
 }
 
 impl<S: State> EventLoop<S> {
+    pub fn required_size<F>(capacities: Capacities, _root: &F) -> usize
+    where
+        F: AsyncFnOnce(&Context<S>) + 'static,
+    {
+        Storage::<Selector>::required_size::<S>(capacities, return_layout(task_future::<S, F>))
+    }
+
     pub fn new<F>(
+        memory: &'static mut [MaybeUninit<u8>],
         state: S,
-        max_tasks_count: usize,
-        max_timers_count: usize,
-        max_io_count: usize,
+        capacities: Capacities,
         f: F,
     ) -> Result<Self, Error>
     where
         F: AsyncFnOnce(&Context<S>) + 'static,
     {
         let selector = Selector::new().map_err(Error::Io)?;
-        let storage = Storage::new(
-            selector,
-            state,
-            max_tasks_count,
-            max_timers_count,
-            max_io_count,
-        );
+        // SAFETY: `memory` is borrowed exclusively forever, so nothing else ever uses it.
+        let storage = unsafe {
+            Storage::new(
+                NonNull::from(memory),
+                selector,
+                state,
+                capacities,
+                return_layout(task_future::<S, F>),
+            )
+        };
         let event_loop = Self {
             storage,
             _state: PhantomData,
         };
-        // SAFETY: the future is stored in this storage right away.
-        let root = storage.spawn(unsafe { task_future::<S, F>(storage, f) });
-        storage.set_root(Root::Running(root));
+        // SAFETY: the future is stored in this storage right away, as its only root.
+        let root = unsafe { storage.spawn_root(task_future::<S, F>(storage, f)) };
         match storage.run_ready_tasks(root) {
             RootStatus::Running => {}
             RootStatus::Finished => return Err(Error::RootFinished),
@@ -111,6 +117,12 @@ impl<S: State> EventLoop<S> {
             RootStatus::Finished => Err(Error::RootFinished),
         }
     }
+}
+
+// The root future's type can't be named, and its layout is needed to allocate the storage before
+// the future can be created (it captures the storage).
+fn return_layout<A, B, R>(_: unsafe fn(A, B) -> R) -> Layout {
+    Layout::new::<R>()
 }
 
 impl<S: State> Drop for EventLoop<S> {

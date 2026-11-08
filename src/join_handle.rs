@@ -32,102 +32,75 @@ mod tests {
     use core::future::pending;
 
     use crate::Error;
-    use crate::EventLoop;
-    use crate::test_utils::{
-        Log, TEST_MAX_IO, TEST_MAX_TASKS, TEST_MAX_TIMERS, pair, readable, wake_by_writing,
-    };
+    use crate::test_utils::{Log, TEST_CAPACITIES, pair, readable, test_loop, wake_by_writing};
 
     #[test]
     fn joining_a_running_task_waits_for_it() {
         let (a, b) = pair();
-        let mut event_loop = EventLoop::new(
-            Log::default(),
-            TEST_MAX_TASKS,
-            TEST_MAX_TIMERS,
-            TEST_MAX_IO,
-            async move |ctx| {
-                ctx.spawn(async move |ctx| {
-                    readable(ctx, &a).await;
-                    ctx.dispatch(1);
-                })
-                .await;
-                ctx.dispatch(2);
-            },
-        )
+        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+            ctx.spawn(async move |ctx| {
+                readable(ctx, &a).await;
+                ctx.dispatch(1);
+            })
+            .await;
+            ctx.dispatch(2);
+        },)
         .unwrap();
-        assert!(event_loop.state_mut().0.is_empty());
+        assert!(event_loop.state_mut().events().is_empty());
         wake_by_writing(&event_loop, &b);
         assert_eq!(
             event_loop.drain_events_without_blocking(),
             Err(Error::RootFinished)
         );
-        assert_eq!(event_loop.state_mut().0, vec![1, 2]);
+        assert_eq!(event_loop.state_mut().events(), [1, 2]);
     }
 
     #[test]
     fn joining_a_finished_task_resolves_immediately() {
         let (a, b) = pair();
-        let mut event_loop = EventLoop::new(
-            Log::default(),
-            TEST_MAX_TASKS,
-            TEST_MAX_TIMERS,
-            TEST_MAX_IO,
-            async move |ctx| {
-                let handle = ctx.spawn(async |ctx| ctx.dispatch(1));
-                readable(ctx, &a).await;
-                handle.await;
-                ctx.dispatch(2);
-            },
-        )
+        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+            let handle = ctx.spawn(async |ctx| ctx.dispatch(1));
+            readable(ctx, &a).await;
+            handle.await;
+            ctx.dispatch(2);
+        },)
         .unwrap();
-        assert_eq!(event_loop.state_mut().0, vec![1]);
+        assert_eq!(event_loop.state_mut().events(), [1]);
         wake_by_writing(&event_loop, &b);
         assert_eq!(
             event_loop.drain_events_without_blocking(),
             Err(Error::RootFinished)
         );
-        assert_eq!(event_loop.state_mut().0, vec![1, 2]);
+        assert_eq!(event_loop.state_mut().events(), [1, 2]);
     }
 
     #[test]
     fn dropped_handle_detaches_the_task() {
         let (a, b) = pair();
-        let mut event_loop = EventLoop::new(
-            Log::default(),
-            TEST_MAX_TASKS,
-            TEST_MAX_TIMERS,
-            TEST_MAX_IO,
-            async move |ctx| {
-                ctx.spawn(async move |ctx| {
-                    readable(ctx, &a).await;
-                    ctx.dispatch(1);
-                });
-                pending::<()>().await;
-            },
-        )
+        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+            ctx.spawn(async move |ctx| {
+                readable(ctx, &a).await;
+                ctx.dispatch(1);
+            });
+            pending::<()>().await;
+        },)
         .unwrap();
         wake_by_writing(&event_loop, &b);
         assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
-        assert_eq!(event_loop.state_mut().0, vec![1]);
+        assert_eq!(event_loop.state_mut().events(), [1]);
     }
 
     #[test]
     fn spawned_task_can_spawn_and_join() {
-        let event_loop = EventLoop::new(
-            Log::default(),
-            TEST_MAX_TASKS,
-            TEST_MAX_TIMERS,
-            TEST_MAX_IO,
-            async |ctx| {
-                ctx.spawn(async |ctx| {
-                    ctx.spawn(async |ctx| ctx.dispatch(1)).await;
-                    ctx.dispatch(2);
-                })
-                .await;
-                ctx.dispatch(3);
-                pending::<()>().await;
-            },
-        );
-        assert_eq!(event_loop.unwrap().state_mut().0, vec![1, 2, 3]);
+        let event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async |ctx| {
+            ctx.spawn(async |ctx| {
+                ctx.spawn(async |ctx| ctx.dispatch(1)).await;
+                ctx.dispatch(2);
+            })
+            .await;
+            ctx.dispatch(3);
+            pending::<()>().await;
+        },);
+        assert_eq!(event_loop.unwrap().state_mut().events(), [1, 2, 3]);
     }
 }

@@ -1,90 +1,64 @@
 use super::*;
-use core::cell::{Cell, RefCell};
 use core::future::{Future, pending, poll_fn};
+use core::mem::MaybeUninit;
 use core::pin::Pin;
 use core::task::{Poll, Waker};
 use core::time::Duration;
-use std::rc::Rc;
-use std::time::Instant;
 
+use crate::instant::Instant;
 use crate::selectors::Direction;
 use crate::storage::Storage;
 use crate::storage::TaskId;
-use crate::task::TaskFuture;
 use crate::waker::new_waker;
 
 use crate::test_utils::{
-    Log, TEST_MAX_IO, TEST_MAX_TASKS, TEST_MAX_TIMERS, TestContext, is_readable, pair, readable,
-    wake_by_writing,
+    Log, TEST_CAPACITIES, TestContext, assert_yields, is_readable, pair, readable, test_loop,
+    test_loop_in, test_memory_within_current_test, wake_by_writing,
 };
 
 #[test]
 fn root_finishing_during_new_is_an_error() {
-    let result = EventLoop::new(
-        Log::default(),
-        TEST_MAX_TASKS,
-        TEST_MAX_TIMERS,
-        TEST_MAX_IO,
-        async |ctx| ctx.dispatch(1),
-    );
+    let result = test_loop!(Log::default(), TEST_CAPACITIES, async |ctx| ctx.dispatch(1),);
     assert_eq!(result.err(), Some(Error::RootFinished));
 }
 
 #[test]
 fn events_dispatched_during_new_are_applied() {
-    let event_loop = EventLoop::new(
-        Log::default(),
-        TEST_MAX_TASKS,
-        TEST_MAX_TIMERS,
-        TEST_MAX_IO,
-        async |ctx| {
-            ctx.dispatch(1);
-            ctx.dispatch(2);
-            pending::<()>().await;
-        },
-    );
-    assert_eq!(event_loop.unwrap().state_mut().0, vec![1, 2]);
+    let event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async |ctx| {
+        ctx.dispatch(1);
+        ctx.dispatch(2);
+        pending::<()>().await;
+    },);
+    assert_eq!(event_loop.unwrap().state_mut().events(), [1, 2]);
 }
 
 #[test]
 fn idle_loop_is_not_readable_and_drains_to_nothing() {
-    let mut event_loop = EventLoop::new(
-        Log::default(),
-        TEST_MAX_TASKS,
-        TEST_MAX_TIMERS,
-        TEST_MAX_IO,
-        async |_| pending().await,
-    )
-    .unwrap();
+    let mut event_loop =
+        test_loop!(Log::default(), TEST_CAPACITIES, async |_| pending().await,).unwrap();
     assert!(!is_readable(&event_loop, 0));
     assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
-    assert!(event_loop.state_mut().0.is_empty());
+    assert!(event_loop.state_mut().events().is_empty());
 }
 
 #[test]
 fn root_finishing_inside_a_drain() {
     let (a, b) = pair();
-    let mut event_loop = EventLoop::new(
-        Log::default(),
-        TEST_MAX_TASKS,
-        TEST_MAX_TIMERS,
-        TEST_MAX_IO,
-        async move |ctx| {
-            ctx.dispatch(1);
-            readable(ctx, &a).await;
-            ctx.dispatch(2);
-            ctx.dispatch(3);
-        },
-    )
+    let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        ctx.dispatch(1);
+        readable(ctx, &a).await;
+        ctx.dispatch(2);
+        ctx.dispatch(3);
+    },)
     .unwrap();
-    assert_eq!(event_loop.state_mut().0, vec![1]);
+    assert_eq!(event_loop.state_mut().events(), [1]);
 
     wake_by_writing(&event_loop, &b);
     assert_eq!(
         event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)
     );
-    assert_eq!(event_loop.state_mut().0, vec![1, 2, 3]);
+    assert_eq!(event_loop.state_mut().events(), [1, 2, 3]);
     assert_eq!(
         event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)
@@ -95,83 +69,61 @@ fn root_finishing_inside_a_drain() {
 #[test]
 fn root_progresses_across_drains() {
     let (a, b) = pair();
-    let mut event_loop = EventLoop::new(
-        Log::default(),
-        TEST_MAX_TASKS,
-        TEST_MAX_TIMERS,
-        TEST_MAX_IO,
-        async move |ctx| {
-            let mut i = 0;
-            loop {
-                readable(ctx, &a).await;
-                let mut buf = [0; 16];
-                rustix::io::read(&a, &mut buf).unwrap();
-                ctx.dispatch(i);
-                i += 1;
-            }
-        },
-    )
+    let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        let mut i = 0;
+        loop {
+            readable(ctx, &a).await;
+            let mut buf = [0; 16];
+            rustix::io::read(&a, &mut buf).unwrap();
+            ctx.dispatch(i);
+            i += 1;
+        }
+    },)
     .unwrap();
     for i in 0..3 {
         wake_by_writing(&event_loop, &b);
         assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
-        assert_eq!(event_loop.state_mut().0.pop(), Some(i));
+        assert_eq!(event_loop.state_mut().events(), &[0, 1, 2][..=i as usize]);
         assert!(!is_readable(&event_loop, 0));
     }
 }
 
 #[test]
-fn handle_survives_moves_and_an_ffi_round_trip() {
+fn handle_survives_moves_and_an_opaque_pointer_round_trip() {
     let (a, b) = pair();
-    let event_loop = EventLoop::new(
-        Log::default(),
-        TEST_MAX_TASKS,
-        TEST_MAX_TIMERS,
-        TEST_MAX_IO,
-        async move |ctx| {
-            readable(ctx, &a).await;
-            ctx.dispatch(1);
-        },
-    )
+    let event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        readable(ctx, &a).await;
+        ctx.dispatch(1);
+    },)
     .unwrap();
-    let handles = vec![event_loop];
-    let event_loop = handles.into_iter().next().unwrap();
-    let raw = Box::into_raw(Box::new(event_loop));
-    // SAFETY: `raw` comes from `Box::into_raw` right above.
-    let mut event_loop = *unsafe { Box::from_raw(raw) };
+    let handles = [event_loop];
+    let [event_loop] = handles;
+    // Like an FFI wrapper: the handle lives behind a raw pointer, then is taken back out.
+    let mut slot = MaybeUninit::new(event_loop);
+    let raw: *mut EventLoop<Log> = slot.as_mut_ptr();
+    // SAFETY: `raw` points to the initialized handle in `slot`, which is read out once.
+    let mut event_loop = unsafe { raw.read() };
     wake_by_writing(&event_loop, &b);
     assert_eq!(
         event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)
     );
-    assert_eq!(event_loop.state_mut().0, vec![1]);
+    assert_eq!(event_loop.state_mut().events(), [1]);
 }
 
 #[test]
 fn two_loops_on_one_thread_are_independent() {
     let (a1, b1) = pair();
     let (a2, _b2) = pair();
-    let mut first = EventLoop::new(
-        Log::default(),
-        TEST_MAX_TASKS,
-        TEST_MAX_TIMERS,
-        TEST_MAX_IO,
-        async move |ctx| {
-            readable(ctx, &a1).await;
-            ctx.dispatch(1);
-        },
-    )
+    let mut first = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        readable(ctx, &a1).await;
+        ctx.dispatch(1);
+    },)
     .unwrap();
-    let mut second = EventLoop::new(
-        Log::default(),
-        TEST_MAX_TASKS,
-        TEST_MAX_TIMERS,
-        TEST_MAX_IO,
-        async move |ctx| {
-            readable(ctx, &a2).await;
-            ctx.dispatch(2);
-        },
-    )
+    let mut second = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        readable(ctx, &a2).await;
+        ctx.dispatch(2);
+    },)
     .unwrap();
 
     wake_by_writing(&first, &b1);
@@ -181,36 +133,26 @@ fn two_loops_on_one_thread_are_independent() {
         first.drain_events_without_blocking(),
         Err(Error::RootFinished)
     );
-    assert_eq!(first.state_mut().0, vec![1]);
-    assert!(second.state_mut().0.is_empty());
+    assert_eq!(first.state_mut().events(), [1]);
+    assert!(second.state_mut().events().is_empty());
 }
 
 #[test]
 #[should_panic(expected = "boom in new")]
 fn panic_propagates_out_of_new() {
-    let _ = EventLoop::new(
-        Log::default(),
-        TEST_MAX_TASKS,
-        TEST_MAX_TIMERS,
-        TEST_MAX_IO,
-        async |_| panic!("boom in new"),
-    );
+    let _ = test_loop!(Log::default(), TEST_CAPACITIES, async |_| panic!(
+        "boom in new"
+    ),);
 }
 
 #[test]
 #[should_panic(expected = "boom in drain")]
 fn panic_propagates_out_of_drain() {
     let (a, b) = pair();
-    let mut event_loop = EventLoop::new(
-        Log::default(),
-        TEST_MAX_TASKS,
-        TEST_MAX_TIMERS,
-        TEST_MAX_IO,
-        async move |ctx| {
-            readable(ctx, &a).await;
-            panic!("boom in drain");
-        },
-    )
+    let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        readable(ctx, &a).await;
+        panic!("boom in drain");
+    },)
     .unwrap();
     wake_by_writing(&event_loop, &b);
     let _ = event_loop.drain_events_without_blocking();
@@ -229,16 +171,10 @@ impl State for PanickingState {
 #[test]
 #[should_panic(expected = "boom in apply")]
 fn panic_in_apply_propagates() {
-    let _ = EventLoop::new(
-        PanickingState,
-        TEST_MAX_TASKS,
-        TEST_MAX_TIMERS,
-        TEST_MAX_IO,
-        async |ctx| {
-            ctx.dispatch(());
-            pending::<()>().await;
-        },
-    );
+    let _ = test_loop!(PanickingState, TEST_CAPACITIES, async |ctx| {
+        ctx.dispatch(());
+        pending::<()>().await;
+    },);
 }
 
 struct DispatchOnDrop<'a>(&'a TestContext, u32);
@@ -250,13 +186,25 @@ impl Drop for DispatchOnDrop<'_> {
 }
 
 #[test]
+fn root_future_bigger_than_max_task_size_is_fine() {
+    let data = [7u8; 3 * TEST_CAPACITIES.max_task_size];
+    let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        ctx.dispatch(u32::from(data.iter().all(|byte| *byte == 7)));
+        pending::<()>().await;
+    },)
+    .unwrap();
+    assert_eq!(event_loop.state_mut().events(), [1]);
+}
+
+#[test]
 #[should_panic(expected = "more than 2 concurrent tasks")]
 fn exceeding_max_tasks_count_panics() {
-    let _ = EventLoop::new(
+    let _ = test_loop!(
         Log::default(),
-        2,
-        TEST_MAX_TIMERS,
-        TEST_MAX_IO,
+        Capacities {
+            max_tasks: 2,
+            ..TEST_CAPACITIES
+        },
         async |ctx| {
             ctx.spawn(async |_| pending().await);
             ctx.spawn(async |_| pending().await);
@@ -267,11 +215,12 @@ fn exceeding_max_tasks_count_panics() {
 
 #[test]
 fn finished_tasks_free_their_slots() {
-    let event_loop = EventLoop::new(
+    let event_loop = test_loop!(
         Log::default(),
-        2,
-        TEST_MAX_TIMERS,
-        TEST_MAX_IO,
+        Capacities {
+            max_tasks: 2,
+            ..TEST_CAPACITIES
+        },
         async |ctx| {
             for i in 0..5 {
                 ctx.spawn(async move |ctx| ctx.dispatch(i)).await;
@@ -279,55 +228,43 @@ fn finished_tasks_free_their_slots() {
             pending::<()>().await;
         },
     );
-    assert_eq!(event_loop.unwrap().state_mut().0, vec![0, 1, 2, 3, 4]);
+    assert_eq!(event_loop.unwrap().state_mut().events(), [0, 1, 2, 3, 4]);
 }
 
 #[test]
 fn spawned_task_runs_in_the_same_drain() {
-    let event_loop = EventLoop::new(
-        Log::default(),
-        TEST_MAX_TASKS,
-        TEST_MAX_TIMERS,
-        TEST_MAX_IO,
-        async |ctx| {
-            ctx.spawn(async |ctx| ctx.dispatch(2));
-            ctx.dispatch(1);
-            pending::<()>().await;
-        },
-    );
-    assert_eq!(event_loop.unwrap().state_mut().0, vec![1, 2]);
+    let event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async |ctx| {
+        ctx.spawn(async |ctx| ctx.dispatch(2));
+        ctx.dispatch(1);
+        pending::<()>().await;
+    },);
+    assert_eq!(event_loop.unwrap().state_mut().events(), [1, 2]);
 }
 
 #[test]
 fn tasks_are_dropped_when_the_root_finishes() {
     let (a, b) = pair();
-    let mut event_loop = EventLoop::new(
-        Log::default(),
-        TEST_MAX_TASKS,
-        TEST_MAX_TIMERS,
-        TEST_MAX_IO,
-        async move |ctx| {
-            ctx.spawn(async |ctx| {
-                let _guard = DispatchOnDrop(ctx, 10);
-                pending::<()>().await;
-            });
-            ctx.spawn(async |ctx| {
-                let _guard = DispatchOnDrop(ctx, 20);
-                pending::<()>().await;
-            });
-            readable(ctx, &a).await;
-            ctx.dispatch(1);
-        },
-    )
+    let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        ctx.spawn(async |ctx| {
+            let _guard = DispatchOnDrop(ctx, 10);
+            pending::<()>().await;
+        });
+        ctx.spawn(async |ctx| {
+            let _guard = DispatchOnDrop(ctx, 20);
+            pending::<()>().await;
+        });
+        readable(ctx, &a).await;
+        ctx.dispatch(1);
+    },)
     .unwrap();
     wake_by_writing(&event_loop, &b);
     assert_eq!(
         event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)
     );
-    let log = &mut event_loop.state_mut().0;
+    let log = event_loop.state_mut().events_mut();
     assert_eq!(log[0], 1);
-    log[1..].sort();
+    log[1..].sort_unstable();
     assert_eq!(log[1..], [10, 20]);
 }
 
@@ -343,48 +280,47 @@ impl Drop for SpawnOnDrop<'_> {
 #[test]
 fn spawning_and_dispatching_from_drop_during_teardown() {
     let (a, b) = pair();
-    let mut event_loop = EventLoop::new(
-        Log::default(),
-        TEST_MAX_TASKS,
-        TEST_MAX_TIMERS,
-        TEST_MAX_IO,
-        async move |ctx| {
-            ctx.spawn(async |ctx| {
-                let _guard = SpawnOnDrop(ctx);
-                pending::<()>().await;
-            });
-            readable(ctx, &a).await;
-            ctx.dispatch(1);
-        },
-    )
+    let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        ctx.spawn(async |ctx| {
+            let _guard = SpawnOnDrop(ctx);
+            pending::<()>().await;
+        });
+        readable(ctx, &a).await;
+        ctx.dispatch(1);
+    },)
     .unwrap();
     wake_by_writing(&event_loop, &b);
     assert_eq!(
         event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)
     );
-    assert_eq!(event_loop.state_mut().0, vec![1, 3]);
+    assert_eq!(event_loop.state_mut().events(), [1, 3]);
 }
 
-struct Flag(Rc<Cell<bool>>);
+struct Flag(*mut bool);
 
 impl Drop for Flag {
     fn drop(&mut self) {
-        self.0.set(true);
+        // SAFETY: points to a `static mut` of the running test, which only that test's thread
+        // uses, and no reference to it exists.
+        unsafe { *self.0 = true };
     }
 }
 
-struct SharedLog(Rc<RefCell<Vec<u32>>>);
+// Readable after the loop (and so the state) is gone.
+struct LastEvent(*mut u32);
 
-impl State for SharedLog {
+impl State for LastEvent {
     type Event = u32;
 
     fn apply(&mut self, event: u32) {
-        self.0.borrow_mut().push(event);
+        // SAFETY: points to a `static mut` of the running test, which only that test's thread
+        // uses, and no reference to it exists.
+        unsafe { *self.0 = event };
     }
 }
 
-struct DispatchOnDropShared<'a>(&'a Context<SharedLog>, u32);
+struct DispatchOnDropShared<'a>(&'a Context<LastEvent>, u32);
 
 impl Drop for DispatchOnDropShared<'_> {
     fn drop(&mut self) {
@@ -394,79 +330,64 @@ impl Drop for DispatchOnDropShared<'_> {
 
 #[test]
 fn events_dispatched_while_dropping_the_loop_are_applied() {
-    let log = Rc::new(RefCell::new(Vec::new()));
-    let event_loop = EventLoop::new(
-        SharedLog(log.clone()),
-        TEST_MAX_TASKS,
-        TEST_MAX_TIMERS,
-        TEST_MAX_IO,
-        async |ctx| {
-            ctx.dispatch(1);
-            ctx.spawn(async |ctx| {
-                let _guard = DispatchOnDropShared(ctx, 2);
-                pending::<()>().await;
-            });
+    static mut LAST: u32 = 0;
+    let event_loop = test_loop!(LastEvent(&raw mut LAST), TEST_CAPACITIES, async |ctx| {
+        ctx.dispatch(1);
+        ctx.spawn(async |ctx| {
+            let _guard = DispatchOnDropShared(ctx, 2);
             pending::<()>().await;
-        },
-    )
+        });
+        pending::<()>().await;
+    },)
     .unwrap();
-    assert_eq!(*log.borrow(), vec![1]);
+    // SAFETY: only this test's thread uses `LAST`, and no reference to it exists.
+    assert_eq!(unsafe { LAST }, 1);
     drop(event_loop);
-    assert_eq!(*log.borrow(), vec![1, 2]);
+    // SAFETY: only this test's thread uses `LAST`, and no reference to it exists.
+    assert_eq!(unsafe { LAST }, 2);
 }
 
 #[test]
 fn dropping_the_loop_drops_its_tasks() {
-    let dropped = Rc::new(Cell::new(false));
-    let flag = Flag(dropped.clone());
-    let event_loop = EventLoop::new(
-        Log::default(),
-        TEST_MAX_TASKS,
-        TEST_MAX_TIMERS,
-        TEST_MAX_IO,
-        async move |ctx| {
-            ctx.spawn(async move |_| {
-                let _flag = flag;
-                pending::<()>().await;
-            });
+    static mut DROPPED: bool = false;
+    let flag = Flag(&raw mut DROPPED);
+    let event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+        ctx.spawn(async move |_| {
+            let _flag = flag;
             pending::<()>().await;
-        },
-    )
+        });
+        pending::<()>().await;
+    },)
     .unwrap();
-    assert!(!dropped.get());
+    // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
+    assert!(!unsafe { DROPPED });
     drop(event_loop);
-    assert!(dropped.get());
+    // SAFETY: only this test's thread uses `DROPPED`, and no reference to it exists.
+    assert!(unsafe { DROPPED });
 }
 
-fn parked_loop() -> EventLoop<Log> {
-    EventLoop::new(
-        Log::default(),
-        TEST_MAX_TASKS,
-        TEST_MAX_TIMERS,
-        TEST_MAX_IO,
-        async |_| pending().await,
-    )
+fn parked_loop(memory: &'static mut [MaybeUninit<u8>]) -> EventLoop<Log> {
+    test_loop_in(memory, Log::default(), TEST_CAPACITIES, async |_| {
+        pending().await
+    })
     .unwrap()
 }
 
-fn counting(polls: &Rc<Cell<u32>>) -> TaskFuture {
-    let polls = polls.clone();
-    Box::pin(poll_fn(move |_| {
-        polls.set(polls.get() + 1);
+fn counting(polls: *mut u32) -> impl Future<Output = ()> {
+    poll_fn(move |_| {
+        // SAFETY: points to a `static mut` of the running test, which only that test's thread
+        // uses, and no reference to it exists.
+        unsafe { *polls += 1 };
         Poll::<()>::Pending
-    }))
+    })
 }
 
-fn ready_tasks(event_loop: &EventLoop<Log>) -> Vec<TaskId> {
-    core::iter::from_fn(|| event_loop.storage().ready().pop()).collect()
+fn ready_tasks(event_loop: &EventLoop<Log>) -> impl Iterator<Item = TaskId> + '_ {
+    core::iter::from_fn(|| event_loop.storage().ready().pop())
 }
 
 fn parked_task(event_loop: &EventLoop<Log>) -> (TaskId, Waker) {
-    let id = event_loop
-        .storage()
-        .insert_task(Box::pin(pending()))
-        .ok()
-        .unwrap();
+    let id = event_loop.storage().insert_task(pending()).ok().unwrap();
     // SAFETY: `event_loop` outlives the waker.
     let waker = unsafe { new_waker(event_loop.storage().ready(), id) };
     (id, waker)
@@ -474,10 +395,10 @@ fn parked_task(event_loop: &EventLoop<Log>) -> (TaskId, Waker) {
 
 #[test]
 fn finished_task_is_removed() {
-    let owned = parked_loop();
+    let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
     let (root, _) = parked_task(event_loop);
-    let id = event_loop.storage().spawn(Box::pin(async {}));
+    let id = event_loop.storage().spawn(async {});
     assert_eq!(
         event_loop.storage().run_ready_tasks(root),
         RootStatus::Running
@@ -487,69 +408,76 @@ fn finished_task_is_removed() {
 
 #[test]
 fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
-    let owned = parked_loop();
+    let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
     let (root, _) = parked_task(event_loop);
-    let polls = Rc::new(Cell::new(0));
-    let counter = polls.clone();
-    event_loop.storage().spawn(Box::pin(poll_fn(move |cx| {
-        counter.set(counter.get() + 1);
-        if counter.get() < 3 {
+    static mut POLLS: u32 = 0;
+    event_loop.storage().spawn(poll_fn(move |cx| {
+        // SAFETY: only this test's thread uses `POLLS`, and no reference to it exists.
+        let polls = unsafe {
+            POLLS += 1;
+            POLLS
+        };
+        if polls < 3 {
             cx.waker().wake_by_ref();
         }
         Poll::<()>::Pending
-    })));
+    }));
     event_loop.storage().run_ready_tasks(root);
-    assert_eq!(polls.get(), 3);
+    // SAFETY: only this test's thread uses `POLLS`, and no reference to it exists.
+    assert_eq!(unsafe { POLLS }, 3);
 }
 
 #[test]
 fn task_spawned_during_a_poll_runs_in_the_same_run() {
-    let owned = parked_loop();
+    let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
     let (root, _) = parked_task(event_loop);
     let storage = event_loop.storage();
-    let polls = Rc::new(Cell::new(0));
-    let child = counting(&polls);
-    event_loop.storage().spawn(Box::pin(async move {
+    static mut POLLS: u32 = 0;
+    let child = counting(&raw mut POLLS);
+    event_loop.storage().spawn(async move {
         storage.spawn(child);
-    }));
+    });
     event_loop.storage().run_ready_tasks(root);
-    assert_eq!(polls.get(), 1);
+    // SAFETY: only this test's thread uses `POLLS`, and no reference to it exists.
+    assert_eq!(unsafe { POLLS }, 1);
 }
 
 #[test]
 fn join_waiter_is_woken_when_the_task_finishes() {
-    let owned = parked_loop();
+    let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
     let (root, _) = parked_task(event_loop);
-    let polls = Rc::new(Cell::new(0));
-    let waiter = event_loop.storage().spawn(counting(&polls));
-    let task = event_loop.storage().spawn(Box::pin(async {}));
+    static mut POLLS: u32 = 0;
+    let waiter = event_loop.storage().spawn(counting(&raw mut POLLS));
+    let task = event_loop.storage().spawn(async {});
     // SAFETY: `event_loop` outlives the waker.
     let waker = unsafe { new_waker(event_loop.storage().ready(), waiter) };
     event_loop.storage().set_join_waiter(task, &waker);
     event_loop.storage().run_ready_tasks(root);
-    assert_eq!(polls.get(), 2);
+    // SAFETY: only this test's thread uses `POLLS`, and no reference to it exists.
+    assert_eq!(unsafe { POLLS }, 2);
 }
 
 #[test]
 fn root_finishing_stops_the_run() {
-    let owned = parked_loop();
+    let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
-    let root = event_loop.storage().spawn(Box::pin(async {}));
-    let polls = Rc::new(Cell::new(0));
-    event_loop.storage().spawn(counting(&polls));
+    let root = event_loop.storage().spawn(async {});
+    static mut POLLS: u32 = 0;
+    event_loop.storage().spawn(counting(&raw mut POLLS));
     assert_eq!(
         event_loop.storage().run_ready_tasks(root),
         RootStatus::Finished
     );
-    assert_eq!(polls.get(), 0);
+    // SAFETY: only this test's thread uses `POLLS`, and no reference to it exists.
+    assert_eq!(unsafe { POLLS }, 0);
 }
 
 struct SpawnRawOnDrop {
     storage: Storage,
-    spawned_dropped: Rc<Cell<bool>>,
+    spawned_dropped: *mut bool,
 }
 
 impl Future for SpawnRawOnDrop {
@@ -562,37 +490,29 @@ impl Future for SpawnRawOnDrop {
 
 impl Drop for SpawnRawOnDrop {
     fn drop(&mut self) {
-        let flag = self.spawned_dropped.clone();
-        let guard = DropGuard(flag);
-        self.storage.spawn(Box::pin(async move {
+        let guard = Flag(self.spawned_dropped);
+        self.storage.spawn(async move {
             let _guard = guard;
-        }));
-    }
-}
-
-struct DropGuard(Rc<Cell<bool>>);
-
-impl Drop for DropGuard {
-    fn drop(&mut self) {
-        self.0.set(true);
+        });
     }
 }
 
 #[test]
 fn dropping_the_loop_drops_tasks_spawned_from_drop() {
-    let owned = parked_loop();
-    let spawned_dropped = Rc::new(Cell::new(false));
-    owned.storage().spawn(Box::pin(SpawnRawOnDrop {
+    let owned = parked_loop(test_memory_within_current_test!());
+    static mut SPAWNED_DROPPED: bool = false;
+    owned.storage().spawn(SpawnRawOnDrop {
         storage: owned.storage(),
-        spawned_dropped: spawned_dropped.clone(),
-    }));
+        spawned_dropped: &raw mut SPAWNED_DROPPED,
+    });
     drop(owned);
-    assert!(spawned_dropped.get());
+    // SAFETY: only this test's thread uses `SPAWNED_DROPPED`, and no reference to it exists.
+    assert!(unsafe { SPAWNED_DROPPED });
 }
 
 #[test]
 fn readable_event_wakes_the_reader_once() {
-    let owned = parked_loop();
+    let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
     let (a, b) = pair();
     let (task, waker) = parked_task(event_loop);
@@ -601,7 +521,7 @@ fn readable_event_wakes_the_reader_once() {
     event_loop.storage().flush().unwrap();
     rustix::io::write(&b, b"x").unwrap();
     event_loop.storage().process_selector_events().unwrap();
-    assert_eq!(ready_tasks(event_loop), vec![task]);
+    assert_yields(ready_tasks(event_loop), [task]);
 
     rustix::io::write(&b, b"x").unwrap();
     event_loop.storage().flush().unwrap();
@@ -610,7 +530,7 @@ fn readable_event_wakes_the_reader_once() {
 
 #[test]
 fn removed_io_waker_arms_nothing() {
-    let owned = parked_loop();
+    let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
     let (a, b) = pair();
     let (_, waker) = parked_task(event_loop);
@@ -624,7 +544,7 @@ fn removed_io_waker_arms_nothing() {
 
 #[test]
 fn deregistered_io_produces_no_events() {
-    let owned = parked_loop();
+    let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
     let (a, b) = pair();
     let (_, waker) = parked_task(event_loop);
@@ -638,7 +558,7 @@ fn deregistered_io_produces_no_events() {
 
 #[test]
 fn expired_timer_wakes_its_task() {
-    let owned = parked_loop();
+    let owned = parked_loop(test_memory_within_current_test!());
     let event_loop = &owned;
     let (task, waker) = parked_task(event_loop);
     let (_, later_waker) = parked_task(event_loop);
@@ -649,5 +569,5 @@ fn expired_timer_wakes_its_task() {
     event_loop.storage().flush().unwrap();
     assert!(is_readable(event_loop, 500));
     event_loop.storage().process_selector_events().unwrap();
-    assert_eq!(ready_tasks(event_loop), vec![task]);
+    assert_yields(ready_tasks(event_loop), [task]);
 }

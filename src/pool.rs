@@ -1,4 +1,4 @@
-use alloc::alloc::Layout;
+use core::alloc::Layout;
 use core::fmt;
 use core::marker::PhantomData;
 use core::mem;
@@ -251,21 +251,57 @@ impl<T> ObjectPool<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::{aligned_in, assert_yields, stack_memory};
     use core::cell::Cell;
-    use std::rc::Rc;
+    use core::mem::MaybeUninit;
+    use core::ops::{Deref, DerefMut};
 
-    fn boxed<T>(len: usize) -> Box<ObjectPool<T>> {
-        let layout = ObjectPool::<T>::layout(len);
-        // SAFETY: `layout` isn't zero-sized (it always holds `free_head`).
-        let ptr = NonNull::new(unsafe { alloc::alloc::alloc(layout) }).unwrap();
-        // SAFETY: `ptr` is a fresh allocation of `layout`. `Box` frees it with the layout of the
-        // value, which equals `layout` (checked by Miri).
-        unsafe { Box::from_raw(ObjectPool::<T>::init(ptr, len).as_ptr()) }
+    // A pool in borrowed memory, dropped in place on drop.
+    struct TestPool<'m, T> {
+        pool: NonNull<ObjectPool<T>>,
+        _memory: PhantomData<&'m mut [MaybeUninit<u8>]>,
+    }
+
+    impl<'m, T> TestPool<'m, T> {
+        fn new(memory: &'m mut [MaybeUninit<u8>], len: usize) -> Self {
+            let ptr = aligned_in(memory, ObjectPool::<T>::layout(len));
+            // SAFETY: `ptr` is aligned and valid for the layout, and `memory` stays borrowed for
+            // as long as the pool exists.
+            let pool = unsafe { ObjectPool::<T>::init(ptr, len) };
+            Self {
+                pool,
+                _memory: PhantomData,
+            }
+        }
+    }
+
+    impl<T> Deref for TestPool<'_, T> {
+        type Target = ObjectPool<T>;
+
+        fn deref(&self) -> &ObjectPool<T> {
+            // SAFETY: initialized in `new` and only dropped in `drop`; borrowed through `self`.
+            unsafe { self.pool.as_ref() }
+        }
+    }
+
+    impl<T> DerefMut for TestPool<'_, T> {
+        fn deref_mut(&mut self) -> &mut ObjectPool<T> {
+            // SAFETY: as above, and `&mut self` makes this the only reference.
+            unsafe { self.pool.as_mut() }
+        }
+    }
+
+    impl<T> Drop for TestPool<'_, T> {
+        fn drop(&mut self) {
+            // SAFETY: initialized in `new`, dropped once, and not used afterwards.
+            unsafe { ptr::drop_in_place(self.pool.as_ptr()) };
+        }
     }
 
     #[test]
     fn layout_matches_the_layout_of_the_value() {
-        let pool = boxed::<u64>(3);
+        let mut memory = stack_memory();
+        let pool = TestPool::<u64>::new(&mut memory, 3);
         assert_eq!(Layout::for_value(&*pool), ObjectPool::<u64>::layout(3));
         assert_eq!(pool.capacity(), 3);
     }
@@ -274,7 +310,8 @@ mod tests {
     fn layout_handles_highly_aligned_slots() {
         #[repr(align(64))]
         struct Aligned(u8);
-        let mut pool = boxed::<Aligned>(3);
+        let mut memory = stack_memory();
+        let mut pool = TestPool::<Aligned>::new(&mut memory, 3);
         assert_eq!(Layout::for_value(&*pool), ObjectPool::<Aligned>::layout(3));
         let index = pool.alloc(Aligned(7)).ok().unwrap();
         let value = pool.get(index).unwrap();
@@ -284,7 +321,8 @@ mod tests {
 
     #[test]
     fn alloc_get_free() {
-        let mut pool = boxed::<&str>(2);
+        let mut memory = stack_memory();
+        let mut pool = TestPool::<&str>::new(&mut memory, 2);
         let a = pool.alloc("a").unwrap();
         let b = pool.alloc("b").unwrap();
         assert_ne!(a, b);
@@ -296,7 +334,8 @@ mod tests {
 
     #[test]
     fn index_round_trips_through_bits() {
-        let mut pool = boxed::<u32>(2);
+        let mut memory = stack_memory();
+        let mut pool = TestPool::<u32>::new(&mut memory, 2);
         let first = pool.alloc(1).unwrap();
         pool.free(first);
         let index = pool.alloc(2).unwrap();
@@ -307,7 +346,8 @@ mod tests {
 
     #[test]
     fn full_pool_returns_the_value() {
-        let mut pool = boxed::<u32>(1);
+        let mut memory = stack_memory();
+        let mut pool = TestPool::<u32>::new(&mut memory, 1);
         pool.alloc(1).unwrap();
         assert_eq!(pool.alloc(2), Err(2));
     }
@@ -320,7 +360,8 @@ mod tests {
 
     #[test]
     fn freed_slot_is_reused_with_a_new_generation() {
-        let mut pool = boxed::<u32>(1);
+        let mut memory = stack_memory();
+        let mut pool = TestPool::<u32>::new(&mut memory, 1);
         let old = pool.alloc(1).unwrap();
         pool.free(old);
         let new = pool.alloc(2).unwrap();
@@ -333,7 +374,8 @@ mod tests {
 
     #[test]
     fn double_free_is_rejected() {
-        let mut pool = boxed::<u32>(2);
+        let mut memory = stack_memory();
+        let mut pool = TestPool::<u32>::new(&mut memory, 2);
         let index = pool.alloc(1).unwrap();
         assert_eq!(pool.free(index), Some(1));
         assert_eq!(pool.free(index), None);
@@ -344,8 +386,9 @@ mod tests {
 
     #[test]
     fn every_slot_is_usable_after_mixed_frees() {
-        let mut pool = boxed::<usize>(4);
-        let indices: Vec<_> = (0..4).map(|i| pool.alloc(i).unwrap()).collect();
+        let mut memory = stack_memory();
+        let mut pool = TestPool::<usize>::new(&mut memory, 4);
+        let indices = [0, 1, 2, 3].map(|i| pool.alloc(i).unwrap());
         pool.free(indices[1]);
         pool.free(indices[3]);
         let x = pool.alloc(10).unwrap();
@@ -359,49 +402,56 @@ mod tests {
 
     #[test]
     fn iter_yields_only_occupied_slots() {
-        let mut pool = boxed::<u32>(4);
+        let mut memory = stack_memory();
+        let mut pool = TestPool::<u32>::new(&mut memory, 4);
         let a = pool.alloc(1).unwrap();
         let b = pool.alloc(2).unwrap();
         let c = pool.alloc(3).unwrap();
         pool.free(b);
-        let items: Vec<_> = pool.iter().map(|(index, value)| (index, *value)).collect();
-        assert_eq!(items, vec![(c, 3), (a, 1)]);
+        assert_yields(
+            pool.iter().map(|(index, value)| (index, *value)),
+            [(c, 3), (a, 1)],
+        );
     }
 
     #[test]
     fn occupied_list_stays_consistent() {
-        let mut pool = boxed::<u32>(8);
-        let mut live: Vec<(Index<u32>, u32)> = Vec::new();
+        let mut memory = stack_memory();
+        let mut pool = TestPool::<u32>::new(&mut memory, 8);
+        // What should be in the pool, by slot.
+        let mut live: [Option<(Index<u32>, u32)>; 8] = [None; 8];
         let mut next_value = 0;
         for step in 0..64u32 {
-            if step % 3 == 2 && !live.is_empty() {
-                let position = (step as usize * 7) % live.len();
-                let (index, value) = live.remove(position);
+            let live_count = live.iter().flatten().count();
+            if step % 3 == 2 && live_count > 0 {
+                let position = (step as usize * 7) % live_count;
+                let (index, value) = live.iter().flatten().nth(position).copied().unwrap();
+                live[index.slot() as usize] = None;
                 assert_eq!(pool.free(index), Some(value));
             } else if let Ok(index) = pool.alloc(next_value) {
-                live.push((index, next_value));
+                live[index.slot() as usize] = Some((index, next_value));
                 next_value += 1;
             }
-            let mut actual: Vec<_> = pool.iter().map(|(index, value)| (index, *value)).collect();
-            let mut expected = live.clone();
-            actual.sort_by_key(|(_, value)| *value);
-            expected.sort_by_key(|(_, value)| *value);
-            assert_eq!(actual, expected);
+            assert_eq!(pool.iter().count(), live.iter().flatten().count());
+            for (index, value) in pool.iter() {
+                assert_eq!(live[index.slot() as usize], Some((index, *value)));
+            }
         }
     }
 
     #[test]
     fn dropping_the_pool_drops_the_objects() {
-        struct Flag(Rc<Cell<u32>>);
-        impl Drop for Flag {
+        struct Flag<'a>(&'a Cell<u32>);
+        impl Drop for Flag<'_> {
             fn drop(&mut self) {
                 self.0.set(self.0.get() + 1);
             }
         }
-        let drops = Rc::new(Cell::new(0));
-        let mut pool = boxed::<Flag>(3);
-        pool.alloc(Flag(drops.clone())).ok().unwrap();
-        let freed = pool.alloc(Flag(drops.clone())).ok().unwrap();
+        let drops = Cell::new(0);
+        let mut memory = stack_memory();
+        let mut pool = TestPool::<Flag>::new(&mut memory, 3);
+        pool.alloc(Flag(&drops)).ok().unwrap();
+        let freed = pool.alloc(Flag(&drops)).ok().unwrap();
         drop(pool.free(freed));
         assert_eq!(drops.get(), 1);
         drop(pool);

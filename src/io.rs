@@ -87,16 +87,18 @@ impl Drop for Wait<'_, '_> {
 #[cfg(test)]
 mod tests {
     use core::future::{pending, poll_fn};
+    use core::pin::pin;
     use core::time::Duration;
 
     use rustix::fd::{AsFd, OwnedFd};
     use rustix::io::Errno;
 
     use super::*;
+    use crate::Capacities;
     use crate::EventLoop;
     use crate::test_utils::{
-        First, Log, TEST_MAX_IO, TEST_MAX_TASKS, TEST_MAX_TIMERS, TestContext, Winner, is_readable,
-        pair, run_until_root_finishes,
+        First, Log, TEST_CAPACITIES, TestContext, Winner, is_readable, pair,
+        run_until_root_finishes, test_loop,
     };
 
     async fn read_some(ctx: &TestContext, fd: &OwnedFd) -> rustix::io::Result<usize> {
@@ -136,17 +138,11 @@ mod tests {
     #[test]
     fn read_waits_until_the_peer_writes() {
         let (a, b) = pair();
-        let mut event_loop = EventLoop::new(
-            Log::default(),
-            TEST_MAX_TASKS,
-            TEST_MAX_TIMERS,
-            TEST_MAX_IO,
-            async move |ctx| {
-                let n = read_some(ctx, &a).await.unwrap();
-                ctx.dispatch(n as u32);
-                pending::<()>().await;
-            },
-        )
+        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+            let n = read_some(ctx, &a).await.unwrap();
+            ctx.dispatch(n as u32);
+            pending::<()>().await;
+        },)
         .unwrap();
         assert_eq!(registrations(&event_loop), 1);
         assert!(!is_readable(&event_loop, 0));
@@ -154,7 +150,7 @@ mod tests {
         rustix::io::write(&b, b"abc").unwrap();
         assert!(is_readable(&event_loop, 1000));
         assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
-        assert_eq!(event_loop.state_mut().0, vec![3]);
+        assert_eq!(event_loop.state_mut().events(), [3]);
         assert_eq!(registrations(&event_loop), 0);
     }
 
@@ -162,42 +158,30 @@ mod tests {
     fn write_waits_on_a_full_buffer() {
         let (a, b) = pair();
         fill_send_buffer(&a);
-        let mut event_loop = EventLoop::new(
-            Log::default(),
-            TEST_MAX_TASKS,
-            TEST_MAX_TIMERS,
-            TEST_MAX_IO,
-            async move |ctx| {
-                let n = write_some(ctx, &a).await.unwrap();
-                ctx.dispatch(n as u32);
-            },
-        )
+        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+            let n = write_some(ctx, &a).await.unwrap();
+            ctx.dispatch(n as u32);
+        },)
         .unwrap();
-        assert!(event_loop.state_mut().0.is_empty());
+        assert!(event_loop.state_mut().events().is_empty());
         assert!(!is_readable(&event_loop, 0));
 
         drain_receive_buffer(&b);
         run_until_root_finishes(&mut event_loop);
-        assert_eq!(event_loop.state_mut().0, vec![1]);
+        assert_eq!(event_loop.state_mut().events(), [1]);
     }
 
     #[test]
     fn ready_fd_arms_nothing() {
         let (a, b) = pair();
         rustix::io::write(&b, b"abc").unwrap();
-        let mut event_loop = EventLoop::new(
-            Log::default(),
-            TEST_MAX_TASKS,
-            TEST_MAX_TIMERS,
-            TEST_MAX_IO,
-            async move |ctx| {
-                let n = read_some(ctx, &a).await.unwrap();
-                ctx.dispatch(n as u32);
-                pending::<()>().await;
-            },
-        )
+        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+            let n = read_some(ctx, &a).await.unwrap();
+            ctx.dispatch(n as u32);
+            pending::<()>().await;
+        },)
         .unwrap();
-        assert_eq!(event_loop.state_mut().0, vec![3]);
+        assert_eq!(event_loop.state_mut().events(), [3]);
         assert_eq!(registrations(&event_loop), 0);
         rustix::io::write(&b, b"abc").unwrap();
         assert!(!is_readable(&event_loop, 0));
@@ -206,22 +190,19 @@ mod tests {
     #[test]
     fn dropping_a_pending_read_deregisters() {
         let (a, b) = pair();
-        let mut event_loop = EventLoop::new(
-            Log::default(),
-            TEST_MAX_TASKS,
-            TEST_MAX_TIMERS,
-            TEST_MAX_IO,
-            async move |ctx| {
-                let read = Box::pin(read_some(ctx, &a));
-                let winner = First(read, ctx.sleep(Duration::from_millis(10))).await;
-                assert_eq!(winner, Winner::B);
-                ctx.dispatch(1);
-                pending::<()>().await;
-            },
-        )
+        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+            let winner = First(
+                pin!(read_some(ctx, &a)),
+                ctx.sleep(Duration::from_millis(10)),
+            )
+            .await;
+            assert_eq!(winner, Winner::B);
+            ctx.dispatch(1);
+            pending::<()>().await;
+        },)
         .unwrap();
         assert_eq!(registrations(&event_loop), 1);
-        while event_loop.state_mut().0.is_empty() {
+        while event_loop.state_mut().events().is_empty() {
             assert!(is_readable(&event_loop, 2000));
             assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
         }
@@ -233,63 +214,53 @@ mod tests {
     #[test]
     fn read_survives_a_spurious_wake() {
         let (a, b) = pair();
-        let mut event_loop = EventLoop::new(
-            Log::default(),
-            TEST_MAX_TASKS,
-            TEST_MAX_TIMERS,
-            TEST_MAX_IO,
-            async move |ctx| {
-                let read = Box::pin(read_some(ctx, &a));
-                let mut woken = false;
-                let wake_once = poll_fn(move |cx| {
-                    if !woken {
-                        woken = true;
-                        cx.waker().wake_by_ref();
-                    }
-                    Poll::<()>::Pending
-                });
-                let winner = First(read, wake_once).await;
-                assert_eq!(winner, Winner::A);
-                ctx.dispatch(1);
-                pending::<()>().await;
-            },
-        )
+        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+            let mut woken = false;
+            let wake_once = poll_fn(move |cx| {
+                if !woken {
+                    woken = true;
+                    cx.waker().wake_by_ref();
+                }
+                Poll::<()>::Pending
+            });
+            let winner = First(pin!(read_some(ctx, &a)), wake_once).await;
+            assert_eq!(winner, Winner::A);
+            ctx.dispatch(1);
+            pending::<()>().await;
+        },)
         .unwrap();
-        assert!(event_loop.state_mut().0.is_empty());
+        assert!(event_loop.state_mut().events().is_empty());
         assert_eq!(registrations(&event_loop), 1);
 
         rustix::io::write(&b, b"abc").unwrap();
         assert!(is_readable(&event_loop, 1000));
         assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
-        assert_eq!(event_loop.state_mut().0, vec![1]);
+        assert_eq!(event_loop.state_mut().events(), [1]);
     }
 
     #[test]
     fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
-        let mut event_loop = EventLoop::new(
-            Log::default(),
-            TEST_MAX_TASKS,
-            TEST_MAX_TIMERS,
-            TEST_MAX_IO,
-            async |ctx| {
-                let (a, _b) = pair();
-                let read = Box::pin(read_some(ctx, &a));
-                let winner = First(read, ctx.sleep(Duration::from_millis(5))).await;
-                assert_eq!(winner, Winner::B);
-                drop(a);
+        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async |ctx| {
+            let (a, _b) = pair();
+            let winner = First(
+                pin!(read_some(ctx, &a)),
+                ctx.sleep(Duration::from_millis(5)),
+            )
+            .await;
+            assert_eq!(winner, Winner::B);
+            drop(a);
 
-                let (c, d) = pair();
-                ctx.spawn(async move |ctx| {
-                    ctx.sleep(Duration::from_millis(5)).await;
-                    rustix::io::write(&d, b"abc").unwrap();
-                });
-                let n = read_some(ctx, &c).await.unwrap();
-                ctx.dispatch(n as u32);
-            },
-        )
+            let (c, d) = pair();
+            ctx.spawn(async move |ctx| {
+                ctx.sleep(Duration::from_millis(5)).await;
+                rustix::io::write(&d, b"abc").unwrap();
+            });
+            let n = read_some(ctx, &c).await.unwrap();
+            ctx.dispatch(n as u32);
+        },)
         .unwrap();
         run_until_root_finishes(&mut event_loop);
-        assert_eq!(event_loop.state_mut().0, vec![3]);
+        assert_eq!(event_loop.state_mut().events(), [3]);
     }
 
     #[test]
@@ -297,13 +268,14 @@ mod tests {
     fn exceeding_max_io_count_panics() {
         let (a, _b) = pair();
         let (c, _d) = pair();
-        let _ = EventLoop::new(
+        let _ = test_loop!(
             Log::default(),
-            TEST_MAX_TASKS,
-            TEST_MAX_TIMERS,
-            1,
+            Capacities {
+                max_io: 1,
+                ..TEST_CAPACITIES
+            },
             async move |ctx| {
-                First(Box::pin(read_some(ctx, &a)), Box::pin(read_some(ctx, &c))).await;
+                First(pin!(read_some(ctx, &a)), pin!(read_some(ctx, &c))).await;
             },
         );
     }
@@ -311,11 +283,12 @@ mod tests {
     #[test]
     fn sequential_io_reuses_the_slot() {
         let (a, b) = pair();
-        let mut event_loop = EventLoop::new(
+        let mut event_loop = test_loop!(
             Log::default(),
-            TEST_MAX_TASKS,
-            TEST_MAX_TIMERS,
-            1,
+            Capacities {
+                max_io: 1,
+                ..TEST_CAPACITIES
+            },
             async move |ctx| {
                 for _ in 0..3 {
                     let len = read_some(ctx, &a).await.unwrap();
@@ -326,13 +299,13 @@ mod tests {
         )
         .unwrap();
         for i in 1..=3 {
-            rustix::io::write(&b, &vec![0; i]).unwrap();
-            while event_loop.state_mut().0.len() < i {
+            rustix::io::write(&b, &[0; 3][..i]).unwrap();
+            while event_loop.state_mut().events().len() < i {
                 assert!(is_readable(&event_loop, 2000));
                 assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
             }
         }
-        assert_eq!(event_loop.state_mut().0, vec![1, 2, 3]);
+        assert_eq!(event_loop.state_mut().events(), [1, 2, 3]);
         assert_eq!(event_loop.storage().io_count(), 0);
     }
 }

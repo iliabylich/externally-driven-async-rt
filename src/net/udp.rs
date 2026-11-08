@@ -61,53 +61,57 @@ impl UdpSocket {
 #[cfg(test)]
 mod tests {
     use core::future::pending;
-    use std::thread;
+    use core::net::{IpAddr, Ipv4Addr};
+
+    use rustix::net::{AddressFamily, RecvFlags, SendFlags};
 
     use super::*;
-    use crate::EventLoop;
-    use crate::test_utils::{Log, TEST_MAX_IO, TEST_MAX_TASKS, TEST_MAX_TIMERS, run_until_events};
+    use crate::test_utils::{
+        Log, TEST_CAPACITIES, drain_until_readable, raw_socket, run_until_events, test_loop,
+    };
 
-    fn std_echo_peer(datagrams: usize) -> (SocketAddr, thread::JoinHandle<()>) {
-        let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        let addr = socket.local_addr().unwrap();
-        let peer = thread::spawn(move || {
-            let mut buf = [0; 64];
-            for _ in 0..datagrams {
-                let (len, from) = socket.recv_from(&mut buf).unwrap();
-                socket.send_to(&buf[..len], from).unwrap();
-            }
-        });
-        (addr, peer)
+    const LOCALHOST: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+
+    fn raw_peer() -> (OwnedFd, SocketAddr) {
+        let fd = raw_socket(AddressFamily::INET, SocketType::DGRAM);
+        rustix::net::bind(&fd, &LOCALHOST).unwrap();
+        let addr = rustix::net::getsockname(&fd).unwrap().try_into().unwrap();
+        (fd, addr)
     }
 
     #[test]
-    fn round_trip() {
-        let (peer_addr, peer) = std_echo_peer(2);
-        let mut event_loop = EventLoop::new(
-            Log::default(),
-            TEST_MAX_TASKS,
-            TEST_MAX_TIMERS,
-            TEST_MAX_IO,
-            async move |ctx| {
-                let mut socket = UdpSocket::bind("127.0.0.1:0".parse().unwrap()).unwrap();
-                assert!(socket.local_addr().unwrap().port() != 0);
-                let mut buf = [0; 64];
+    fn round_trip_with_a_raw_peer() {
+        let (peer, peer_addr) = raw_peer();
+        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+            let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
+            assert!(socket.local_addr().unwrap().port() != 0);
+            let mut buf = [0; 64];
 
-                assert_eq!(socket.send_to(ctx, b"ping", peer_addr).await.unwrap(), 4);
-                let (len, from) = socket.recv_from(ctx, &mut buf).await.unwrap();
-                assert_eq!((&buf[..len], from), (&b"ping"[..], peer_addr));
+            assert_eq!(socket.send_to(ctx, b"ping", peer_addr).await.unwrap(), 4);
+            let (len, from) = socket.recv_from(ctx, &mut buf).await.unwrap();
+            assert_eq!((&buf[..len], from), (&b"ping"[..], peer_addr));
 
-                socket.connect(peer_addr).unwrap();
-                assert_eq!(socket.send(ctx, b"hello").await.unwrap(), 5);
-                let len = socket.recv(ctx, &mut buf).await.unwrap();
-                assert_eq!(&buf[..len], b"hello");
+            socket.connect(peer_addr).unwrap();
+            assert_eq!(socket.send(ctx, b"hello").await.unwrap(), 5);
+            let len = socket.recv(ctx, &mut buf).await.unwrap();
+            assert_eq!(&buf[..len], b"hello");
 
-                ctx.dispatch(1);
-                pending::<()>().await;
-            },
-        )
+            ctx.dispatch(1);
+            pending::<()>().await;
+        },)
         .unwrap();
+        let mut buf = [0; 64];
+        for expected in [&b"ping"[..], b"hello"] {
+            drain_until_readable(&mut event_loop, &peer);
+            let (len, _, from) =
+                rustix::net::recvfrom(&peer, &mut buf, RecvFlags::empty()).unwrap();
+            assert_eq!(&buf[..len], expected);
+            let from = from.unwrap();
+            assert_eq!(
+                rustix::net::sendto(&peer, &buf[..len], SendFlags::empty(), &from).unwrap(),
+                len
+            );
+        }
         run_until_events(&mut event_loop, 1);
-        peer.join().unwrap();
     }
 }

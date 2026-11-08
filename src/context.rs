@@ -1,12 +1,11 @@
 use core::marker::PhantomData;
 use core::time::Duration;
-use std::time::Instant;
 
+use crate::instant::Instant;
 use crate::join_handle::JoinHandle;
 use crate::sleep::Sleep;
 use crate::state::State;
 use crate::storage::Storage;
-use crate::task::TaskFuture;
 
 pub struct Context<S: State> {
     storage: Storage,
@@ -39,12 +38,8 @@ impl<S: State> Context<S> {
         JoinHandle::new(&self.storage, id)
     }
 
-    pub fn sleep_until(&self, deadline: Instant) -> Sleep<'_> {
-        Sleep::new(&self.storage, deadline)
-    }
-
     pub fn sleep(&self, duration: Duration) -> Sleep<'_> {
-        self.sleep_until(Instant::now() + duration)
+        Sleep::new(&self.storage, Instant::now() + duration)
     }
 }
 
@@ -52,16 +47,14 @@ impl<S: State> Context<S> {
 ///
 /// The returned future must be stored in `storage` (and so dropped before the storage is freed),
 /// and `storage` must have been created with the state type `S`.
-pub(crate) unsafe fn task_future<S, F>(storage: Storage, f: F) -> TaskFuture
+pub(crate) async unsafe fn task_future<S, F>(storage: Storage, f: F)
 where
     S: State,
     F: AsyncFnOnce(&Context<S>) + 'static,
 {
-    Box::pin(async move {
-        let ctx = Context {
-            storage,
-            _state: PhantomData,
-        };
-        f(&ctx).await;
-    })
+    let ctx = Context {
+        storage,
+        _state: PhantomData,
+    };
+    f(&ctx).await;
 }

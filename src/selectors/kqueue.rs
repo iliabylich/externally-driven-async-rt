@@ -1,18 +1,18 @@
 use core::cell::RefCell;
 use core::mem::MaybeUninit;
 use core::time::Duration;
-use std::time::Instant;
 
-use rustix::buffer::spare_capacity;
 use rustix::event::kqueue::{Event, EventFilter, EventFlags, kevent, kqueue};
 use rustix::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use rustix::io::{Errno, FdFlags, fcntl_setfd};
 
 use super::timer::{Timer, TimerChange};
-use super::{Direction, IoAction, IoChange, SelectorEvent, Token};
+use super::{Direction, EVENTS_PER_CALL, IoAction, IoChange, SelectorEvent, Token};
+use crate::instant::Instant;
 
 const TIMER_IDENT: isize = 0;
-const EVENTS_PER_CALL: usize = 64;
+// Small in tests, so a handful of fds exercises submitting more than one changelist.
+const CHANGES_PER_CALL: usize = if cfg!(test) { 4 } else { 64 };
 
 pub(crate) struct Selector {
     kq: OwnedFd,
@@ -33,7 +33,7 @@ impl Selector {
     /// a registration that ends: by the next `flush` its fd may be closed and its number reused
     /// by another socket, whose filter a batched delete would remove. `change.fd` must be open.
     pub(crate) fn apply_now(&self, change: IoChange) -> rustix::io::Result<()> {
-        self.submit(&[change.kevent()])
+        self.submit([change.kevent()])
     }
 
     pub(crate) fn arm_timer(&self, deadline: Instant) {
@@ -44,62 +44,82 @@ impl Selector {
         self.timer.borrow_mut().disarm_in_memory();
     }
 
-    /// Submits `io_changes` and the pending timer change in one changelist. Every fd in
-    /// `io_changes` must be open.
-    pub(crate) fn flush(&self, io_changes: &[IoChange]) -> rustix::io::Result<()> {
-        let mut changes: Vec<Event> = io_changes.iter().map(|change| change.kevent()).collect();
-        if let Some(change) = self.timer.borrow_mut().flush(Instant::now()) {
-            changes.push(change.kevent());
-        }
-        self.submit(&changes)
+    /// Submits `io_changes` and the pending timer change, in changelists of up to
+    /// `CHANGES_PER_CALL` entries. Every fd in `io_changes` must be open.
+    pub(crate) fn flush(
+        &self,
+        io_changes: impl IntoIterator<Item = IoChange>,
+    ) -> rustix::io::Result<()> {
+        let timer_change = self.timer.borrow_mut().flush(Instant::now());
+        let changes = io_changes
+            .into_iter()
+            .map(IoChange::kevent)
+            .chain(timer_change.map(TimerChange::kevent));
+        self.submit(changes)
     }
 
-    pub(crate) fn poll_nonblocking(&self, out: &mut Vec<SelectorEvent>) -> rustix::io::Result<()> {
+    /// Fills `out` with one batch of events, followed by `None`s. Returns whether the batch was
+    /// full, i.e. more events may be pending.
+    pub(crate) fn poll_nonblocking(
+        &self,
+        out: &mut [Option<SelectorEvent>; EVENTS_PER_CALL],
+    ) -> rustix::io::Result<bool> {
         let mut buf = [MaybeUninit::<Event>::uninit(); EVENTS_PER_CALL];
         loop {
             // SAFETY: the changelist is empty, so this call doesn't register any fd.
             let result = unsafe { kevent(&self.kq, &[], &mut buf, Some(Duration::ZERO)) };
-            let (events, _) = match result {
-                Ok(result) => result,
+            match result {
+                Ok((events, _)) => {
+                    let full = events.len() == EVENTS_PER_CALL;
+                    let mut translated = events.iter().filter_map(|event| self.consume(event));
+                    out.fill_with(|| translated.next());
+                    return Ok(full);
+                }
                 Err(Errno::INTR) => continue,
                 Err(errno) => return Err(errno),
-            };
-            let count = events.len();
-            for event in events.iter() {
-                if let Some(event) = self.consume(event) {
-                    out.push(event);
-                }
             }
-            if count < EVENTS_PER_CALL {
+        }
+    }
+
+    fn submit(&self, changes: impl IntoIterator<Item = Event>) -> rustix::io::Result<()> {
+        let mut changes = changes.into_iter();
+        // Only the first `len` entries are ever submitted, the filler is never read.
+        let mut list = [TimerChange::Disarm.kevent(); CHANGES_PER_CALL];
+        let mut receipts = [MaybeUninit::<Event>::uninit(); CHANGES_PER_CALL];
+        loop {
+            let mut len = 0;
+            // `zip` pulls from `list` first, so no change is taken without a free entry for it.
+            for (entry, change) in list.iter_mut().zip(&mut changes) {
+                *entry = change;
+                len += 1;
+            }
+            if len == 0 {
+                return Ok(());
+            }
+            self.submit_list(&list[..len], &mut receipts)?;
+            if len < CHANGES_PER_CALL {
                 return Ok(());
             }
         }
     }
 
-    fn submit(&self, changes: &[Event]) -> rustix::io::Result<()> {
-        if changes.is_empty() {
-            return Ok(());
-        }
-        let mut receipts = Vec::with_capacity(changes.len());
+    fn submit_list(
+        &self,
+        changes: &[Event],
+        receipts: &mut [MaybeUninit<Event>; CHANGES_PER_CALL],
+    ) -> rustix::io::Result<()> {
         // SAFETY: the callers (`flush`, `apply_now`) only pass open fds, and a filter is deleted
         // (`apply_now`) before its registration ends and the fd can be closed, so the kqueue
         // never refers to an invalid fd.
-        let result = unsafe {
-            kevent(
-                &self.kq,
-                changes,
-                spare_capacity(&mut receipts),
-                Some(Duration::ZERO),
-            )
-        };
-        match result {
-            Ok(_) => {}
+        let result = unsafe { kevent(&self.kq, changes, receipts, Some(Duration::ZERO)) };
+        let receipts = match result {
+            Ok((receipts, _)) => receipts,
             // kevent applies the whole changelist before it can be interrupted (documented on
             // FreeBSD, relied upon by mio), so EINTR here means the changes are in place.
             Err(Errno::INTR) => return Ok(()),
             Err(errno) => return Err(errno),
-        }
-        for receipt in &receipts {
+        };
+        for receipt in receipts.iter() {
             match receipt.data() {
                 0 => {}
                 errno if errno == i64::from(Errno::NOENT.raw_os_error()) => {}

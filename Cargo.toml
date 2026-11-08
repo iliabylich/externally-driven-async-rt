@@ -5,4 +5,4 @@ edition = "2024"
 rust-version = "1.99"
 
 [dependencies]
-rustix = { version = "1", features = ["event", "net"] }
+rustix = { version = "1", default-features = false, features = ["event", "net"] }

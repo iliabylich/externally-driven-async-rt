@@ -1,156 +1,108 @@
+use core::ptr::NonNull;
 use core::task::{RawWaker, RawWakerVTable, Waker};
-use std::thread::{self, ThreadId};
 
-use crate::ready::ReadyQueue;
+use crate::ready::{Link, ReadyQueue};
 use crate::storage::TaskId;
+use crate::thread_id::ThreadId;
 
-#[derive(Clone, Copy)]
-struct WakerData {
-    ready: *const ReadyQueue,
-    task: TaskId,
-    thread: ThreadId,
-}
-
-static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop_waker);
+// The data pointer is the task's `Link` in the ready queue: nothing is owned, so `wake` and
+// `wake_by_ref` are the same and dropping is a no-op.
+static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake, drop_waker);
 
 /// # Safety
 ///
 /// `ready` must stay valid for as long as the waker (or any of its clones) may be woken.
 /// Clones may be dropped at any time, from any thread.
-pub(crate) unsafe fn new_waker(ready: *const ReadyQueue, task: TaskId) -> Waker {
-    let data = WakerData {
-        ready,
-        task,
-        thread: thread::current().id(),
-    };
-    // SAFETY: the vtable functions below uphold the `RawWaker` contract for a pointer
-    // created by `into_raw`.
-    unsafe { Waker::from_raw(into_raw(data)) }
-}
-
-fn into_raw(data: WakerData) -> RawWaker {
-    RawWaker::new(Box::into_raw(Box::new(data)).cast(), &VTABLE)
+pub(crate) unsafe fn new_waker(ready: &ReadyQueue, task: TaskId) -> Waker {
+    let link = ready.link(task.slot());
+    // SAFETY: the vtable functions below uphold the `RawWaker` contract for a pointer from
+    // `ReadyQueue::link`, which the caller keeps valid while the waker may be woken.
+    unsafe { Waker::from_raw(RawWaker::new(link.as_ptr().cast_const().cast(), &VTABLE)) }
 }
 
 unsafe fn clone(ptr: *const ()) -> RawWaker {
-    // SAFETY: `ptr` was created by `into_raw` and is still alive (it's being cloned).
-    into_raw(unsafe { *ptr.cast::<WakerData>() })
+    RawWaker::new(ptr, &VTABLE)
 }
 
 unsafe fn wake(ptr: *const ()) {
-    // SAFETY: `ptr` was created by `into_raw`; `wake` consumes it. Owning the box before the
-    // thread check frees it even if the check panics.
-    let data = unsafe { Box::from_raw(ptr.cast::<WakerData>().cast_mut()) };
-    push(*data);
-}
-
-unsafe fn wake_by_ref(ptr: *const ()) {
-    // SAFETY: `ptr` was created by `into_raw` and is still alive.
-    push(unsafe { *ptr.cast::<WakerData>() });
-}
-
-fn push(data: WakerData) {
-    if data.thread != thread::current().id() {
+    // SAFETY: `ptr` comes from `ReadyQueue::link` in `new_waker`, which is non-null.
+    let link = unsafe { NonNull::new_unchecked(ptr.cast::<Link>().cast_mut()) };
+    // SAFETY: `new_waker`'s caller guarantees the queue is alive while wakers may be woken.
+    if unsafe { ReadyQueue::thread_of(link) } != ThreadId::current() {
         panic!("a Waker must only be woken on the thread of its EventLoop");
     }
-    // SAFETY: `new_waker`'s caller guarantees `ready` is valid while wakers may be woken, and
-    // we are on the loop's thread, so nothing else accesses it concurrently.
-    unsafe { (*data.ready).push(data.task) };
+    // SAFETY: as above, and we are on the queue's thread (checked right above).
+    unsafe { ReadyQueue::push_link(link) };
 }
 
-unsafe fn drop_waker(ptr: *const ()) {
-    // SAFETY: `ptr` was created by `into_raw` and is dropped exactly once. Only the box is
-    // freed, the loop is never touched, so this is fine on any thread.
-    drop(unsafe { Box::from_raw(ptr.cast::<WakerData>().cast_mut()) });
-}
+unsafe fn drop_waker(_: *const ()) {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::TestStorage;
+    use crate::test_utils::{TestStorage, assert_yields, stack_memory};
+    use core::mem::MaybeUninit;
 
-    fn storage_with_task() -> (TestStorage, TaskId) {
-        let storage = TestStorage::new(2, 1, 1);
-        let task = storage
-            .storage()
-            .insert_task(Box::pin(async {}))
-            .ok()
-            .unwrap();
+    fn storage_with_task(memory: &mut [MaybeUninit<u8>]) -> (TestStorage<'_>, TaskId) {
+        let storage = TestStorage::new(memory, 2, 1, 1);
+        let task = storage.storage().insert_task(async {}).ok().unwrap();
         (storage, task)
     }
 
-    fn queued(storage: &TestStorage) -> Vec<TaskId> {
-        core::iter::from_fn(|| storage.ready().pop()).collect()
+    fn queued<'a>(storage: &'a TestStorage<'_>) -> impl Iterator<Item = TaskId> + 'a {
+        core::iter::from_fn(|| storage.ready().pop())
     }
 
     #[test]
     fn waking_pushes_the_task() {
-        let (storage, task) = storage_with_task();
+        let mut memory = stack_memory();
+        let (storage, task) = storage_with_task(&mut memory);
         // SAFETY: `storage` outlives the waker.
         let waker = unsafe { new_waker(storage.ready(), task) };
         waker.wake_by_ref();
-        assert_eq!(queued(&storage), vec![task]);
+        assert_yields(queued(&storage), [task]);
         let clone = waker.clone();
         drop(waker);
         clone.wake();
-        assert_eq!(queued(&storage), vec![task]);
+        assert_yields(queued(&storage), [task]);
     }
 
     #[test]
     fn duplicate_wakes_queue_the_task_once() {
-        let (storage, task) = storage_with_task();
+        let mut memory = stack_memory();
+        let (storage, task) = storage_with_task(&mut memory);
         // SAFETY: `storage` outlives the waker.
         let waker = unsafe { new_waker(storage.ready(), task) };
         waker.wake_by_ref();
         waker.wake_by_ref();
         waker.wake();
-        assert_eq!(queued(&storage), vec![task]);
+        assert_yields(queued(&storage), [task]);
     }
 
     #[test]
     fn waking_after_the_storage_was_mutated() {
-        let (storage, task) = storage_with_task();
+        let mut memory = stack_memory();
+        let (storage, task) = storage_with_task(&mut memory);
         // SAFETY: `storage` outlives the waker.
         let waker = unsafe { new_waker(storage.ready(), task) };
-        let other = storage
-            .storage()
-            .insert_task(Box::pin(async {}))
-            .ok()
-            .unwrap();
+        let other = storage.storage().insert_task(async {}).ok().unwrap();
         storage
             .storage()
-            .alloc_timer(std::time::Instant::now(), Waker::noop().clone());
+            .alloc_timer(crate::instant::Instant::now(), Waker::noop().clone());
         waker.wake_by_ref();
         storage.storage().remove_task(other);
         waker.wake();
-        assert_eq!(queued(&storage), vec![task]);
+        assert_yields(queued(&storage), [task]);
     }
 
     #[test]
     fn dropping_does_not_wake() {
-        let (storage, task) = storage_with_task();
+        let mut memory = stack_memory();
+        let (storage, task) = storage_with_task(&mut memory);
         // SAFETY: `storage` outlives the waker.
         let waker = unsafe { new_waker(storage.ready(), task) };
         drop(waker.clone());
         drop(waker);
-        assert!(storage.ready().is_empty());
-    }
-
-    #[test]
-    fn dropping_on_another_thread_is_fine() {
-        let (storage, task) = storage_with_task();
-        // SAFETY: `storage` outlives the waker.
-        let waker = unsafe { new_waker(storage.ready(), task) };
-        thread::spawn(move || drop(waker.clone())).join().unwrap();
-    }
-
-    #[test]
-    fn waking_on_another_thread_panics() {
-        let (storage, task) = storage_with_task();
-        // SAFETY: `storage` outlives the waker.
-        let waker = unsafe { new_waker(storage.ready(), task) };
-        let result = thread::spawn(move || waker.wake()).join();
-        assert!(result.is_err());
         assert!(storage.ready().is_empty());
     }
 }

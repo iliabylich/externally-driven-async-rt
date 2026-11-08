@@ -3,16 +3,18 @@ use core::net::SocketAddr;
 use core::time::Duration;
 
 use externally_driven_async_rt::net::{TcpListener, TcpStream};
-use externally_driven_async_rt::{Context, Error, EventLoop, State};
+use externally_driven_async_rt::{Capacities, Context, Error, EventLoop, State};
 
-const MAX_TASKS: usize = 1024;
-
-const MAX_TIMERS: usize = 4;
-
-const MAX_IO: usize = 1024;
+const CAPACITIES: Capacities = Capacities {
+    max_tasks: 1024,
+    max_task_size: 4096,
+    max_timers: 4,
+    max_io: 1024,
+};
 
 type ServerContext = Context<Server>;
 use rustix::event::{PollFd, PollFlags, poll};
+use rustix::fd::BorrowedFd;
 use rustix::io::Errno;
 
 #[derive(Default)]
@@ -130,7 +132,7 @@ enum Command {
 // Reads stdin with a raw `read` (not std's buffered reader, which could swallow lines that `poll`
 // then never reports again) and turns every complete line into a command.
 fn read_commands(
-    stdin: &std::io::Stdin,
+    stdin: BorrowedFd<'_>,
     pending: &mut Vec<u8>,
     commands: &mut Vec<Command>,
 ) -> rustix::io::Result<()> {
@@ -157,20 +159,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(arg) => arg.parse()?,
         None => "127.0.0.1:7878".parse()?,
     };
-    let mut event_loop = EventLoop::new(
-        Server::default(),
-        MAX_TASKS,
-        MAX_TIMERS,
-        MAX_IO,
-        async move |ctx| {
-            accept_loop(ctx, addr).await;
-        },
-    )?;
+    let root = async move |ctx: &ServerContext| {
+        accept_loop(ctx, addr).await;
+    };
+    // The loop's memory lives as long as the process, so it's simply leaked.
+    let size = EventLoop::<Server>::required_size(CAPACITIES, &root);
+    let memory = Box::leak(Box::new_uninit_slice(size));
+    let mut event_loop = EventLoop::new(memory, Server::default(), CAPACITIES, root)?;
     for line in mem::take(&mut event_loop.state_mut().log) {
         println!("{line}");
     }
     println!("commands: stats, quit");
-    let stdin = std::io::stdin();
+    // rustix is built without `std`, so its fd types aren't std's: stdin is borrowed by number.
+    // SAFETY: fd 0 is stdin, which stays open for the whole process.
+    let stdin = unsafe { BorrowedFd::borrow_raw(0) };
     let mut pending = Vec::new();
     let mut commands = Vec::new();
 
@@ -183,7 +185,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match poll(&mut fds, None) {
                 Ok(_) => {}
                 Err(Errno::INTR) => continue,
-                Err(errno) => return Err(errno.into()),
+                Err(errno) => return Err(errno.to_string().into()),
             }
             (!fds[0].revents().is_empty(), !fds[1].revents().is_empty())
         };
@@ -201,9 +203,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if stdin_ready {
-            match read_commands(&stdin, &mut pending, &mut commands) {
+            match read_commands(stdin, &mut pending, &mut commands) {
                 Ok(()) | Err(Errno::INTR) => {}
-                Err(errno) => return Err(errno.into()),
+                Err(errno) => return Err(errno.to_string().into()),
             }
             for command in commands.drain(..) {
                 match command {

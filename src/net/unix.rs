@@ -134,24 +134,68 @@ impl UnixDatagram {
 
 #[cfg(test)]
 mod tests {
+    use core::ffi::{CStr, c_char};
     use core::future::pending;
-    use std::io::{Read, Write};
-    use std::path::{Path, PathBuf};
-    use std::sync::mpsc;
-    use std::thread;
+
+    use rustix::net::{AddressFamily, RecvFlags, SendFlags};
 
     use super::*;
-    use crate::EventLoop;
-    use crate::test_utils::{Log, TEST_MAX_IO, TEST_MAX_TASKS, TEST_MAX_TIMERS, run_until_events};
+    use crate::test_utils::{
+        Log, TEST_CAPACITIES, drain_until_readable, peer_read_exact, raw_accept, raw_socket,
+        run_until_events, test_loop,
+    };
 
-    fn temp_path(name: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!("edar-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        path
+    // SAFETY: match `pid_t getpid(void)` and `int unlink(const char *)` from libc (`pid_t` is
+    // `i32` on macOS).
+    unsafe extern "C" {
+        safe fn getpid() -> i32;
+        fn unlink(path: *const c_char) -> i32;
     }
 
-    fn addr(path: &Path) -> SocketAddrUnix {
-        SocketAddrUnix::new(path).unwrap()
+    // `/tmp/edar-<pid>-<name>`, removed before use (left over from a killed run) and on drop.
+    struct TempPath {
+        bytes: [u8; 104],
+    }
+
+    impl TempPath {
+        fn new(name: &str) -> Self {
+            let mut bytes = [0; 104];
+            let mut len = 0;
+            let mut push = |part: &[u8]| {
+                bytes[len..len + part.len()].copy_from_slice(part);
+                len += part.len();
+            };
+            push(b"/tmp/edar-");
+            let pid = getpid().unsigned_abs();
+            let digits = pid.checked_ilog10().unwrap_or(0) + 1;
+            for i in (0..digits).rev() {
+                push(&[b'0' + (pid / 10u32.pow(i) % 10) as u8]);
+            }
+            push(b"-");
+            push(name.as_bytes());
+            let path = Self { bytes };
+            path.unlink();
+            path
+        }
+
+        fn as_c_str(&self) -> &CStr {
+            CStr::from_bytes_until_nul(&self.bytes).unwrap()
+        }
+
+        fn addr(&self) -> SocketAddrUnix {
+            SocketAddrUnix::new(self.as_c_str()).unwrap()
+        }
+
+        fn unlink(&self) {
+            // SAFETY: a valid nul-terminated path. Failing (nothing to remove) is fine.
+            unsafe { unlink(self.as_c_str().as_ptr()) };
+        }
+    }
+
+    impl Drop for TempPath {
+        fn drop(&mut self) {
+            self.unlink();
+        }
     }
 
     fn path_of(addr: &SocketAddrUnix) -> &[u8] {
@@ -159,165 +203,128 @@ mod tests {
     }
 
     #[test]
-    fn stream_echo_with_a_std_server() {
-        let path = temp_path("stream-echo");
-        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut buf = [0; 64];
-            loop {
-                let len = stream.read(&mut buf).unwrap();
-                if len == 0 {
-                    return;
-                }
-                stream.write_all(&buf[..len]).unwrap();
+    fn stream_echo_with_a_raw_peer() {
+        let path = TempPath::new("stream-echo");
+        let server_addr = path.addr();
+        let listener = raw_socket(AddressFamily::UNIX, SocketType::STREAM);
+        rustix::net::bind(&listener, &server_addr).unwrap();
+        rustix::net::listen(&listener, 1).unwrap();
+        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+            let mut stream = UnixStream::connect(ctx, &server_addr).await.unwrap();
+            assert_eq!(path_of(&stream.peer_addr().unwrap()), path_of(&server_addr));
+            assert!(path_of(&stream.local_addr().unwrap()).is_empty());
+            stream.write(ctx, b"hello").await.unwrap();
+            let mut buf = [0; 5];
+            let mut len = 0;
+            while len < 5 {
+                len += stream.read(ctx, &mut buf[len..]).await.unwrap();
             }
-        });
-        let server_addr = addr(&path);
-        let mut event_loop = EventLoop::new(
-            Log::default(),
-            TEST_MAX_TASKS,
-            TEST_MAX_TIMERS,
-            TEST_MAX_IO,
-            async move |ctx| {
-                let mut stream = UnixStream::connect(ctx, &server_addr).await.unwrap();
-                assert_eq!(path_of(&stream.peer_addr().unwrap()), path_of(&server_addr));
-                assert!(path_of(&stream.local_addr().unwrap()).is_empty());
-                stream.write(ctx, b"hello").await.unwrap();
-                let mut buf = [0; 5];
-                let mut len = 0;
-                while len < 5 {
-                    len += stream.read(ctx, &mut buf[len..]).await.unwrap();
-                }
-                assert_eq!(&buf, b"hello");
-                stream.shutdown(Shutdown::Write).unwrap();
-                assert_eq!(stream.read(ctx, &mut buf).await.unwrap(), 0);
-                ctx.dispatch(1);
-                pending::<()>().await;
-            },
-        )
+            assert_eq!(&buf, b"hello");
+            stream.shutdown(Shutdown::Write).unwrap();
+            assert_eq!(stream.read(ctx, &mut buf).await.unwrap(), 0);
+            ctx.dispatch(1);
+            pending::<()>().await;
+        },)
         .unwrap();
+        let peer = raw_accept(&listener);
+        let mut buf = [0; 5];
+        peer_read_exact(&mut event_loop, &peer, &mut buf);
+        assert_eq!(&buf, b"hello");
+        assert_eq!(rustix::io::write(&peer, &buf).unwrap(), 5);
+        drain_until_readable(&mut event_loop, &peer);
+        assert_eq!(rustix::io::read(&peer, &mut buf).unwrap(), 0, "no EOF");
+        drop(peer);
         run_until_events(&mut event_loop, 1);
-        server.join().unwrap();
-        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
-    fn listener_accepts_a_std_client() {
-        let path = temp_path("listener");
-        let (ready_tx, ready_rx) = mpsc::channel();
-        let client_path = path.clone();
-        let client = thread::spawn(move || {
-            ready_rx.recv().unwrap();
-            let mut stream = std::os::unix::net::UnixStream::connect(&client_path).unwrap();
-            stream.write_all(b"ping").unwrap();
+    fn listener_accepts_a_raw_client() {
+        let path = TempPath::new("listener");
+        let listener_addr = path.addr();
+        let mut listener = UnixListener::bind(&listener_addr).unwrap();
+        assert_eq!(
+            path_of(&listener.local_addr().unwrap()),
+            path_of(&listener_addr)
+        );
+        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+            let (mut stream, peer) = listener.accept(ctx).await.unwrap();
+            assert!(path_of(&peer).is_empty());
             let mut buf = [0; 4];
-            stream.read_exact(&mut buf).unwrap();
-            assert_eq!(&buf, b"pong");
-        });
-        let listener_addr = addr(&path);
-        let mut event_loop = EventLoop::new(
-            Log::default(),
-            TEST_MAX_TASKS,
-            TEST_MAX_TIMERS,
-            TEST_MAX_IO,
-            async move |ctx| {
-                let mut listener = UnixListener::bind(&listener_addr).unwrap();
-                assert_eq!(
-                    path_of(&listener.local_addr().unwrap()),
-                    path_of(&listener_addr)
-                );
-                ready_tx.send(()).unwrap();
-                let (mut stream, peer) = listener.accept(ctx).await.unwrap();
-                assert!(path_of(&peer).is_empty());
-                let mut buf = [0; 4];
-                let mut len = 0;
-                while len < 4 {
-                    len += stream.read(ctx, &mut buf[len..]).await.unwrap();
-                }
-                assert_eq!(&buf, b"ping");
-                stream.write(ctx, b"pong").await.unwrap();
-                ctx.dispatch(1);
-                pending::<()>().await;
-            },
-        )
+            let mut len = 0;
+            while len < 4 {
+                len += stream.read(ctx, &mut buf[len..]).await.unwrap();
+            }
+            assert_eq!(&buf, b"ping");
+            stream.write(ctx, b"pong").await.unwrap();
+            ctx.dispatch(1);
+            pending::<()>().await;
+        },)
         .unwrap();
+        let client = raw_socket(AddressFamily::UNIX, SocketType::STREAM);
+        rustix::net::connect(&client, &path.addr()).unwrap();
+        assert_eq!(rustix::io::write(&client, b"ping").unwrap(), 4);
         run_until_events(&mut event_loop, 1);
-        client.join().unwrap();
-        std::fs::remove_file(&path).unwrap();
+        let mut buf = [0; 4];
+        peer_read_exact(&mut event_loop, &client, &mut buf);
+        assert_eq!(&buf, b"pong");
     }
 
     #[test]
-    fn datagram_round_trip_with_a_std_peer() {
-        let ours = temp_path("dgram-ours");
-        let theirs = temp_path("dgram-theirs");
-        let peer_socket = std::os::unix::net::UnixDatagram::bind(&theirs).unwrap();
-        let expected_from = ours.clone();
-        let peer = thread::spawn(move || {
+    fn datagram_round_trip_with_a_raw_peer() {
+        let ours = TempPath::new("dgram-ours");
+        let theirs = TempPath::new("dgram-theirs");
+        let (ours_addr, theirs_addr) = (ours.addr(), theirs.addr());
+        let peer = raw_socket(AddressFamily::UNIX, SocketType::DGRAM);
+        rustix::net::bind(&peer, &theirs_addr).unwrap();
+        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+            let mut socket = UnixDatagram::bind(&ours_addr).unwrap();
+            assert_eq!(path_of(&socket.local_addr().unwrap()), path_of(&ours_addr));
             let mut buf = [0; 64];
-            for _ in 0..2 {
-                let (len, from) = peer_socket.recv_from(&mut buf).unwrap();
-                assert_eq!(from.as_pathname(), Some(expected_from.as_path()));
-                peer_socket
-                    .send_to(&buf[..len], from.as_pathname().unwrap())
-                    .unwrap();
-            }
-        });
-        let (ours_addr, theirs_addr) = (addr(&ours), addr(&theirs));
-        let mut event_loop = EventLoop::new(
-            Log::default(),
-            TEST_MAX_TASKS,
-            TEST_MAX_TIMERS,
-            TEST_MAX_IO,
-            async move |ctx| {
-                let mut socket = UnixDatagram::bind(&ours_addr).unwrap();
-                assert_eq!(path_of(&socket.local_addr().unwrap()), path_of(&ours_addr));
-                let mut buf = [0; 64];
 
-                socket.send_to(ctx, b"ping", &theirs_addr).await.unwrap();
-                let (len, from) = socket.recv_from(ctx, &mut buf).await.unwrap();
-                assert_eq!(&buf[..len], b"ping");
-                assert_eq!(path_of(&from), path_of(&theirs_addr));
+            socket.send_to(ctx, b"ping", &theirs_addr).await.unwrap();
+            let (len, from) = socket.recv_from(ctx, &mut buf).await.unwrap();
+            assert_eq!(&buf[..len], b"ping");
+            assert_eq!(path_of(&from), path_of(&theirs_addr));
 
-                socket.connect(&theirs_addr).unwrap();
-                socket.send(ctx, b"hello").await.unwrap();
-                let len = socket.recv(ctx, &mut buf).await.unwrap();
-                assert_eq!(&buf[..len], b"hello");
+            socket.connect(&theirs_addr).unwrap();
+            socket.send(ctx, b"hello").await.unwrap();
+            let len = socket.recv(ctx, &mut buf).await.unwrap();
+            assert_eq!(&buf[..len], b"hello");
 
-                ctx.dispatch(1);
-                pending::<()>().await;
-            },
-        )
+            ctx.dispatch(1);
+            pending::<()>().await;
+        },)
         .unwrap();
+        let mut buf = [0; 64];
+        for expected in [&b"ping"[..], b"hello"] {
+            drain_until_readable(&mut event_loop, &peer);
+            let (len, _, from) =
+                rustix::net::recvfrom(&peer, &mut buf, RecvFlags::empty()).unwrap();
+            assert_eq!(&buf[..len], expected);
+            let from = SocketAddrUnix::try_from(from.unwrap()).unwrap();
+            assert_eq!(path_of(&from), path_of(&ours.addr()));
+            let sent = rustix::net::sendto(&peer, &buf[..len], SendFlags::empty(), &from).unwrap();
+            assert_eq!(sent, len);
+        }
         run_until_events(&mut event_loop, 1);
-        peer.join().unwrap();
-        std::fs::remove_file(&ours).unwrap();
-        std::fs::remove_file(&theirs).unwrap();
     }
 
     #[test]
     fn unbound_datagram_sender_has_an_unnamed_address() {
-        let path = temp_path("dgram-unbound");
-        let bound_addr = addr(&path);
-        let mut event_loop = EventLoop::new(
-            Log::default(),
-            TEST_MAX_TASKS,
-            TEST_MAX_TIMERS,
-            TEST_MAX_IO,
-            async move |ctx| {
-                let mut bound = UnixDatagram::bind(&bound_addr).unwrap();
-                let mut unbound = UnixDatagram::unbound().unwrap();
-                unbound.send_to(ctx, b"hi", &bound_addr).await.unwrap();
-                let mut buf = [0; 8];
-                let (len, from) = bound.recv_from(ctx, &mut buf).await.unwrap();
-                assert_eq!(&buf[..len], b"hi");
-                assert!(path_of(&from).is_empty());
-                ctx.dispatch(1);
-                pending::<()>().await;
-            },
-        )
+        let path = TempPath::new("dgram-unbound");
+        let bound_addr = path.addr();
+        let mut event_loop = test_loop!(Log::default(), TEST_CAPACITIES, async move |ctx| {
+            let mut bound = UnixDatagram::bind(&bound_addr).unwrap();
+            let mut unbound = UnixDatagram::unbound().unwrap();
+            unbound.send_to(ctx, b"hi", &bound_addr).await.unwrap();
+            let mut buf = [0; 8];
+            let (len, from) = bound.recv_from(ctx, &mut buf).await.unwrap();
+            assert_eq!(&buf[..len], b"hi");
+            assert!(path_of(&from).is_empty());
+            ctx.dispatch(1);
+            pending::<()>().await;
+        },)
         .unwrap();
         run_until_events(&mut event_loop, 1);
-        std::fs::remove_file(&path).unwrap();
     }
 }
