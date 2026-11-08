@@ -35,13 +35,16 @@ unsafe fn clone<const N: usize>(ptr: *const ()) -> RawWaker {
 
 unsafe fn wake<const N: usize>(ptr: *const ()) {
     // SAFETY: `ptr` comes from `ReadyQueue::link` in `new_waker`, which is non-null.
-    let link = unsafe { NonNull::new_unchecked(ptr.cast::<Link<N>>().cast_mut()) };
-    // SAFETY: `new_waker`'s caller guarantees the queue is alive while wakers may be woken.
-    if unsafe { ReadyQueue::thread_of(link) } != ThreadId::current() {
-        panic!("a Waker must only be woken on the thread of its EventLoop");
-    }
-    // SAFETY: as above, and we are on the queue's thread (checked right above).
-    unsafe { ReadyQueue::push_link(link) };
+    let link = unsafe { NonNull::new_unchecked(ptr.cast::<Link>().cast_mut()) };
+    // SAFETY: `new_waker`'s caller guarantees the queue is alive while wakers may be woken, and
+    // only `thread` is accessed before it's checked.
+    let (queue, slot) = unsafe { ReadyQueue::<N>::of_link(link) };
+    assert_eq!(
+        queue.thread,
+        ThreadId::current(),
+        "a Waker must only be woken on the thread of its EventLoop"
+    );
+    queue.push(slot);
 }
 
 unsafe fn drop_waker(_: *const ()) {}

@@ -13,7 +13,7 @@ fn alloc<T: Default, const N: usize>(
     Some(index)
 }
 
-fn value<T: Copy, const N: usize>(
+fn value<T: Copy + Default, const N: usize>(
     pool: &ObjectPool<Cell<T>, N>,
     index: Index<Cell<T>>,
 ) -> Option<T> {
@@ -78,12 +78,6 @@ fn full_pool_rejects_alloc() {
     let pool = ObjectPool::<Cell<u32>, 1>::init(&mut place);
     alloc(pool, 1).unwrap();
     assert!(pool.alloc().is_none());
-}
-
-#[test]
-#[should_panic(expected = "object pool capacity must not be zero")]
-fn zero_capacity_is_rejected() {
-    ObjectPool::<Cell<u32>, 0>::init(&mut MaybeUninit::uninit());
 }
 
 #[test]

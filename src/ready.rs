@@ -1,9 +1,12 @@
-use core::{cell::Cell, mem::MaybeUninit, ptr::NonNull};
+use core::{
+    cell::Cell,
+    mem::{MaybeUninit, offset_of},
+    ptr::NonNull,
+};
 
 use crate::{storage::TaskId, thread_id::ThreadId};
 
-pub(crate) struct Link<const N: usize> {
-    queue: NonNull<ReadyQueue<N>>,
+pub(crate) struct Link {
     slot: u32,
     generation: Cell<Option<u32>>,
     queued: Cell<bool>,
@@ -11,17 +14,23 @@ pub(crate) struct Link<const N: usize> {
 }
 
 pub(crate) struct ReadyQueue<const N: usize> {
-    thread: ThreadId,
+    pub(crate) thread: ThreadId,
     head: Cell<Option<u32>>,
     tail: Cell<Option<u32>>,
-    links: [Link<N>; N],
+    links: [Link; N],
 }
 
 impl<const N: usize> ReadyQueue<N> {
     pub(crate) fn init(place: &mut MaybeUninit<Self>) -> &Self {
+        const {
+            assert!(N > 0, "ready queue capacity must not be zero");
+            assert!(
+                N <= u32::MAX as usize,
+                "ready queue capacity must fit in u32"
+            );
+        }
+
         let ptr = place.as_mut_ptr();
-        // SAFETY: from the reference `place`.
-        let queue = unsafe { NonNull::new_unchecked(ptr) };
         // SAFETY: `ptr` points to `place`, borrowed exclusively until the end; the fields are
         // disjoint, `&raw mut` creates no reference to them while they're uninitialized, and
         // `MaybeUninit<T>` has `T`'s layout.
@@ -38,41 +47,47 @@ impl<const N: usize> ReadyQueue<N> {
         tail.write(Cell::new(None::<u32>));
         for (slot, link) in links.iter_mut().enumerate() {
             link.write(Link {
-                queue,
                 slot: slot as u32,
                 generation: Cell::new(None),
                 queued: Cell::new(false),
                 next: Cell::new(None),
             });
         }
-        // SAFETY: every field was written above. Derived from `ptr`, like the links' `queue`.
-        unsafe { queue.as_ref() }
+        // SAFETY: every field was written above.
+        unsafe { place.assume_init_ref() }
     }
 
-    pub(crate) fn link(&self, slot: u32) -> NonNull<Link<N>> {
-        NonNull::from(&self.links[slot as usize])
+    pub(crate) fn link(&self, slot: u32) -> NonNull<Link> {
+        assert!((slot as usize) < N, "slot {slot} is out of bounds");
+        // SAFETY: `links[slot]` is inside `self`; the pointer is derived from all of `self` (not
+        // just the link) so that `of_link` may step back to the queue from it.
+        unsafe {
+            NonNull::from(self)
+                .byte_add(offset_of!(Self, links))
+                .cast::<Link>()
+                .add(slot as usize)
+        }
     }
 
     /// # Safety
     ///
-    /// `link` must come from `Self::link` of a queue that is still alive.
-    pub(crate) unsafe fn thread_of(link: NonNull<Link<N>>) -> ThreadId {
-        // SAFETY: the caller guarantees the queue is alive. Only `queue` and `thread` are read,
-        // through raw pointers (no reference to the `Cell`s that the owning thread may be
-        // mutating), and neither is written after `init`, so this doesn't race.
-        unsafe { (*(*link.as_ptr()).queue.as_ptr()).thread }
-    }
-
-    /// # Safety
-    ///
-    /// `link` must come from `Self::link` of a queue that is still alive, and this must run on
-    /// the queue's thread (see `thread_of`).
-    pub(crate) unsafe fn push_link(link: NonNull<Link<N>>) {
-        // SAFETY: the caller guarantees the queue is alive and that this runs on its thread, so
-        // nothing accesses it concurrently.
-        let link = unsafe { link.as_ref() };
-        // SAFETY: as above, `queue` points to the live queue that contains `link`.
-        unsafe { link.queue.as_ref() }.push(link.slot);
+    /// `link` must come from `Self::link` of a queue that stays alive for `'a`. Until `thread` is
+    /// checked to be the current thread, nothing but `thread` may be accessed through the queue.
+    pub(crate) unsafe fn of_link<'a>(link: NonNull<Link>) -> (&'a Self, u32) {
+        // SAFETY: the caller guarantees the queue is alive; `slot` isn't written after `init`, and
+        // it's read through a raw pointer, so no reference to the link's `Cell`s is created.
+        let slot = unsafe { (*link.as_ptr()).slot };
+        // SAFETY: `link` points to `links[slot]` of the queue and carries the provenance of the
+        // whole queue (see `link`), so stepping back by its offset stays inside the queue, which
+        // the caller keeps alive for `'a`. Creating the reference reads only the fields outside
+        // `Cell`s (`thread` and the links' `slot`), none of which is written after `init`, so it
+        // doesn't race with the queue's thread.
+        let queue = unsafe {
+            link.byte_sub(offset_of!(Self, links) + slot as usize * size_of::<Link>())
+                .cast::<Self>()
+                .as_ref()
+        };
+        (queue, slot)
     }
 
     pub(crate) fn track(&self, id: TaskId) {

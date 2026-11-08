@@ -75,7 +75,7 @@ struct Slot<T> {
     value: T,
 }
 
-pub(crate) struct ObjectPool<T, const N: usize> {
+pub(crate) struct ObjectPool<T: Default, const N: usize> {
     free_head: Cell<Option<u32>>,
     occupied_head: Cell<Option<u32>>,
     slots: [Slot<T>; N],
@@ -83,11 +83,14 @@ pub(crate) struct ObjectPool<T, const N: usize> {
 
 impl<T: Default, const N: usize> ObjectPool<T, N> {
     pub(crate) fn init(place: &mut MaybeUninit<Self>) -> &Self {
-        assert!(N > 0, "object pool capacity must not be zero");
-        assert!(
-            N <= u32::MAX as usize,
-            "object pool capacity must fit in u32"
-        );
+        const {
+            assert!(N > 0, "object pool capacity must not be zero");
+            assert!(
+                N <= u32::MAX as usize,
+                "object pool capacity must fit in u32"
+            );
+        }
+
         let ptr = place.as_mut_ptr();
         // SAFETY: `ptr` points to `place`, borrowed exclusively until the end; the fields are
         // disjoint, `&raw mut` creates no reference to them while they're uninitialized, and
@@ -116,9 +119,7 @@ impl<T: Default, const N: usize> ObjectPool<T, N> {
         // SAFETY: every field was written above.
         unsafe { place.assume_init_ref() }
     }
-}
 
-impl<T, const N: usize> ObjectPool<T, N> {
     pub(crate) fn alloc(&self) -> Option<(Index<T>, &T)> {
         let slot = self.free_head.get()?;
         let entry = &self.slots[slot as usize];
