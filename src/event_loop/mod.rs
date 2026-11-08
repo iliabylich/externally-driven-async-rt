@@ -110,8 +110,38 @@ impl<
                 >,
             ) + 'a,
     {
+        // SAFETY: `queue` is never freed, so wakers pointing into it stay valid forever.
+        unsafe { Self::new_in(queue, memory, state, f) }
+    }
+
+    /// # Safety
+    ///
+    /// No `Waker` handed to a task may be woken after the loop is dropped (or forgotten), because
+    /// wakers point into `queue`.
+    pub unsafe fn new_in<const QUEUE: usize, const MEMORY: usize, F>(
+        queue: &'a mut [MaybeUninit<u8>; QUEUE],
+        memory: &'a mut [MaybeUninit<u8>; MEMORY],
+        state: S,
+        f: F,
+    ) -> Result<Self, Error>
+    where
+        F: AsyncFnOnce(
+                &Context<
+                    'a,
+                    S,
+                    MAX_TASKS_COUNT,
+                    MAX_TASK_SIZE,
+                    MAX_ROOT_TASK_SIZE,
+                    MAX_TIMERS_COUNT,
+                    MAX_IO_COUNT,
+                >,
+            ) + 'a,
+    {
         let selector = Selector::new().map_err(Error::Io)?;
-        let ready = ReadyQueue::init(place(queue));
+        // SAFETY: the queue is only reached through the loop, which `'a` bounds, and through its
+        // wakers, which the caller guarantees aren't woken once the loop is gone, so treating it
+        // as never freed is fine.
+        let ready = unsafe { &*core::ptr::from_ref(ReadyQueue::init(place(queue))) };
         let storage = Storage::init(place(memory), ready, selector, state);
         let event_loop = Self { storage };
         Context::spawn_root(storage, f);

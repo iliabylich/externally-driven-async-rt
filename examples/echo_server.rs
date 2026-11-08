@@ -11,11 +11,11 @@ use rustix::{
     io::Errno,
 };
 
-const MAX_TASKS_COUNT: usize = 1024;
+const MAX_TASKS_COUNT: usize = 5;
 const MAX_TASK_SIZE: usize = 1024;
 const MAX_ROOT_TASK_SIZE: usize = 4096;
 const MAX_TIMERS_COUNT: usize = 4;
-const MAX_IO_COUNT: usize = 1024;
+const MAX_IO_COUNT: usize = 5;
 
 type ServerLoop<'a> = EventLoop<
     'a,
@@ -179,27 +179,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(arg) => arg.parse()?,
         None => "127.0.0.1:7878".parse()?,
     };
-    let queue: Box<[_; QSIZE]> = Box::new_uninit_slice(QSIZE).try_into().unwrap();
-    let queue = Box::into_raw(queue);
-    let mut memory = [MaybeUninit::uninit(); MEMSIZE];
-    // SAFETY: `queue` comes from `Box::into_raw`, and is only freed below, after `run` returns.
-    let result = run(addr, unsafe { &mut *queue }, &mut memory);
-    // SAFETY: `run` has dropped the loop, and with it every task and the state, the only holders
-    // of its wakers (nothing sends one to another thread or a global), so nothing can wake into
-    // the queue anymore.
-    drop(unsafe { Box::from_raw(queue) });
-    result
-}
-
-fn run(
-    addr: SocketAddr,
-    queue: &'static mut [MaybeUninit<u8>; QSIZE],
-    memory: &mut [MaybeUninit<u8>; MEMSIZE],
-) -> Result<(), Box<dyn std::error::Error>> {
     let root = async move |ctx: &ServerContext<'_>| {
         accept_loop(ctx, addr).await;
     };
-    let mut event_loop = ServerLoop::new(queue, memory, Server::default(), root)?;
+    let mut queue = [MaybeUninit::uninit(); QSIZE];
+    let mut memory = [MaybeUninit::uninit(); MEMSIZE];
+    // SAFETY: the loop's wakers live only in its tasks and its state, which the loop drops, and
+    // nothing sends one to another thread or a global, so none is woken after the loop is gone.
+    let mut event_loop =
+        unsafe { ServerLoop::new_in(&mut queue, &mut memory, Server::default(), root) }?;
     for line in core::mem::take(&mut event_loop.state_mut().log) {
         println!("{line}");
     }
@@ -250,3 +238,4 @@ fn run(
         }
     }
 }
+
