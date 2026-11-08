@@ -43,7 +43,7 @@ fn counting_waker(drops: &Cell<u32>) -> Waker {
 
 #[track_caller]
 fn assert_expires(storage: &Storage<(), ()>, now: Instant, ids: impl IntoIterator<Item = usize>) {
-    let expired = core::iter::from_fn(|| storage.take_expired_timer(now));
+    let expired = core::iter::from_fn(|| storage.timers.take_expired(now));
     assert_yields(expired.map(|waker| waker.data().addr()), ids);
 }
 
@@ -67,13 +67,13 @@ fn alloc_get_release() {
     let mut memory = stack_memory();
     let backing = TestStorage::new(&mut memory, 1, 2, 1);
     let storage = backing.storage();
-    let index = storage.alloc_timer(now, counting_waker(&drops));
-    assert_eq!(storage.timers.get(index).unwrap().deadline.get(), now);
+    let index = storage.timers.alloc(now, counting_waker(&drops));
+    assert_eq!(storage.timers.next_deadline(), Some(now));
 
-    storage.release_timer(index);
+    storage.timers.release(index);
     assert_eq!(drops.get(), 1);
-    assert!(storage.timers.get(index).is_none());
-    storage.release_timer(index);
+    assert_eq!(storage.timers.next_deadline(), None);
+    storage.timers.release(index);
     assert_eq!(drops.get(), 1);
 }
 
@@ -84,8 +84,8 @@ fn timer_capacity_is_bounded() {
     let mut memory = stack_memory();
     let backing = TestStorage::new(&mut memory, 1, 1, 1);
     let storage = backing.storage();
-    storage.alloc_timer(now, noop_waker());
-    storage.alloc_timer(now, noop_waker());
+    storage.timers.alloc(now, noop_waker());
+    storage.timers.alloc(now, noop_waker());
 }
 
 #[test]
@@ -95,16 +95,22 @@ fn expire_wakes_due_timers_in_deadline_order() {
     let mut memory = stack_memory();
     let backing = TestStorage::new(&mut memory, 1, 8, 1);
     let storage = backing.storage();
-    storage.alloc_timer(now + Duration::from_millis(5), waker(3));
-    storage.alloc_timer(now, waker(2));
-    storage.alloc_timer(now + Duration::from_millis(5), waker(4));
-    storage.alloc_timer(now + Duration::from_millis(10), waker(5));
-    storage.alloc_timer(earliest, waker(1));
+    storage
+        .timers
+        .alloc(now + Duration::from_millis(5), waker(3));
+    storage.timers.alloc(now, waker(2));
+    storage
+        .timers
+        .alloc(now + Duration::from_millis(5), waker(4));
+    storage
+        .timers
+        .alloc(now + Duration::from_millis(10), waker(5));
+    storage.timers.alloc(earliest, waker(1));
 
     assert_expires(storage, now + Duration::from_millis(5), [1, 2, 3, 4]);
     assert_expires(storage, now + Duration::from_millis(9), []);
     assert_eq!(
-        storage.next_timer_deadline(),
+        storage.timers.next_deadline(),
         Some(now + Duration::from_millis(10))
     );
 }
@@ -115,10 +121,10 @@ fn equal_deadlines_expire_in_insertion_order_across_slot_reuse() {
     let mut memory = stack_memory();
     let backing = TestStorage::new(&mut memory, 1, 2, 1);
     let storage = backing.storage();
-    let first = storage.alloc_timer(now, noop_waker());
-    storage.alloc_timer(now, waker(1));
-    storage.release_timer(first);
-    storage.alloc_timer(now, waker(2));
+    let first = storage.timers.alloc(now, noop_waker());
+    storage.timers.alloc(now, waker(1));
+    storage.timers.release(first);
+    storage.timers.alloc(now, waker(2));
     assert_expires(storage, now, [1, 2]);
 }
 
@@ -128,10 +134,10 @@ fn released_timer_is_not_woken() {
     let mut memory = stack_memory();
     let backing = TestStorage::new(&mut memory, 1, 1, 1);
     let storage = backing.storage();
-    let index = storage.alloc_timer(now, waker(1));
-    storage.release_timer(index);
+    let index = storage.timers.alloc(now, waker(1));
+    storage.timers.release(index);
     assert_expires(storage, now, []);
-    assert_eq!(storage.next_timer_deadline(), None);
+    assert_eq!(storage.timers.next_deadline(), None);
 }
 
 #[test]
@@ -140,8 +146,8 @@ fn replaced_waker_is_the_one_woken() {
     let mut memory = stack_memory();
     let backing = TestStorage::new(&mut memory, 1, 1, 1);
     let storage = backing.storage();
-    let index = storage.alloc_timer(now, waker(1));
-    storage.set_timer_waker(index, &waker(2));
+    let index = storage.timers.alloc(now, waker(1));
+    storage.timers.set_waker(index, &waker(2));
     assert_expires(storage, now, [2]);
 }
 
@@ -204,7 +210,7 @@ fn dropping_the_storage_drops_live_wakers() {
     let mut memory = stack_memory();
     let backing = TestStorage::new(&mut memory, 1, 2, 2);
     let storage = backing.storage();
-    storage.alloc_timer(Instant::now(), counting_waker(&drops));
+    storage.timers.alloc(Instant::now(), counting_waker(&drops));
     let io = storage.alloc_io(3, Direction::Read);
     let io_waker = counting_waker(&drops);
     storage.set_io_waker(io, &io_waker);
@@ -227,16 +233,18 @@ fn next_timer_deadline_is_the_earliest_one() {
     let mut memory = stack_memory();
     let backing = TestStorage::new(&mut memory, 1, 4, 1);
     let storage = backing.storage();
-    assert_eq!(storage.next_timer_deadline(), None);
+    assert_eq!(storage.timers.next_deadline(), None);
     let later = now + Duration::from_millis(30);
     let earlier = now + Duration::from_millis(10);
-    storage.alloc_timer(later, noop_waker());
-    let earliest = storage.alloc_timer(earlier, noop_waker());
-    storage.alloc_timer(now + Duration::from_millis(20), noop_waker());
-    assert_eq!(storage.next_timer_deadline(), Some(earlier));
-    storage.release_timer(earliest);
+    storage.timers.alloc(later, noop_waker());
+    let earliest = storage.timers.alloc(earlier, noop_waker());
+    storage
+        .timers
+        .alloc(now + Duration::from_millis(20), noop_waker());
+    assert_eq!(storage.timers.next_deadline(), Some(earlier));
+    storage.timers.release(earliest);
     assert_eq!(
-        storage.next_timer_deadline(),
+        storage.timers.next_deadline(),
         Some(now + Duration::from_millis(20))
     );
 }

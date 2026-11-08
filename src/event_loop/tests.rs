@@ -568,8 +568,10 @@ fn expired_timer_wakes_its_task() {
     let (_, later_waker) = parked_task(event_loop);
     let now = Instant::now();
     let storage = event_loop.storage();
-    storage.alloc_timer(now + Duration::from_millis(5), waker);
-    storage.alloc_timer(now + Duration::from_secs(60), later_waker);
+    storage.timers.alloc(now + Duration::from_millis(5), waker);
+    storage
+        .timers
+        .alloc(now + Duration::from_secs(60), later_waker);
     event_loop.storage().flush().unwrap();
     assert!(is_readable(event_loop, 500));
     event_loop.storage().process_selector_events().unwrap();

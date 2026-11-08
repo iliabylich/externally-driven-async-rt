@@ -95,7 +95,8 @@ mod tests {
         let other = storage.storage().insert_task(async {}).ok().unwrap();
         storage
             .storage()
-            .alloc_timer(crate::instant::Instant::now(), Waker::noop().clone());
+            .timers
+            .alloc(crate::instant::Instant::now(), Waker::noop().clone());
         waker.wake_by_ref();
         storage.storage().remove_task(other);
         waker.wake();

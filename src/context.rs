@@ -34,8 +34,8 @@ impl<S: State> Context<S> {
         JoinHandle::new(self.storage, id)
     }
 
-    pub fn sleep(&self, duration: Duration) -> Sleep<'_, S> {
-        Sleep::new(self.storage, Instant::now() + duration)
+    pub fn sleep(&self, duration: Duration) -> Sleep<'_> {
+        Sleep::new(&self.storage.timers, Instant::now() + duration)
     }
 }
 

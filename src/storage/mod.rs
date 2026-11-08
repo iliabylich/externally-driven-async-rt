@@ -22,17 +22,7 @@ use crate::{
 };
 
 use layout::StorageLayout;
-
-// Pool values are `Cell`s (see `ObjectPool`); a vacant slot holds a stale or default value.
-#[derive(Default)]
-pub(crate) struct Timer {
-    deadline: Cell<Instant>,
-    // Insertion order, so timers with equal deadlines expire in the order they were created.
-    seq: Cell<u64>,
-    waker: Cell<Option<Waker>>,
-}
-
-pub(crate) type TimerIndex = Index<Timer>;
+pub(crate) use timers::{TimerIndex, Timers};
 
 pub(crate) struct IoWaiter {
     fd: Cell<RawFd>,
@@ -92,7 +82,7 @@ fn is_some<T>(cell: &Cell<Option<T>>) -> bool {
 }
 
 // `clone_from`, so storing a waker that wakes the same task as the stored one doesn't clone it.
-fn store_waker(cell: &Cell<Option<Waker>>, waker: &Waker) {
+pub(crate) fn store_waker(cell: &Cell<Option<Waker>>, waker: &Waker) {
     let stored = match cell.take() {
         Some(mut stored) => {
             stored.clone_from(waker);
@@ -128,12 +118,11 @@ pub(crate) struct Storage<S: 'static, Sel = Selector> {
     allocation: NonNull<u8>,
     selector: Sel,
     root: Cell<Root>,
-    next_timer_seq: Cell<u64>,
     // `'static`: they live as long as the storage, which nothing that can reach it outlives.
     // Only shared references: the pools and the queue consist of `Cell`s, the state, the slab
     // and the root region are in `UnsafeCell`s.
     state: &'static UnsafeCell<S>,
-    timers: &'static ObjectPool<Timer>,
+    pub(crate) timers: Timers,
     io_waiters: &'static ObjectPool<IoWaiter>,
     tasks: &'static ObjectPool<TaskEntry>,
     ready: &'static ReadyQueue,
@@ -190,8 +179,7 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
                 allocation: base_ptr,
                 selector,
                 root: Cell::new(Root::Finished),
-                next_timer_seq: Cell::new(0),
-                timers: ObjectPool::init(timers_ptr, capacities.max_timers),
+                timers: Timers::init(timers_ptr, capacities.max_timers),
                 io_waiters: ObjectPool::init(io_waiters_ptr, capacities.max_io),
                 tasks: ObjectPool::init(tasks_ptr, capacities.max_tasks),
                 ready: ReadyQueue::init(ready_ptr, capacities.max_tasks),
@@ -223,14 +211,12 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
         // Task futures hold `Context`s pointing at the storage and may use them in their `Drop`
         // impls, so they go first, while everything is intact.
         self.drop_all_tasks();
-        let pools = (
-            self.writable(self.timers),
-            self.writable(self.io_waiters),
-            self.writable(self.tasks),
-        );
+        self.timers.clear();
+        let pools = (self.writable(self.io_waiters), self.writable(self.tasks));
         // SAFETY: no task (so no `Context` and no reference into the storage) is left; every part
         // was initialized in `new` and is dropped exactly once here (the ready queue holds only
-        // `Copy` data, the task slab and root region no live future). The references to the pools
+        // `Copy` data, the task slab and root region no live future, the timer pool nothing
+        // after `clear`). The references to the pools
         // are never used again. The selector is this struct's only field with drop glue; it's
         // moved out (a read) rather than dropped in place, because dropping needs write access to
         // the struct, which callers hold protected shared references to (`&self`, and e.g. an
@@ -239,7 +225,6 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
             core::ptr::drop_in_place(self.state.get());
             core::ptr::drop_in_place(pools.0);
             core::ptr::drop_in_place(pools.1);
-            core::ptr::drop_in_place(pools.2);
             drop(core::ptr::read(&self.selector));
         }
     }
@@ -364,51 +349,6 @@ impl<S: 'static, Sel: 'static> Storage<S, Sel> {
             }
             _ => JoinStatus::Finished,
         }
-    }
-
-    pub(crate) fn alloc_timer(&self, deadline: Instant, waker: Waker) -> TimerIndex {
-        let Some((index, timer)) = self.timers.alloc() else {
-            panic!("more than {} concurrent sleeps", self.timers.capacity());
-        };
-        let seq = self.next_timer_seq.get();
-        self.next_timer_seq.set(seq + 1);
-        timer.deadline.set(deadline);
-        timer.seq.set(seq);
-        timer.waker.set(Some(waker));
-        index
-    }
-
-    pub(crate) fn set_timer_waker(&self, index: TimerIndex, waker: &Waker) {
-        let timer = self
-            .timers
-            .get(index)
-            .expect("a pending sleep's timer is in storage");
-        store_waker(&timer.waker, waker);
-    }
-
-    pub(crate) fn release_timer(&self, index: TimerIndex) {
-        if let Some(timer) = self.timers.get(index) {
-            timer.waker.take();
-            self.timers.free(index);
-        }
-    }
-
-    pub(crate) fn next_timer_deadline(&self) -> Option<Instant> {
-        self.timers
-            .iter()
-            .map(|(_, timer)| timer.deadline.get())
-            .min()
-    }
-
-    pub(crate) fn take_expired_timer(&self, now: Instant) -> Option<Waker> {
-        let (index, _) = self
-            .timers
-            .iter()
-            .filter(|(_, timer)| timer.deadline.get() <= now)
-            .min_by_key(|(_, timer)| (timer.deadline.get(), timer.seq.get()))?;
-        let waker = self.timers.get(index)?.waker.take();
-        self.timers.free(index);
-        waker
     }
 
     pub(crate) fn alloc_io(&self, fd: RawFd, direction: Direction) -> IoIndex {
@@ -561,7 +501,7 @@ impl<S: 'static> Storage<S, Selector> {
                     }
                     SelectorEvent::Timer => {
                         let now = Instant::now();
-                        while let Some(waker) = self.take_expired_timer(now) {
+                        while let Some(waker) = self.timers.take_expired(now) {
                             waker.wake();
                         }
                     }
@@ -574,7 +514,7 @@ impl<S: 'static> Storage<S, Selector> {
     }
 
     pub(crate) fn flush(&self) -> rustix::io::Result<()> {
-        match self.next_timer_deadline() {
+        match self.timers.next_deadline() {
             Some(deadline) => self.selector().arm_timer(deadline),
             None => self.selector().disarm_timer(),
         }
@@ -591,6 +531,7 @@ impl<S: 'static> Storage<S, Selector> {
 }
 
 mod layout;
+mod timers;
 
 #[cfg(test)]
 mod tests;

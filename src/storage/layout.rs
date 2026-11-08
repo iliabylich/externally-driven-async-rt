@@ -4,7 +4,7 @@ use crate::{
     capacities::Capacities,
     pool::ObjectPool,
     ready::ReadyQueue,
-    storage::{IoWaiter, Storage, TaskEntry, Timer},
+    storage::{IoWaiter, Storage, TaskEntry, timers::Timers},
     task_slab::TaskSlab,
 };
 
@@ -82,7 +82,7 @@ pub(crate) fn plan<S: 'static, Sel>(
     let parts = [
         Layout::new::<Storage<S, Sel>>(),
         Layout::new::<S>(),
-        ObjectPool::<Timer>::layout(capacities.max_timers),
+        Timers::layout(capacities.max_timers),
         ObjectPool::<IoWaiter>::layout(capacities.max_io),
         ObjectPool::<TaskEntry>::layout(capacities.max_tasks),
         ReadyQueue::layout(capacities.max_tasks),

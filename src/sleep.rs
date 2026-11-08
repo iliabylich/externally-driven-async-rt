@@ -2,49 +2,48 @@ use core::{future::Future, pin::Pin, task::Poll};
 
 use crate::{
     instant::Instant,
-    state::State,
-    storage::{Storage, TimerIndex},
+    storage::{TimerIndex, Timers},
 };
 
 #[must_use = "futures do nothing unless you `.await` or poll them"]
-pub struct Sleep<'ctx, S: State> {
-    storage: &'ctx Storage<S>,
+pub struct Sleep<'ctx> {
+    timers: &'ctx Timers,
     deadline: Instant,
     timer: Option<TimerIndex>,
 }
 
-impl<'ctx, S: State> Sleep<'ctx, S> {
-    pub(crate) fn new(storage: &'ctx Storage<S>, deadline: Instant) -> Self {
+impl<'ctx> Sleep<'ctx> {
+    pub(crate) fn new(timers: &'ctx Timers, deadline: Instant) -> Self {
         Self {
-            storage,
+            timers,
             deadline,
             timer: None,
         }
     }
 }
 
-impl<S: State> Future for Sleep<'_, S> {
+impl Future for Sleep<'_> {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {
         if Instant::now() >= self.deadline {
             if let Some(timer) = self.timer.take() {
-                self.storage.release_timer(timer);
+                self.timers.release(timer);
             }
             return Poll::Ready(());
         }
         match self.timer {
-            Some(timer) => self.storage.set_timer_waker(timer, cx.waker()),
-            None => self.timer = Some(self.storage.alloc_timer(self.deadline, cx.waker().clone())),
+            Some(timer) => self.timers.set_waker(timer, cx.waker()),
+            None => self.timer = Some(self.timers.alloc(self.deadline, cx.waker().clone())),
         }
         Poll::Pending
     }
 }
 
-impl<S: State> Drop for Sleep<'_, S> {
+impl Drop for Sleep<'_> {
     fn drop(&mut self) {
         if let Some(timer) = self.timer {
-            self.storage.release_timer(timer);
+            self.timers.release(timer);
         }
     }
 }
