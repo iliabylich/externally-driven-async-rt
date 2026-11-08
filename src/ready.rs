@@ -1,4 +1,4 @@
-use core::{alloc::Layout, cell::Cell, ptr::NonNull};
+use core::{alloc::Layout, cell::Cell, mem::MaybeUninit, ptr::NonNull};
 
 use crate::{storage::TaskId, thread_id::ThreadId};
 
@@ -50,23 +50,33 @@ impl ReadyQueue {
         let queue =
             core::ptr::slice_from_raw_parts_mut(ptr.as_ptr().cast::<Link>(), len) as *mut Self;
         // SAFETY: the caller guarantees `ptr` is valid for `Self::layout(len)`, which (`repr(C)`)
-        // covers every field; every link is written without reading the uninitialized memory.
-        unsafe {
-            (&raw mut (*queue).thread).write(ThreadId::current());
-            (&raw mut (*queue).head).write(Cell::new(None));
-            (&raw mut (*queue).tail).write(Cell::new(None));
-            let links = (&raw mut (*queue).links).cast::<Link>();
-            for slot in 0..len {
-                links.add(slot).write(Link {
-                    queue: NonNull::new_unchecked(queue),
-                    slot: slot as u32,
-                    generation: Cell::new(None),
-                    queued: Cell::new(false),
-                    next: Cell::new(None),
-                });
-            }
-            &*queue
+        // covers every field, disjointly. `&raw mut` creates no reference to the uninitialized
+        // queue, and the fields are borrowed as `MaybeUninit`, which needs no initialized
+        // contents. `queue` comes from the non-null `ptr`.
+        let (thread, head, tail, links, queue_ptr) = unsafe {
+            (
+                &mut *(&raw mut (*queue).thread).cast::<MaybeUninit<ThreadId>>(),
+                &mut *(&raw mut (*queue).head).cast::<MaybeUninit<Cell<Option<u32>>>>(),
+                &mut *(&raw mut (*queue).tail).cast::<MaybeUninit<Cell<Option<u32>>>>(),
+                &mut *(&raw mut (*queue).links as *mut [MaybeUninit<Link>]),
+                NonNull::new_unchecked(queue),
+            )
+        };
+        thread.write(ThreadId::current());
+        head.write(Cell::new(None));
+        tail.write(Cell::new(None));
+        for (slot, place) in links.iter_mut().enumerate() {
+            place.write(Link {
+                queue: queue_ptr,
+                slot: slot as u32,
+                generation: Cell::new(None),
+                queued: Cell::new(false),
+                next: Cell::new(None),
+            });
         }
+        // SAFETY: every field was written above, and the memory stays valid for `'a` (guaranteed
+        // by the caller).
+        unsafe { queue_ptr.as_ref() }
     }
 
     pub(crate) fn link(&self, slot: u32) -> NonNull<Link> {

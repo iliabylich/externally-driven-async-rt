@@ -1,4 +1,4 @@
-use core::{alloc::Layout, cell::Cell, fmt, marker::PhantomData, ptr::NonNull};
+use core::{alloc::Layout, cell::Cell, fmt, marker::PhantomData, mem::MaybeUninit, ptr::NonNull};
 
 pub(crate) struct Index<T> {
     slot: u32,
@@ -97,25 +97,32 @@ impl<T: Default> ObjectPool<T> {
     pub(crate) unsafe fn init<'a>(ptr: NonNull<u8>, len: usize) -> &'a Self {
         let pool = Self::raw(ptr, len);
         // SAFETY: the caller guarantees `ptr` is valid for `Self::layout(len)`, which (`repr(C)`)
-        // covers every field; every slot is written without reading the uninitialized memory.
-        unsafe {
-            (&raw mut (*pool).free_head).write(Cell::new(Some(0)));
-            (&raw mut (*pool).occupied_head).write(Cell::new(None));
-            let slots = (&raw mut (*pool).slots).cast::<Slot<T>>();
-            for slot in 0..len {
-                let next_free = if slot + 1 < len {
-                    Some((slot + 1) as u32)
-                } else {
-                    None
-                };
-                slots.add(slot).write(Slot {
-                    generation: Cell::new(0),
-                    links: Cell::new(Links::Vacant { next_free }),
-                    value: T::default(),
-                });
-            }
-            &*pool
+        // covers every field, disjointly. `&raw mut` creates no reference to the uninitialized
+        // pool, and the fields are borrowed as `MaybeUninit`, which needs no initialized contents.
+        let (free_head, occupied_head, slots) = unsafe {
+            (
+                &mut *(&raw mut (*pool).free_head).cast::<MaybeUninit<Cell<Option<u32>>>>(),
+                &mut *(&raw mut (*pool).occupied_head).cast::<MaybeUninit<Cell<Option<u32>>>>(),
+                &mut *(&raw mut (*pool).slots as *mut [MaybeUninit<Slot<T>>]),
+            )
+        };
+        free_head.write(Cell::new(Some(0)));
+        occupied_head.write(Cell::new(None));
+        for (slot, place) in slots.iter_mut().enumerate() {
+            let next_free = if slot + 1 < len {
+                Some((slot + 1) as u32)
+            } else {
+                None
+            };
+            place.write(Slot {
+                generation: Cell::new(0),
+                links: Cell::new(Links::Vacant { next_free }),
+                value: T::default(),
+            });
         }
+        // SAFETY: every field was written above, and the memory stays valid for `'a` (guaranteed
+        // by the caller).
+        unsafe { &*pool }
     }
 }
 
