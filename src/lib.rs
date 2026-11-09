@@ -21,5 +21,5 @@ pub use event_loop::{Error, EventLoop};
 pub use selector::Selector;
 pub use state::State;
 pub use storage::LoopStorage;
-pub use tasks::JoinHandle;
+pub use tasks::{JoinHandle, ReserveTask, TaskReservation};
 pub use time::{Sleep, Timeout};

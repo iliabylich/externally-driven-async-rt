@@ -1,10 +1,12 @@
 mod aligned16;
 mod join_handle;
 mod join_status;
+mod reserve_task;
 mod root;
 mod root_status;
 mod task;
 mod task_entry;
+mod task_reservation;
 mod task_slot;
 mod tasks_guard;
 mod wake_queue;
@@ -15,8 +17,10 @@ use core::{
     mem::MaybeUninit,
 };
 
-pub use self::join_handle::JoinHandle;
 use self::{aligned16::Aligned16, task_slot::TaskSlot};
+pub use self::{
+    join_handle::JoinHandle, reserve_task::ReserveTask, task_reservation::TaskReservation,
+};
 pub(crate) use self::{
     join_status::JoinStatus,
     root::Root,
@@ -38,6 +42,7 @@ pub(crate) struct Tasks<
     slab: [Aligned16<MAX_TASK_SIZE>; MAX_TASKS_COUNT],
     root_region: Aligned16<MAX_ROOT_TASK_SIZE>,
     root: Cell<Root>,
+    slot_waiter: WakerSlot,
 }
 
 impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize>
@@ -57,6 +62,7 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
             slab: [const { Aligned16(UnsafeCell::new(MaybeUninit::uninit())) }; MAX_TASKS_COUNT],
             root_region: Aligned16(UnsafeCell::new(MaybeUninit::uninit())),
             root: Cell::new(Root::Unset),
+            slot_waiter: WakerSlot::new(),
         }
     }
 

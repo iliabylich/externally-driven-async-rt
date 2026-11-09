@@ -52,7 +52,46 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
     where
         Fut: Future<Output = ()> + 'a,
     {
-        let tasks = self.tasks;
+        let Some(id) = self.reserve() else {
+            panic!("more than {MAX_TASKS_COUNT} concurrent tasks");
+        };
+        self.write(id, future);
+        id
+    }
+
+    pub(crate) fn reserve(self) -> Option<TaskId> {
+        self.tasks.pool.alloc().map(|(id, _)| id)
+    }
+
+    pub(crate) fn release(self, id: TaskId) {
+        self.tasks.pool.free(id);
+        self.tasks.slot_waiter.wake_by_ref();
+    }
+
+    pub(crate) fn has_slot_waiter(self) -> bool {
+        self.tasks.slot_waiter.is_set()
+    }
+
+    pub(crate) fn set_slot_waiter(self, waker: &Waker) {
+        self.tasks.slot_waiter.store(waker);
+    }
+
+    pub(crate) fn clear_slot_waiter(self) {
+        self.tasks.slot_waiter.take();
+    }
+
+    pub(crate) fn spawn_reserved<Fut>(self, id: TaskId, future: Fut)
+    where
+        Fut: Future<Output = ()> + 'a,
+    {
+        self.write(id, future);
+        self.tasks.queue.push(id.slot());
+    }
+
+    fn write<Fut>(self, id: TaskId, future: Fut)
+    where
+        Fut: Future<Output = ()> + 'a,
+    {
         assert!(
             size_of::<Fut>() <= MAX_TASK_SIZE,
             "a task future of {} bytes doesn't fit MAX_TASK_SIZE ({MAX_TASK_SIZE} bytes)",
@@ -63,20 +102,22 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
             "a task future aligned to {} bytes doesn't fit (align at most 16)",
             align_of::<Fut>(),
         );
-        let Some((id, entry)) = tasks.pool.alloc() else {
-            panic!("more than {MAX_TASKS_COUNT} concurrent tasks");
-        };
+        let tasks = self.tasks;
+        let entry = tasks
+            .pool
+            .get(id)
+            .expect("a task is written into a reserved slot");
+        assert!(!entry.has_task(), "a reserved slot holds no task yet");
         let memory = NonNull::from(&tasks.slab[id.slot() as usize].0).cast();
         // SAFETY: `Fut` fits the slab's blocks (checked above). The slot's block is unused: the
-        // slot was free, and a slot is only freed after its future was dropped. The slot stays
-        // reserved until this future is dropped. `Tasks` keeps its futures in fields private
-        // to the `tasks` module, where only `TasksGuard` touches them, and `Tasks::claim` creates a guard once per `Tasks`
-        // (copies share its invariant `'a`), so every future in it was written through a guard
-        // with this same `'a` (which `Fut` outlives), and is polled and dropped only through
-        // one, before `'a` ends.
+        // slot is reserved and holds no task (checked above), and a slot is only freed after its
+        // future was dropped. The slot stays reserved until this future is dropped. `Tasks` keeps
+        // its futures in fields private to the `tasks` module, where only `TasksGuard` touches
+        // them, and `Tasks::claim` creates a guard once per `Tasks` (copies share its invariant
+        // `'a`), so every future in it was written through a guard with this same `'a` (which
+        // `Fut` outlives), and is polled and dropped only through one, before `'a` ends.
         let future = unsafe { Task::write(memory, future) };
         self.occupy(id, entry, future);
-        id
     }
 
     pub(crate) fn spawn<Fut>(self, future: Fut) -> TaskId
@@ -131,7 +172,7 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
         let join_waiter = entry.join_waiter.take();
         self.tasks.queue.untrack(id);
         drop(task);
-        self.tasks.pool.free(id);
+        self.release(id);
         join_waiter
     }
 

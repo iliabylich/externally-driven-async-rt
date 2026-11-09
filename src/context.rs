@@ -3,7 +3,7 @@ use core::{future::Future, time::Duration};
 use crate::{
     state::State,
     storage::LoopStorageGuard,
-    tasks::JoinHandle,
+    tasks::{JoinHandle, ReserveTask},
     time::{Instant, Sleep, Timeout},
 };
 
@@ -46,6 +46,20 @@ impl<
         MAX_IO_COUNT,
     >
 {
+    pub(crate) fn new(
+        storage: LoopStorageGuard<
+            'a,
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
+    ) -> Self {
+        Self { storage }
+    }
+
     pub(crate) fn storage(
         &self,
     ) -> &LoopStorageGuard<
@@ -79,8 +93,22 @@ impl<
         let storage = self.storage;
         let id = storage
             .tasks
-            .spawn(async move { f(&Self { storage }).await });
+            .spawn(async move { f(&Self::new(storage)).await });
         JoinHandle::new(self.storage.tasks, id)
+    }
+
+    pub fn reserve_task(
+        &self,
+    ) -> ReserveTask<
+        'a,
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    > {
+        ReserveTask::new(self.storage)
     }
 
     pub(crate) fn spawn_root<F>(
@@ -99,7 +127,7 @@ impl<
     {
         storage
             .tasks
-            .spawn_root(async move { f(&Self { storage }).await });
+            .spawn_root(async move { f(&Self::new(storage)).await });
     }
 
     pub fn sleep(&self, duration: Duration) -> Sleep<'_, MAX_TIMERS_COUNT> {

@@ -22,6 +22,13 @@ impl WakerSlot {
         self.0.set(Some(waker));
     }
 
+    pub(crate) fn wake_by_ref(&self) {
+        if let Some(waker) = self.0.take() {
+            waker.wake_by_ref();
+            self.0.set(Some(waker));
+        }
+    }
+
     pub(crate) fn take(&self) -> Option<Waker> {
         self.0.take()
     }

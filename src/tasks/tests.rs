@@ -331,3 +331,51 @@ fn root_finishing_stops_the_run() {
     assert_eq!(storage.tasks.run_ready(), RootStatus::Finished);
     assert_eq!(polls.get(), 0);
 }
+
+#[test]
+fn spawning_into_a_reserved_slot_queues_the_task() {
+    let polls = Cell::new(0);
+    let storage = {
+        static STORAGE: TasksStorage<1> = TasksStorage::new();
+        STORAGE.claim(&(), ())
+    };
+    let id = storage.tasks.reserve().unwrap();
+    assert!(!storage.tasks.contains(id));
+    assert_eq!(storage.tasks.reserve(), None);
+    storage.tasks.spawn_reserved(id, counting(&polls));
+    storage.tasks.run_ready();
+    assert_eq!(polls.get(), 1);
+    assert!(storage.tasks.contains(id));
+}
+
+#[test]
+fn releasing_a_slot_wakes_the_slot_waiter() {
+    let polls = Cell::new(0);
+    let storage = {
+        static STORAGE: TasksStorage<2> = TasksStorage::new();
+        STORAGE.claim(&(), ())
+    };
+    let waiter = storage.tasks.spawn(counting(&polls));
+    storage.tasks.run_ready();
+    storage.tasks.set_slot_waiter(&storage.tasks.waker(waiter));
+    let id = storage.tasks.reserve().unwrap();
+    storage.tasks.release(id);
+    storage.tasks.run_ready();
+    assert_eq!(polls.get(), 2);
+    assert!(storage.tasks.has_slot_waiter());
+}
+
+#[test]
+fn finishing_a_task_wakes_the_slot_waiter() {
+    let polls = Cell::new(0);
+    let storage = {
+        static STORAGE: TasksStorage<2> = TasksStorage::new();
+        STORAGE.claim(&(), ())
+    };
+    let waiter = storage.tasks.spawn(counting(&polls));
+    storage.tasks.run_ready();
+    storage.tasks.set_slot_waiter(&storage.tasks.waker(waiter));
+    storage.tasks.spawn(async {});
+    storage.tasks.run_ready();
+    assert_eq!(polls.get(), 2);
+}
