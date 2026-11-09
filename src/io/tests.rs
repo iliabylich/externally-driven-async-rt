@@ -12,8 +12,8 @@ use rustix::{
 use crate::{
     Context, LoopStorage, Selector, State,
     io::IoRegistration,
-    selectors::Direction,
-    test_utils::{
+    selector::Direction,
+    testing::{
         Log, TestContext, TestLoop, TestStorage, is_readable, run_until_root_finishes, socketpair,
     },
 };

@@ -1,9 +1,11 @@
 use core::cell::RefCell;
 
 use crate::{
-    instant::Instant,
-    selectors::{Direction, EVENTS_PER_CALL, Selector, SelectorEvent},
-    storage::{IoWaiters, LoopStorage, TasksGuard, Timers},
+    io::IoWaiters,
+    selector::{Direction, EVENTS_PER_CALL, Selector, SelectorEvent},
+    storage::LoopStorage,
+    tasks::TasksGuard,
+    time::{Instant, Timers},
 };
 
 pub(crate) struct LoopStorageGuard<

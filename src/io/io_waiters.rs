@@ -1,0 +1,197 @@
+use core::{cell::Cell, task::Waker};
+
+use rustix::fd::RawFd;
+
+use crate::{
+    io::{IoIndex, IoWaiter},
+    pool::ObjectPool,
+    selector::{Direction, IoAction, IoChange, Token},
+    waker_slot::WakerSlot,
+};
+
+pub(crate) struct IoWaiters<const N: usize> {
+    pool: ObjectPool<IoWaiter, N>,
+}
+
+impl<const N: usize> IoWaiters<N> {
+    pub(crate) const fn new() -> Self {
+        Self {
+            pool: ObjectPool::new(
+                [const {
+                    IoWaiter {
+                        fd: Cell::new(-1),
+                        direction: Cell::new(Direction::Read),
+                        waker: WakerSlot::new(),
+                        armed: Cell::new(false),
+                    }
+                }; N],
+            ),
+        }
+    }
+
+    pub(crate) fn register(&self, fd: RawFd, direction: Direction) -> IoIndex {
+        let Some((index, io)) = self.pool.alloc() else {
+            panic!("more than {N} concurrent IO operations");
+        };
+        io.fd.set(fd);
+        io.direction.set(direction);
+        io.waker.take();
+        io.armed.set(false);
+        index
+    }
+
+    pub(crate) fn release(&self, index: IoIndex) -> Option<IoChange> {
+        let io = self.pool.get(index)?;
+        io.waker.take();
+        let change = if io.armed.get() {
+            Some(io.change(index, IoAction::Disarm))
+        } else {
+            None
+        };
+        self.pool.free(index);
+        change
+    }
+
+    pub(crate) fn set_waker(&self, index: IoIndex, waker: &Waker) {
+        let io = self.pool.get(index).expect("IO is not registered");
+        io.waker.store(waker);
+    }
+
+    pub(crate) fn remove_waker(&self, index: IoIndex) {
+        if let Some(io) = self.pool.get(index) {
+            io.waker.take();
+        }
+    }
+
+    pub(crate) fn has_waker(&self, index: IoIndex) -> bool {
+        self.pool.get(index).is_some_and(|io| io.waker.is_set())
+    }
+
+    pub(crate) fn take_waker(&self, token: Token, direction: Direction) -> Option<Waker> {
+        let io = self.pool.get(IoIndex::from_bits(token.0))?;
+        if io.direction.get() != direction {
+            return None;
+        }
+        io.armed.set(false);
+        io.waker.take()
+    }
+
+    pub(crate) fn pending_changes(&self) -> impl Iterator<Item = IoChange> + '_ {
+        self.pool
+            .iter()
+            .filter_map(|(index, io)| io.pending_change(index))
+    }
+
+    pub(crate) fn mark_flushed(&self) {
+        for (_, io) in self.pool.iter() {
+            io.armed.set(io.waker.is_set());
+        }
+    }
+
+    pub(crate) fn clear(&self) {
+        for (index, _) in self.pool.iter() {
+            self.release(index);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn count(&self) -> usize {
+        self.pool.iter().count()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::task::Waker;
+
+    use crate::{
+        io::{IoIndex, IoWaiters},
+        selector::{Direction, IoAction, IoChange, Token},
+        tasks::WakeQueue,
+        testing::assert_yields,
+    };
+
+    #[track_caller]
+    fn assert_pending_changes<const N: usize>(
+        io_waiters: &IoWaiters<N>,
+        expected: impl IntoIterator<Item = IoChange>,
+    ) {
+        assert_yields!(io_waiters.pending_changes(), expected);
+    }
+
+    #[test]
+    fn register_wait_release() {
+        let io_waiters = &IoWaiters::<1>::new();
+        let index = io_waiters.register(3, Direction::Write);
+        assert!(!io_waiters.has_waker(index));
+        io_waiters.set_waker(index, Waker::noop());
+        assert!(io_waiters.has_waker(index));
+        assert_eq!(io_waiters.release(index), None);
+        assert!(!io_waiters.has_waker(index));
+        assert_eq!(io_waiters.count(), 0);
+        let reused = io_waiters.register(3, Direction::Read);
+        assert_ne!(reused, index);
+    }
+
+    #[test]
+    fn changes_follow_the_stored_waker() {
+        let io_waiters = &IoWaiters::<2>::new();
+        let reader = io_waiters.register(3, Direction::Read);
+        let writer = io_waiters.register(4, Direction::Write);
+        assert_pending_changes(io_waiters, []);
+
+        let change = |action| IoChange {
+            token: Token(reader.to_bits()),
+            fd: 3,
+            direction: Direction::Read,
+            action,
+        };
+        io_waiters.set_waker(reader, Waker::noop());
+        assert_pending_changes(io_waiters, [change(IoAction::Arm)]);
+        io_waiters.mark_flushed();
+        assert_pending_changes(io_waiters, []);
+
+        io_waiters.remove_waker(reader);
+        assert_pending_changes(io_waiters, [change(IoAction::Disarm)]);
+        assert_eq!(IoIndex::from_bits(reader.to_bits()), reader);
+        assert!(!io_waiters.has_waker(writer));
+        assert_eq!(io_waiters.count(), 2);
+    }
+
+    #[test]
+    fn releasing_an_armed_registration_returns_its_disarm() {
+        let io_waiters = &IoWaiters::<1>::new();
+        let index = io_waiters.register(3, Direction::Read);
+        io_waiters.set_waker(index, Waker::noop());
+        io_waiters.mark_flushed();
+        let disarm = IoChange {
+            token: Token(index.to_bits()),
+            fd: 3,
+            direction: Direction::Read,
+            action: IoAction::Disarm,
+        };
+        assert_eq!(io_waiters.release(index), Some(disarm));
+        assert_eq!(io_waiters.release(index), None);
+    }
+
+    #[test]
+    fn an_event_takes_the_waker_of_its_direction_only() {
+        static WAKERS: WakeQueue<2> = WakeQueue::new();
+        let io_waiters = &IoWaiters::<1>::new();
+        let index = io_waiters.register(3, Direction::Read);
+        io_waiters.set_waker(index, &WAKERS.waker(1));
+        let token = Token(index.to_bits());
+        assert!(io_waiters.take_waker(token, Direction::Write).is_none());
+        let woken = io_waiters.take_waker(token, Direction::Read).unwrap();
+        assert_eq!(WAKERS.id_by_waker_data(&woken), 1);
+        assert!(!io_waiters.has_waker(index));
+    }
+
+    #[test]
+    #[should_panic(expected = "more than 1 concurrent IO operations")]
+    fn capacity_is_bounded() {
+        let io_waiters = &IoWaiters::<1>::new();
+        io_waiters.register(3, Direction::Read);
+        io_waiters.register(3, Direction::Write);
+    }
+}

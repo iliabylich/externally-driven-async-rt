@@ -1,0 +1,35 @@
+use core::{cell::Cell, task::Waker};
+
+pub(crate) struct WakerSlot(Cell<Option<Waker>>);
+
+impl WakerSlot {
+    pub(crate) const fn new() -> Self {
+        Self(Cell::new(None))
+    }
+
+    pub(crate) fn store(&self, waker: &Waker) {
+        let stored = match self.0.take() {
+            Some(mut stored) => {
+                stored.clone_from(waker);
+                stored
+            }
+            None => waker.clone(),
+        };
+        self.0.set(Some(stored));
+    }
+
+    pub(crate) fn set(&self, waker: Waker) {
+        self.0.set(Some(waker));
+    }
+
+    pub(crate) fn take(&self) -> Option<Waker> {
+        self.0.take()
+    }
+
+    pub(crate) fn is_set(&self) -> bool {
+        let waker = self.0.take();
+        let is_set = waker.is_some();
+        self.0.set(waker);
+        is_set
+    }
+}

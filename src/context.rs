@@ -1,8 +1,10 @@
 use core::time::Duration;
 
 use crate::{
-    instant::Instant, join_handle::JoinHandle, sleep::Sleep, state::State,
+    state::State,
     storage::LoopStorageGuard,
+    tasks::JoinHandle,
+    time::{Instant, Sleep},
 };
 
 pub struct Context<

@@ -1,23 +1,7 @@
-use core::{
-    cell::{Cell, RefCell},
-    task::Waker,
-};
+use core::cell::RefCell;
 
-pub(crate) use guard::LoopStorageGuard;
-pub(crate) use io_waiters::{IoIndex, IoWaiters};
-pub(crate) use tasks::{Root, RootStatus, TaskId, Tasks, TasksGuard};
-pub(crate) use timers::{TimerIndex, Timers};
-
-fn store_waker(cell: &Cell<Option<Waker>>, waker: &Waker) {
-    let stored = match cell.take() {
-        Some(mut stored) => {
-            stored.clone_from(waker);
-            stored
-        }
-        None => waker.clone(),
-    };
-    cell.set(Some(stored));
-}
+pub(crate) use self::guard::LoopStorageGuard;
+use crate::{io::IoWaiters, tasks::Tasks, time::Timers};
 
 pub struct LoopStorage<
     S,
@@ -111,9 +95,6 @@ impl<
 }
 
 mod guard;
-mod io_waiters;
-mod tasks;
-mod timers;
 
 #[cfg(test)]
 mod tests;

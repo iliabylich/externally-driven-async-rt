@@ -1,6 +1,6 @@
 use core::cell::Cell;
 
-use crate::{LoopStorage, instant::Instant, selectors::Direction, test_utils::counting_waker};
+use crate::{LoopStorage, selector::Direction, testing::counting_waker, time::Instant};
 
 type SmallStorage = LoopStorage<(), 1, 64, 0, 2, 2>;
 

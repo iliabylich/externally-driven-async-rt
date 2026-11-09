@@ -1,6 +1,6 @@
 use crate::{
     pool::{Index, ObjectPool},
-    test_utils::assert_yields,
+    testing::assert_yields,
 };
 use core::cell::Cell;
 
@@ -116,7 +116,7 @@ fn iter_yields_only_occupied_slots() {
     let b = alloc(pool, 2).unwrap();
     let c = alloc(pool, 3).unwrap();
     pool.free(b);
-    assert_yields(
+    assert_yields!(
         pool.iter().map(|(index, value)| (index, value.get())),
         [(c, 3), (a, 1)],
     );
@@ -133,7 +133,7 @@ fn freeing_the_yielded_slot_while_iterating() {
         pool.free(index);
         value
     });
-    assert_yields(freed, [2, 1, 0]);
+    assert_yields!(freed, [2, 1, 0]);
     assert!(pool.iter().next().is_none());
 }
 

@@ -8,10 +8,10 @@ use rustix::{fd::AsRawFd, io::Errno};
 
 use crate::{
     Error, EventLoop, LoopStorage, Selector, State,
-    test_utils::{
-        Log, TEST_MAX_IO_COUNT, TEST_MAX_TASK_SIZE, TEST_MAX_TASKS_COUNT, TEST_MAX_TIMERS_COUNT,
-        TestContext, TestLoop, TestStorage, counting_waker, is_readable, socketpair, wait_readable,
-        wake_by_writing,
+    testing::{
+        DispatchOnDrop, Log, TEST_MAX_IO_COUNT, TEST_MAX_TASK_SIZE, TEST_MAX_TASKS_COUNT,
+        TEST_MAX_TIMERS_COUNT, TestContext, TestLoop, TestStorage, counting_waker, is_readable,
+        socketpair, wait_readable, wake_by_writing,
     },
 };
 
@@ -221,20 +221,20 @@ fn panic_propagates_out_of_drain() {
     let _ = event_loop.drain_events_without_blocking();
 }
 
-struct PanickingState;
-
-impl State for PanickingState {
-    type Event = ();
-
-    fn apply(&mut self, (): ()) {
-        panic!("boom in apply");
-    }
-}
-
 #[test]
 #[cfg_attr(miri, ignore)]
 #[should_panic(expected = "boom in apply")]
 fn panic_in_apply_propagates() {
+    struct PanickingState;
+
+    impl State for PanickingState {
+        type Event = ();
+
+        fn apply(&mut self, (): ()) {
+            panic!("boom in apply");
+        }
+    }
+
     let mut selector = Selector::new().unwrap();
     let _ = TestLoop::new(
         {
@@ -248,14 +248,6 @@ fn panic_in_apply_propagates() {
             pending::<()>().await;
         },
     );
-}
-
-struct DispatchOnDrop<'c, 'a>(&'c TestContext<'a>, u32);
-
-impl Drop for DispatchOnDrop<'_, '_> {
-    fn drop(&mut self) {
-        self.0.dispatch(self.1);
-    }
 }
 
 #[test]
@@ -324,18 +316,18 @@ fn tasks_are_dropped_when_the_root_finishes() {
     assert_eq!(log[1..], [10, 20]);
 }
 
-struct SpawnOnDrop<'c, 'a>(&'c TestContext<'a>);
-
-impl Drop for SpawnOnDrop<'_, '_> {
-    fn drop(&mut self) {
-        self.0.spawn(async |ctx| ctx.dispatch(100));
-        self.0.dispatch(3);
-    }
-}
-
 #[test]
 #[cfg_attr(miri, ignore)]
 fn spawning_and_dispatching_from_drop_during_teardown() {
+    struct SpawnOnDrop<'c, 'a>(&'c TestContext<'a>);
+
+    impl Drop for SpawnOnDrop<'_, '_> {
+        fn drop(&mut self) {
+            self.0.spawn(async |ctx| ctx.dispatch(100));
+            self.0.dispatch(3);
+        }
+    }
+
     let (a, b) = socketpair();
     let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
@@ -363,37 +355,29 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
     assert_eq!(event_loop.state_mut().events(), [1, 3]);
 }
 
-#[derive(Default)]
-struct LastEvent(u32);
-
-impl State for LastEvent {
-    type Event = u32;
-
-    fn apply(&mut self, event: u32) {
-        self.0 = event;
-    }
-}
-
-impl Drop for LastEvent {
-    fn drop(&mut self) {
-        assert_eq!(
-            self.0, 2,
-            "the event dispatched while dropping wasn't applied"
-        );
-    }
-}
-
-struct DispatchOnDropShared<'c, 'a>(&'c TestContext<'a, LastEvent>, u32);
-
-impl Drop for DispatchOnDropShared<'_, '_> {
-    fn drop(&mut self) {
-        self.0.dispatch(self.1);
-    }
-}
-
 #[test]
 #[cfg_attr(miri, ignore)]
 fn events_dispatched_while_dropping_the_loop_are_applied() {
+    #[derive(Default)]
+    struct LastEvent(u32);
+
+    impl State for LastEvent {
+        type Event = u32;
+
+        fn apply(&mut self, event: u32) {
+            self.0 = event;
+        }
+    }
+
+    impl Drop for LastEvent {
+        fn drop(&mut self) {
+            assert_eq!(
+                self.0, 2,
+                "the event dispatched while dropping wasn't applied"
+            );
+        }
+    }
+
     let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
@@ -405,7 +389,7 @@ fn events_dispatched_while_dropping_the_loop_are_applied() {
         async |ctx| {
             ctx.dispatch(1);
             ctx.spawn(async |ctx| {
-                let _guard = DispatchOnDropShared(ctx, 2);
+                let _guard = DispatchOnDrop(ctx, 2);
                 pending::<()>().await;
             });
             pending::<()>().await;

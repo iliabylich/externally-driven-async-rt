@@ -1,78 +1,11 @@
-use core::{cell::Cell, fmt, marker::PhantomData};
+mod index;
+mod links;
+mod meta;
 
-pub(crate) struct Index<T> {
-    slot: u32,
-    generation: u32,
-    _marker: PhantomData<fn() -> T>,
-}
+use core::cell::Cell;
 
-impl<T> Index<T> {
-    pub(crate) fn from_parts(slot: u32, generation: u32) -> Self {
-        Self {
-            slot,
-            generation,
-            _marker: PhantomData,
-        }
-    }
-
-    pub(crate) fn slot(self) -> u32 {
-        self.slot
-    }
-
-    pub(crate) fn generation(self) -> u32 {
-        self.generation
-    }
-
-    pub(crate) fn to_bits(self) -> u64 {
-        (u64::from(self.generation) << 32) | u64::from(self.slot)
-    }
-
-    pub(crate) fn from_bits(bits: u64) -> Self {
-        Self {
-            slot: bits as u32,
-            generation: (bits >> 32) as u32,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<T> Clone for Index<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> Copy for Index<T> {}
-
-impl<T> PartialEq for Index<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.slot == other.slot && self.generation == other.generation
-    }
-}
-
-impl<T> Eq for Index<T> {}
-
-impl<T> fmt::Debug for Index<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Index({}v{})", self.slot, self.generation)
-    }
-}
-
-#[derive(Clone, Copy)]
-enum Links {
-    Occupied {
-        prev: Option<u32>,
-        next: Option<u32>,
-    },
-    Vacant {
-        next_free: Option<u32>,
-    },
-}
-
-struct Meta {
-    generation: Cell<u32>,
-    links: Cell<Links>,
-}
+pub(crate) use self::index::Index;
+use self::{links::Links, meta::Meta};
 
 pub(crate) struct ObjectPool<T, const N: usize> {
     free_head: Cell<Option<u32>>,
@@ -140,7 +73,7 @@ impl<T, const N: usize> ObjectPool<T, N> {
         let Links::Occupied { prev, next } = meta.links.get() else {
             unreachable!("checked by `occupied`");
         };
-        meta.generation.set(index.generation.wrapping_add(1));
+        meta.generation.set(index.generation().wrapping_add(1));
         meta.links.set(Links::Vacant {
             next_free: self.free_head.get(),
         });
@@ -151,13 +84,13 @@ impl<T, const N: usize> ObjectPool<T, N> {
         if let Some(next) = next {
             self.set_prev(next, prev);
         }
-        self.free_head.set(Some(index.slot));
+        self.free_head.set(Some(index.slot()));
     }
 
     fn occupied(&self, index: Index<T>) -> Option<&Meta> {
-        let meta = self.meta.get(index.slot as usize)?;
+        let meta = self.meta.get(index.slot() as usize)?;
         let occupied = matches!(meta.links.get(), Links::Occupied { .. });
-        if occupied && meta.generation.get() == index.generation {
+        if occupied && meta.generation.get() == index.generation() {
             Some(meta)
         } else {
             None
@@ -182,7 +115,7 @@ impl<T, const N: usize> ObjectPool<T, N> {
 
     pub(crate) fn get(&self, index: Index<T>) -> Option<&T> {
         self.occupied(index)
-            .map(|_| &self.values[index.slot as usize])
+            .map(|_| &self.values[index.slot() as usize])
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (Index<T>, &T)> {

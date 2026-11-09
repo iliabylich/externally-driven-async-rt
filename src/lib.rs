@@ -2,25 +2,23 @@
 
 mod context;
 mod event_loop;
-mod instant;
 mod io;
-mod join_handle;
 pub mod net;
 mod pool;
-mod selectors;
-mod sleep;
+mod selector;
 mod state;
 mod storage;
-mod task;
+mod sys;
+mod tasks;
 #[cfg(test)]
-mod test_utils;
-mod thread_id;
-mod wake_queue;
+mod testing;
+mod time;
+mod waker_slot;
 
 pub use context::Context;
 pub use event_loop::{Error, EventLoop};
-pub use join_handle::JoinHandle;
-pub use selectors::Selector;
-pub use sleep::Sleep;
+pub use selector::Selector;
 pub use state::State;
 pub use storage::LoopStorage;
+pub use tasks::JoinHandle;
+pub use time::Sleep;
