@@ -15,10 +15,11 @@ run = "docker build --quiet --tag {{vars.docker_image}} docker"
 
 [tasks."docker:run"]
 hide = true
+raw = true
 depends = ["docker:build"]
 usage = 'arg "<args>" var=#true'
 run = """
-docker run --rm --ulimit nofile=256:256 \
+docker run --rm --ulimit nofile=256:256 $([ -t 0 ] && echo --interactive --tty) \
   --volume "$PWD:/work" \
   --volume externally-driven-async-rt-target:/work/target \
   --volume externally-driven-async-rt-registry:/usr/local/cargo/registry \
@@ -31,3 +32,6 @@ run = [{ task = "docker:run", args = ["cargo", "test"] }]
 
 [tasks."docker:miri"]
 run = [{ task = "docker:run", args = ["cargo", "+nightly", "miri", "test"] }]
+
+[tasks."docker:shell"]
+run = [{ task = "docker:run", args = ["bash"] }]

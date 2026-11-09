@@ -11,6 +11,7 @@ use crate::{
         Direction, EVENTS_PER_CALL, IoAction, IoChange, KernelTimer, SelectorEvent, TimerChange,
         Token,
     },
+    strace::{syscall, syscall_end, syscall_start},
     time::Instant,
 };
 
@@ -24,8 +25,14 @@ pub struct KqueueSelector {
 
 impl KqueueSelector {
     pub fn new() -> rustix::io::Result<Self> {
-        let kq = kqueue()?;
-        fcntl_setfd(&kq, FdFlags::CLOEXEC)?;
+        syscall_start!("kqueue");
+        let kq = kqueue();
+        syscall_end!(kq);
+        let kq = kq?;
+        syscall_start!("fcntl", kq, "F_SETFD", FdFlags::CLOEXEC);
+        let result = fcntl_setfd(&kq, FdFlags::CLOEXEC);
+        syscall_end!(result);
+        result?;
         Ok(Self {
             kq,
             timer: RefCell::new(KernelTimer::default()),
@@ -63,7 +70,14 @@ impl KqueueSelector {
         let mut buf = [MaybeUninit::<Event>::uninit(); EVENTS_PER_CALL];
         loop {
             // SAFETY: the changelist is empty, so this call doesn't register any fd.
+            syscall_start!("kevent", self.kq, &[][..] as &[Event]);
             let result = unsafe { kevent(&self.kq, &[], &mut buf, Some(Duration::ZERO)) };
+            syscall_end!(
+                result;
+                result.as_ref().ok().map(|(events, _)| &**events),
+                EVENTS_PER_CALL,
+                Duration::ZERO,
+            );
             match result {
                 Ok((events, _)) => {
                     let full = events.len() == EVENTS_PER_CALL;
@@ -105,7 +119,14 @@ impl KqueueSelector {
         // SAFETY: the callers (`flush`, `apply_now`) only pass open fds, and a filter is deleted
         // (`apply_now`) before its registration ends and the fd can be closed, so the kqueue
         // never refers to an invalid fd.
+        syscall_start!("kevent", self.kq, changes);
         let result = unsafe { kevent(&self.kq, changes, receipts, Some(Duration::ZERO)) };
+        syscall_end!(
+            result;
+            result.as_ref().ok().map(|(receipts, _)| &**receipts),
+            CHANGES_PER_CALL,
+            Duration::ZERO,
+        );
         let receipts = match result {
             Ok((receipts, _)) => receipts,
             Err(Errno::INTR) => return Ok(()),
@@ -162,6 +183,12 @@ impl KqueueSelector {
         };
         let udata = core::ptr::without_provenance_mut(change.token.0 as usize);
         Event::new(filter, flags | EventFlags::RECEIPT, udata)
+    }
+}
+
+impl Drop for KqueueSelector {
+    fn drop(&mut self) {
+        syscall!("close", self.kq);
     }
 }
 

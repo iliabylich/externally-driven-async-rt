@@ -8,6 +8,7 @@ mod pool;
 mod selector;
 mod state;
 mod storage;
+mod strace;
 mod sys;
 mod tasks;
 #[cfg(test)]

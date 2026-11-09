@@ -18,6 +18,7 @@ use crate::{
         Direction, EVENTS_PER_CALL, IoAction, IoChange, KernelTimer, SelectorEvent, TimerChange,
         Token,
     },
+    strace::{syscall, syscall_end, syscall_start},
     time::Instant,
 };
 
@@ -39,17 +40,30 @@ pub struct EpollSelector {
 
 impl EpollSelector {
     pub fn new() -> rustix::io::Result<Self> {
-        let epoll = epoll::create(CreateFlags::CLOEXEC)?;
-        let timer_fd = timerfd_create(
-            TimerfdClockId::Monotonic,
-            TimerfdFlags::NONBLOCK | TimerfdFlags::CLOEXEC,
-        )?;
-        epoll::add(
-            &epoll,
-            &timer_fd,
-            EventData::new_u64(TIMER_DATA),
-            EventFlags::IN,
-        )?;
+        syscall_start!("epoll_create1", CreateFlags::CLOEXEC);
+        let epoll = epoll::create(CreateFlags::CLOEXEC);
+        syscall_end!(epoll);
+        let epoll = epoll?;
+
+        let timer_flags = TimerfdFlags::NONBLOCK | TimerfdFlags::CLOEXEC;
+        syscall_start!("timerfd_create", TimerfdClockId::Monotonic, timer_flags);
+        let timer_fd = timerfd_create(TimerfdClockId::Monotonic, timer_flags);
+        syscall_end!(timer_fd);
+        let timer_fd = timer_fd?;
+
+        let data = EventData::new_u64(TIMER_DATA);
+        let flags = EventFlags::IN;
+        syscall_start!(
+            "epoll_ctl",
+            epoll,
+            "EPOLL_CTL_ADD",
+            timer_fd,
+            Event { flags, data }
+        );
+        let result = epoll::add(&epoll, &timer_fd, data, flags);
+        syscall_end!(result);
+        result?;
+
         Ok(Self {
             epoll,
             timer_fd,
@@ -89,7 +103,10 @@ impl EpollSelector {
     ) -> rustix::io::Result<bool> {
         let mut buf = [NO_EVENT; EVENTS_PER_CALL];
         let len = loop {
-            match epoll::wait(&self.epoll, &mut buf, Some(&ZERO)) {
+            syscall_start!("epoll_wait", self.epoll);
+            let result = epoll::wait(&self.epoll, &mut buf, Some(&ZERO));
+            syscall_end!(result; &buf[..result.unwrap_or(0)], EVENTS_PER_CALL, ZERO);
+            match result {
                 Ok(len) => break len,
                 Err(Errno::INTR) => continue,
                 Err(errno) => return Err(errno),
@@ -115,7 +132,10 @@ impl EpollSelector {
 
     fn consume_timer(&self) -> rustix::io::Result<Option<SelectorEvent>> {
         let mut expirations = [0; 8];
-        match rustix::io::read(&self.timer_fd, &mut expirations) {
+        syscall_start!("read", self.timer_fd);
+        let result = rustix::io::read(&self.timer_fd, &mut expirations);
+        syscall_end!(result; &expirations[..result.unwrap_or(0)], expirations.len());
+        match result {
             Ok(_) => {
                 self.timer.borrow_mut().fired();
                 Ok(Some(SelectorEvent::Timer))
@@ -137,15 +157,38 @@ impl EpollSelector {
                 };
                 let data = EventData::new_u64(change.token.0);
                 let flags = interest | EventFlags::ONESHOT;
-                match epoll::modify(&self.epoll, fd, data, flags) {
-                    Err(Errno::NOENT) => epoll::add(&self.epoll, fd, data, flags),
+                syscall_start!(
+                    "epoll_ctl",
+                    self.epoll,
+                    "EPOLL_CTL_MOD",
+                    fd,
+                    Event { flags, data }
+                );
+                let modified = epoll::modify(&self.epoll, fd, data, flags);
+                syscall_end!(modified);
+                if modified != Err(Errno::NOENT) {
+                    return modified;
+                }
+                syscall_start!(
+                    "epoll_ctl",
+                    self.epoll,
+                    "EPOLL_CTL_ADD",
+                    fd,
+                    Event { flags, data }
+                );
+                let added = epoll::add(&self.epoll, fd, data, flags);
+                syscall_end!(added);
+                added
+            }
+            IoAction::Disarm => {
+                syscall_start!("epoll_ctl", self.epoll, "EPOLL_CTL_DEL", fd);
+                let deleted = epoll::delete(&self.epoll, fd);
+                syscall_end!(deleted);
+                match deleted {
+                    Err(Errno::NOENT) => Ok(()),
                     result => result,
                 }
             }
-            IoAction::Disarm => match epoll::delete(&self.epoll, fd) {
-                Err(Errno::NOENT) => Ok(()),
-                result => result,
-            },
         }
     }
 
@@ -162,8 +205,23 @@ impl EpollSelector {
             it_interval: ZERO,
             it_value,
         };
-        timerfd_settime(&self.timer_fd, TimerfdTimerFlags::empty(), &spec)?;
+        syscall_start!(
+            "timerfd_settime",
+            self.timer_fd,
+            TimerfdTimerFlags::empty(),
+            spec
+        );
+        let result = timerfd_settime(&self.timer_fd, TimerfdTimerFlags::empty(), &spec);
+        syscall_end!(result);
+        result?;
         Ok(())
+    }
+}
+
+impl Drop for EpollSelector {
+    fn drop(&mut self) {
+        syscall!("close", self.epoll);
+        syscall!("close", self.timer_fd);
     }
 }
 
