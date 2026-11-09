@@ -94,17 +94,19 @@ mod tests {
     use crate::{
         instant::Instant,
         storage::Timers,
-        test_utils::{assert_yields, counting_waker, waker},
+        test_utils::{assert_yields, counting_waker, waker, waker_id},
+        wake_queue::WakeQueue,
     };
 
     #[track_caller]
-    fn assert_expires<const N: usize>(
+    fn assert_expires<const N: usize, const W: usize>(
         timers: &Timers<N>,
+        wakers: &'static WakeQueue<W>,
         now: Instant,
-        ids: impl IntoIterator<Item = usize>,
+        ids: impl IntoIterator<Item = u32>,
     ) {
         let expired = core::iter::from_fn(|| timers.take_expired(now));
-        assert_yields(expired.map(|waker| waker.data().addr()), ids);
+        assert_yields(expired.map(|waker| waker_id(wakers, &waker)), ids);
     }
 
     #[test]
@@ -133,17 +135,23 @@ mod tests {
 
     #[test]
     fn expire_wakes_due_timers_in_deadline_order() {
+        static WAKERS: WakeQueue<8> = WakeQueue::new();
         let earliest = Instant::now();
         let now = earliest + Duration::from_millis(1);
         let timers = &Timers::<8>::new();
-        timers.alloc(now + Duration::from_millis(5), waker(3));
-        timers.alloc(now, waker(2));
-        timers.alloc(now + Duration::from_millis(5), waker(4));
-        timers.alloc(now + Duration::from_millis(10), waker(5));
-        timers.alloc(earliest, waker(1));
+        timers.alloc(now + Duration::from_millis(5), waker(&WAKERS, 3));
+        timers.alloc(now, waker(&WAKERS, 2));
+        timers.alloc(now + Duration::from_millis(5), waker(&WAKERS, 4));
+        timers.alloc(now + Duration::from_millis(10), waker(&WAKERS, 5));
+        timers.alloc(earliest, waker(&WAKERS, 1));
 
-        assert_expires(timers, now + Duration::from_millis(5), [1, 2, 3, 4]);
-        assert_expires(timers, now + Duration::from_millis(9), []);
+        assert_expires(
+            timers,
+            &WAKERS,
+            now + Duration::from_millis(5),
+            [1, 2, 3, 4],
+        );
+        assert_expires(timers, &WAKERS, now + Duration::from_millis(9), []);
         assert_eq!(
             timers.next_deadline(),
             Some(now + Duration::from_millis(10))
@@ -152,32 +160,35 @@ mod tests {
 
     #[test]
     fn equal_deadlines_expire_in_insertion_order_across_slot_reuse() {
+        static WAKERS: WakeQueue<8> = WakeQueue::new();
         let now = Instant::now();
         let timers = &Timers::<2>::new();
         let first = timers.alloc(now, Waker::noop().clone());
-        timers.alloc(now, waker(1));
+        timers.alloc(now, waker(&WAKERS, 1));
         timers.release(first);
-        timers.alloc(now, waker(2));
-        assert_expires(timers, now, [1, 2]);
+        timers.alloc(now, waker(&WAKERS, 2));
+        assert_expires(timers, &WAKERS, now, [1, 2]);
     }
 
     #[test]
     fn released_timer_is_not_woken() {
+        static WAKERS: WakeQueue<8> = WakeQueue::new();
         let now = Instant::now();
         let timers = &Timers::<1>::new();
-        let index = timers.alloc(now, waker(1));
+        let index = timers.alloc(now, waker(&WAKERS, 1));
         timers.release(index);
-        assert_expires(timers, now, []);
+        assert_expires(timers, &WAKERS, now, []);
         assert_eq!(timers.next_deadline(), None);
     }
 
     #[test]
     fn replaced_waker_is_the_one_woken() {
+        static WAKERS: WakeQueue<8> = WakeQueue::new();
         let now = Instant::now();
         let timers = &Timers::<1>::new();
-        let index = timers.alloc(now, waker(1));
-        timers.set_waker(index, &waker(2));
-        assert_expires(timers, now, [2]);
+        let index = timers.alloc(now, waker(&WAKERS, 1));
+        timers.set_waker(index, &waker(&WAKERS, 2));
+        assert_expires(timers, &WAKERS, now, [2]);
     }
 
     #[test]

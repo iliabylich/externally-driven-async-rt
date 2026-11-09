@@ -14,6 +14,7 @@ use rustix::{
 
 use crate::{
     Context, Error, EventLoop, LoopStorage, State, io::IoRegistration, selectors::Direction,
+    wake_queue::WakeQueue,
 };
 
 pub(crate) const TEST_MAX_TASKS_COUNT: usize = 16;
@@ -153,15 +154,18 @@ pub(crate) fn assert_yields<T: PartialEq + core::fmt::Debug>(
     }
 }
 
-pub(crate) fn waker(id: usize) -> Waker {
-    static VTABLE: RawWakerVTable =
-        RawWakerVTable::new(|data| RawWaker::new(data, &VTABLE), |_| {}, |_| {}, |_| {});
-    // SAFETY: the vtable never touches the data pointer, and its functions do nothing.
-    unsafe { Waker::new(core::ptr::without_provenance(id), &VTABLE) }
+pub(crate) fn waker<const N: usize>(queue: &'static WakeQueue<N>, id: u32) -> Waker {
+    queue.waker(id)
+}
+
+pub(crate) fn waker_id<const N: usize>(queue: &'static WakeQueue<N>, waker: &Waker) -> u32 {
+    (0..N as u32)
+        .find(|&id| waker.data() == queue.waker(id).data())
+        .expect("the waker comes from `waker`")
 }
 
 pub(crate) fn counting_waker(drops: &Cell<u32>) -> Waker {
-    static VTABLE: RawWakerVTable = RawWakerVTable::new(
+    const VTABLE: RawWakerVTable = RawWakerVTable::new(
         |data| RawWaker::new(data, &VTABLE),
         |_| {},
         |_| {},

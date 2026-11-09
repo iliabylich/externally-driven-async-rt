@@ -148,7 +148,8 @@ mod tests {
     use crate::{
         selectors::{Direction, IoAction, IoChange, Token},
         storage::{IoIndex, IoWaiters},
-        test_utils::{assert_yields, waker},
+        test_utils::{assert_yields, waker, waker_id},
+        wake_queue::WakeQueue,
     };
 
     #[track_caller]
@@ -216,13 +217,14 @@ mod tests {
 
     #[test]
     fn an_event_takes_the_waker_of_its_direction_only() {
+        static WAKERS: WakeQueue<2> = WakeQueue::new();
         let io_waiters = &IoWaiters::<1>::new();
         let index = io_waiters.register(3, Direction::Read);
-        io_waiters.set_waker(index, &waker(1));
+        io_waiters.set_waker(index, &waker(&WAKERS, 1));
         let token = Token(index.to_bits());
         assert!(io_waiters.take_waker(token, Direction::Write).is_none());
         let woken = io_waiters.take_waker(token, Direction::Read).unwrap();
-        assert_eq!(woken.data().addr(), 1);
+        assert_eq!(waker_id(&WAKERS, &woken), 1);
         assert!(!io_waiters.has_waker(index));
     }
 
