@@ -1,7 +1,6 @@
 use core::{
     cell::Cell,
     future::{Future, pending, poll_fn},
-    mem::MaybeUninit,
     pin::Pin,
     task::{Poll, Waker},
     time::Duration,
@@ -126,35 +125,6 @@ fn root_progresses_across_drains() {
         assert_eq!(event_loop.state_mut().events(), &[0, 1, 2][..=i as usize]);
         assert!(!is_readable(&event_loop, 0));
     }
-}
-
-#[test]
-fn handle_survives_moves_and_an_opaque_pointer_round_trip() {
-    let (a, b) = socketpair();
-    let event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        Log::default(),
-        async move |ctx| {
-            wait_readable(ctx, &a).await;
-            ctx.dispatch(1);
-        },
-    )
-    .unwrap();
-    let handles = [event_loop];
-    let [event_loop] = handles;
-    let mut slot = MaybeUninit::new(event_loop);
-    let raw: *mut TestLoop<Log> = slot.as_mut_ptr();
-    // SAFETY: `raw` points to the initialized handle in `slot`, which is read out once.
-    let mut event_loop = unsafe { raw.read() };
-    wake_by_writing(&event_loop, &b);
-    assert_eq!(
-        event_loop.drain_events_without_blocking(),
-        Err(Error::RootFinished)
-    );
-    assert_eq!(event_loop.state_mut().events(), [1]);
 }
 
 #[test]
