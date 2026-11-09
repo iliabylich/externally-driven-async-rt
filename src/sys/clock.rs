@@ -19,6 +19,7 @@ struct Timespec {
 // `{ time_t, long }`, both 64-bit on the supported 64-bit targets. Any clock id is accepted (an
 // unknown one fails with `EINVAL`), and a `&mut Timespec` is a non-null pointer valid for writes,
 // so the call is safe.
+#[link(name = "c")]
 unsafe extern "C" {
     safe fn clock_gettime(clock_id: ClockId, tp: &mut Timespec) -> i32;
 }
