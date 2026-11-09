@@ -3,6 +3,7 @@ use core::time::Duration;
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     fd::{AsFd, OwnedFd},
+    thread::{NanosleepRelativeResult, nanosleep},
 };
 
 use crate::{io::IoRegistration, selector::Direction, testing::TestContext};
@@ -29,7 +30,7 @@ pub(crate) fn sleep_blocking(duration: Duration) {
         tv_sec: duration.as_secs() as i64,
         tv_nsec: i64::from(duration.subsec_nanos()),
     };
-    assert_eq!(poll(&mut [], Some(&timeout)).unwrap(), 0);
+    assert!(matches!(nanosleep(&timeout), NanosleepRelativeResult::Ok));
 }
 
 pub(crate) async fn wait_readable(ctx: &TestContext<'_>, fd: &OwnedFd) {

@@ -2,7 +2,7 @@ use core::cell::RefCell;
 
 use crate::{
     io::IoWaiters,
-    selector::{Direction, EVENTS_PER_CALL, Selector, SelectorEvent},
+    selector::{EVENTS_PER_CALL, Selector, SelectorEvent},
     storage::LoopStorage,
     tasks::TasksGuard,
     time::{Instant, Timers},
@@ -100,13 +100,8 @@ impl<
             let full = self.selector().poll_nonblocking(&mut events)?;
             for event in events.iter().map_while(|event| *event) {
                 match event {
-                    SelectorEvent::Readable(token) => {
-                        if let Some(waker) = self.io_waiters().take_waker(token, Direction::Read) {
-                            waker.wake();
-                        }
-                    }
-                    SelectorEvent::Writable(token) => {
-                        if let Some(waker) = self.io_waiters().take_waker(token, Direction::Write) {
+                    SelectorEvent::Io(token) => {
+                        if let Some(waker) = self.io_waiters().take_waker(token) {
                             waker.wake();
                         }
                     }

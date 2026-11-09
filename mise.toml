@@ -1,3 +1,6 @@
+[vars]
+docker_image = "externally-driven-async-rt-linux"
+
 [tasks.test]
 run = "cargo test"
 
@@ -6,3 +9,25 @@ run = "cargo +nightly miri test"
 
 [tasks.coverage]
 run = ["cargo llvm-cov --html", "open target/llvm-cov/html/index.html"]
+
+[tasks."docker:build"]
+run = "docker build --quiet --tag {{vars.docker_image}} docker"
+
+[tasks."docker:run"]
+hide = true
+depends = ["docker:build"]
+usage = 'arg "<args>" var=#true'
+run = """
+docker run --rm --ulimit nofile=256:256 \
+  --volume "$PWD:/work" \
+  --volume externally-driven-async-rt-target:/work/target \
+  --volume externally-driven-async-rt-registry:/usr/local/cargo/registry \
+  --workdir /work \
+  {{vars.docker_image}} {{ usage.args | join(sep=" ") }}
+"""
+
+[tasks."docker:test"]
+run = [{ task = "docker:run", args = ["cargo", "test"] }]
+
+[tasks."docker:miri"]
+run = [{ task = "docker:run", args = ["cargo", "+nightly", "miri", "test"] }]

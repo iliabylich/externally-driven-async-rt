@@ -67,11 +67,8 @@ impl<const N: usize> IoWaiters<N> {
         self.pool.get(index).is_some_and(|io| io.waker.is_set())
     }
 
-    pub(crate) fn take_waker(&self, token: Token, direction: Direction) -> Option<Waker> {
+    pub(crate) fn take_waker(&self, token: Token) -> Option<Waker> {
         let io = self.pool.get(IoIndex::from_bits(token.0))?;
-        if io.direction.get() != direction {
-            return None;
-        }
         io.armed.set(false);
         io.waker.take()
     }
@@ -175,14 +172,13 @@ mod tests {
     }
 
     #[test]
-    fn an_event_takes_the_waker_of_its_direction_only() {
+    fn an_event_takes_the_waker_of_its_token() {
         static WAKERS: WakeQueue<2> = WakeQueue::new();
         let io_waiters = &IoWaiters::<1>::new();
         let index = io_waiters.register(3, Direction::Read);
         io_waiters.set_waker(index, &WAKERS.waker(1));
         let token = Token(index.to_bits());
-        assert!(io_waiters.take_waker(token, Direction::Write).is_none());
-        let woken = io_waiters.take_waker(token, Direction::Read).unwrap();
+        let woken = io_waiters.take_waker(token).unwrap();
         assert_eq!(WAKERS.id_by_waker_data(&woken), 1);
         assert!(!io_waiters.has_waker(index));
     }

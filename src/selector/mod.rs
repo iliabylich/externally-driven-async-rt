@@ -1,4 +1,6 @@
 mod direction;
+#[cfg(target_os = "linux")]
+mod epoll;
 mod io_action;
 mod io_change;
 mod kernel_timer;
@@ -10,10 +12,10 @@ mod token;
 
 #[cfg(target_os = "macos")]
 pub type Selector = kqueue::KqueueSelector;
-#[cfg(not(target_os = "macos"))]
-compile_error!(
-    "externally-driven-async-rt currently supports only macOS (Linux support is planned)"
-);
+#[cfg(target_os = "linux")]
+pub type Selector = epoll::EpollSelector;
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+compile_error!("externally-driven-async-rt supports only macOS and Linux");
 
 pub(crate) use self::{
     direction::Direction,

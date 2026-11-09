@@ -61,7 +61,7 @@ fn armed_write_is_reported_with_its_token() {
     let selector = Selector::new().unwrap();
     let (a, _b) = socketpair();
     selector.flush([arm(1, &a, Direction::Write)]).unwrap();
-    assert_yields!(events(&selector), [SelectorEvent::Writable(Token(1))]);
+    assert_yields!(events(&selector), [SelectorEvent::Io(Token(1))]);
 }
 
 #[test]
@@ -72,13 +72,13 @@ fn read_interest_is_one_shot() {
     selector.flush([arm(2, &rx, Direction::Read)]).unwrap();
 
     rustix::io::write(&tx, b"hello").unwrap();
-    assert_yields!(events(&selector), [SelectorEvent::Readable(Token(2))]);
+    assert_yields!(events(&selector), [SelectorEvent::Io(Token(2))]);
     rustix::io::write(&tx, b"more").unwrap();
     assert!(!is_readable(&selector, 0));
     assert_yields!(events(&selector), []);
 
     selector.flush([arm(2, &rx, Direction::Read)]).unwrap();
-    assert_yields!(events(&selector), [SelectorEvent::Readable(Token(2))]);
+    assert_yields!(events(&selector), [SelectorEvent::Io(Token(2))]);
 }
 
 #[test]
@@ -88,7 +88,7 @@ fn data_that_arrived_before_arming_is_reported() {
     let (rx, tx) = socketpair();
     rustix::io::write(&tx, b"early").unwrap();
     selector.flush([arm(3, &rx, Direction::Read)]).unwrap();
-    assert_yields!(events(&selector), [SelectorEvent::Readable(Token(3))]);
+    assert_yields!(events(&selector), [SelectorEvent::Io(Token(3))]);
 }
 
 #[test]
@@ -131,7 +131,7 @@ fn disarming_a_filter_that_already_fired_is_ok() {
     let selector = Selector::new().unwrap();
     let (a, _b) = socketpair();
     selector.flush([arm(7, &a, Direction::Write)]).unwrap();
-    assert_yields!(events(&selector), [SelectorEvent::Writable(Token(7))]);
+    assert_yields!(events(&selector), [SelectorEvent::Io(Token(7))]);
     selector.apply_now(disarm(7, &a, Direction::Write)).unwrap();
 }
 
@@ -146,7 +146,7 @@ fn reused_fd_number_reports_the_new_token() {
 
     let (c, _d) = socketpair();
     selector.flush([arm(9, &c, Direction::Write)]).unwrap();
-    assert_yields!(events(&selector), [SelectorEvent::Writable(Token(9))]);
+    assert_yields!(events(&selector), [SelectorEvent::Io(Token(9))]);
 }
 
 #[test]

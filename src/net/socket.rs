@@ -3,7 +3,7 @@ use rustix::{
     io::{Errno, FdFlags, fcntl_dupfd_cloexec, fcntl_setfd, ioctl_fionbio},
     net::{
         AddressFamily, RecvFlags, SendFlags, Shutdown, SocketType,
-        sockopt::{set_socket_nosigpipe, set_socket_reuseaddr, socket_error},
+        sockopt::{set_socket_reuseaddr, socket_error},
     },
 };
 
@@ -12,6 +12,10 @@ use crate::{
 };
 
 const LISTEN_BACKLOG: i32 = 1024;
+#[cfg(target_os = "macos")]
+const STREAM_SEND_FLAGS: SendFlags = SendFlags::empty();
+#[cfg(target_os = "linux")]
+const STREAM_SEND_FLAGS: SendFlags = SendFlags::NOSIGNAL;
 
 pub(super) struct Socket(OwnedFd);
 
@@ -143,8 +147,10 @@ impl Socket {
         >,
         buf: &[u8],
     ) -> rustix::io::Result<usize> {
-        self.retry(ctx, Direction::Write, |fd| rustix::io::write(fd, buf))
-            .await
+        self.retry(ctx, Direction::Write, |fd| {
+            rustix::net::send(fd, buf, STREAM_SEND_FLAGS)
+        })
+        .await
     }
 
     pub(super) async fn send<
@@ -274,11 +280,15 @@ impl Socket {
         Ok(Self(fcntl_dupfd_cloexec(&self.0, 0)?))
     }
 
-    fn configure(&self, ty: SocketType) -> rustix::io::Result<()> {
+    fn configure(
+        &self,
+        #[cfg_attr(target_os = "linux", expect(unused_variables))] ty: SocketType,
+    ) -> rustix::io::Result<()> {
         fcntl_setfd(&self.0, FdFlags::CLOEXEC)?;
         ioctl_fionbio(&self.0, true)?;
+        #[cfg(target_os = "macos")]
         if ty == SocketType::STREAM {
-            set_socket_nosigpipe(&self.0, true)?;
+            rustix::net::sockopt::set_socket_nosigpipe(&self.0, true)?;
         }
         Ok(())
     }

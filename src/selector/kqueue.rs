@@ -124,8 +124,7 @@ impl KqueueSelector {
     fn consume(&self, event: &Event) -> SelectorEvent {
         let token = Token(event.udata().addr() as u64);
         match event.filter() {
-            EventFilter::Read(_) => SelectorEvent::Readable(token),
-            EventFilter::Write(_) => SelectorEvent::Writable(token),
+            EventFilter::Read(_) | EventFilter::Write(_) => SelectorEvent::Io(token),
             EventFilter::Timer { .. } => {
                 self.timer.borrow_mut().fired();
                 SelectorEvent::Timer
