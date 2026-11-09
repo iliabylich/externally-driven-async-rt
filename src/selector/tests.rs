@@ -48,9 +48,9 @@ fn events(selector: &Selector) -> impl Iterator<Item = SelectorEvent> + '_ {
 #[cfg_attr(miri, ignore)]
 fn nothing_armed_produces_no_events() {
     let selector = Selector::new().unwrap();
-    let (_a, b) = socketpair();
+    let (_rx, tx) = socketpair();
     selector.flush([]).unwrap();
-    rustix::io::write(&b, b"x").unwrap();
+    rustix::io::write(&tx, b"x").unwrap();
     assert!(!is_readable(&selector, 0));
     assert_yields!(events(&selector), []);
 }
@@ -68,16 +68,16 @@ fn armed_write_is_reported_with_its_token() {
 #[cfg_attr(miri, ignore)]
 fn read_interest_is_one_shot() {
     let selector = Selector::new().unwrap();
-    let (a, b) = socketpair();
-    selector.flush([arm(2, &a, Direction::Read)]).unwrap();
+    let (rx, tx) = socketpair();
+    selector.flush([arm(2, &rx, Direction::Read)]).unwrap();
 
-    rustix::io::write(&b, b"hello").unwrap();
+    rustix::io::write(&tx, b"hello").unwrap();
     assert_yields!(events(&selector), [SelectorEvent::Readable(Token(2))]);
-    rustix::io::write(&b, b"more").unwrap();
+    rustix::io::write(&tx, b"more").unwrap();
     assert!(!is_readable(&selector, 0));
     assert_yields!(events(&selector), []);
 
-    selector.flush([arm(2, &a, Direction::Read)]).unwrap();
+    selector.flush([arm(2, &rx, Direction::Read)]).unwrap();
     assert_yields!(events(&selector), [SelectorEvent::Readable(Token(2))]);
 }
 
@@ -85,9 +85,9 @@ fn read_interest_is_one_shot() {
 #[cfg_attr(miri, ignore)]
 fn data_that_arrived_before_arming_is_reported() {
     let selector = Selector::new().unwrap();
-    let (a, b) = socketpair();
-    rustix::io::write(&b, b"early").unwrap();
-    selector.flush([arm(3, &a, Direction::Read)]).unwrap();
+    let (rx, tx) = socketpair();
+    rustix::io::write(&tx, b"early").unwrap();
+    selector.flush([arm(3, &rx, Direction::Read)]).unwrap();
     assert_yields!(events(&selector), [SelectorEvent::Readable(Token(3))]);
 }
 
@@ -95,10 +95,10 @@ fn data_that_arrived_before_arming_is_reported() {
 #[cfg_attr(miri, ignore)]
 fn disarming_prevents_events() {
     let selector = Selector::new().unwrap();
-    let (a, b) = socketpair();
-    selector.flush([arm(4, &a, Direction::Read)]).unwrap();
-    selector.flush([disarm(4, &a, Direction::Read)]).unwrap();
-    rustix::io::write(&b, b"x").unwrap();
+    let (rx, tx) = socketpair();
+    selector.flush([arm(4, &rx, Direction::Read)]).unwrap();
+    selector.flush([disarm(4, &rx, Direction::Read)]).unwrap();
+    rustix::io::write(&tx, b"x").unwrap();
     assert!(!is_readable(&selector, 0));
 }
 
@@ -106,10 +106,10 @@ fn disarming_prevents_events() {
 #[cfg_attr(miri, ignore)]
 fn apply_now_deletes_an_armed_filter_without_flush() {
     let selector = Selector::new().unwrap();
-    let (a, b) = socketpair();
-    selector.flush([arm(5, &a, Direction::Read)]).unwrap();
-    selector.apply_now(disarm(5, &a, Direction::Read)).unwrap();
-    rustix::io::write(&b, b"x").unwrap();
+    let (rx, tx) = socketpair();
+    selector.flush([arm(5, &rx, Direction::Read)]).unwrap();
+    selector.apply_now(disarm(5, &rx, Direction::Read)).unwrap();
+    rustix::io::write(&tx, b"x").unwrap();
     assert!(!is_readable(&selector, 0));
 }
 
@@ -117,11 +117,11 @@ fn apply_now_deletes_an_armed_filter_without_flush() {
 #[cfg_attr(miri, ignore)]
 fn deleted_then_closed_fd_produces_no_events() {
     let selector = Selector::new().unwrap();
-    let (a, b) = socketpair();
-    selector.flush([arm(6, &a, Direction::Read)]).unwrap();
-    selector.apply_now(disarm(6, &a, Direction::Read)).unwrap();
-    drop(a);
-    rustix::io::write(&b, b"x").ok();
+    let (rx, tx) = socketpair();
+    selector.flush([arm(6, &rx, Direction::Read)]).unwrap();
+    selector.apply_now(disarm(6, &rx, Direction::Read)).unwrap();
+    drop(rx);
+    rustix::io::write(&tx, b"x").ok();
     assert_yields!(events(&selector), []);
 }
 

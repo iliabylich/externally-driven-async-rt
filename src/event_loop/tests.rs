@@ -73,7 +73,7 @@ fn idle_loop_is_not_readable_and_drains_to_nothing() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn root_finishing_inside_a_drain() {
-    let (a, b) = socketpair();
+    let (rx, tx) = socketpair();
     let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
@@ -84,7 +84,7 @@ fn root_finishing_inside_a_drain() {
         Log::default(),
         async move |ctx| {
             ctx.dispatch(1);
-            wait_readable(ctx, &a).await;
+            wait_readable(ctx, &rx).await;
             ctx.dispatch(2);
             ctx.dispatch(3);
         },
@@ -92,7 +92,7 @@ fn root_finishing_inside_a_drain() {
     .unwrap();
     assert_eq!(event_loop.state_mut().events(), [1]);
 
-    event_loop.wake_by_writing(&b);
+    event_loop.wake_by_writing(&tx);
     assert_eq!(
         event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)
@@ -108,7 +108,7 @@ fn root_finishing_inside_a_drain() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn root_progresses_across_drains() {
-    let (a, b) = socketpair();
+    let (rx, tx) = socketpair();
     let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
@@ -120,9 +120,9 @@ fn root_progresses_across_drains() {
         async move |ctx| {
             let mut i = 0;
             loop {
-                wait_readable(ctx, &a).await;
+                wait_readable(ctx, &rx).await;
                 let mut buf = [0; 16];
-                rustix::io::read(&a, &mut buf).unwrap();
+                rustix::io::read(&rx, &mut buf).unwrap();
                 ctx.dispatch(i);
                 i += 1;
             }
@@ -130,7 +130,7 @@ fn root_progresses_across_drains() {
     )
     .unwrap();
     for i in 0..3 {
-        event_loop.wake_by_writing(&b);
+        event_loop.wake_by_writing(&tx);
         assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
         assert_eq!(event_loop.state_mut().events(), &[0, 1, 2][..=i as usize]);
         assert!(!is_readable(&event_loop, 0));
@@ -140,8 +140,8 @@ fn root_progresses_across_drains() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn two_loops_on_one_thread_are_independent() {
-    let (a1, b1) = socketpair();
-    let (a2, _b2) = socketpair();
+    let (rx1, tx1) = socketpair();
+    let (rx2, _tx2) = socketpair();
     let mut selector = Selector::new().unwrap();
     let mut first = TestLoop::new(
         {
@@ -151,7 +151,7 @@ fn two_loops_on_one_thread_are_independent() {
         &mut selector,
         Log::default(),
         async move |ctx| {
-            wait_readable(ctx, &a1).await;
+            wait_readable(ctx, &rx1).await;
             ctx.dispatch(1);
         },
     )
@@ -165,13 +165,13 @@ fn two_loops_on_one_thread_are_independent() {
         &mut selector,
         Log::default(),
         async move |ctx| {
-            wait_readable(ctx, &a2).await;
+            wait_readable(ctx, &rx2).await;
             ctx.dispatch(2);
         },
     )
     .unwrap();
 
-    first.wake_by_writing(&b1);
+    first.wake_by_writing(&tx1);
     assert!(!is_readable(&second, 0));
     assert_eq!(second.drain_events_without_blocking(), Ok(()));
     assert_eq!(
@@ -202,7 +202,7 @@ fn panic_propagates_out_of_new() {
 #[cfg_attr(miri, ignore)]
 #[should_panic(expected = "boom in drain")]
 fn panic_propagates_out_of_drain() {
-    let (a, b) = socketpair();
+    let (rx, tx) = socketpair();
     let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
@@ -212,12 +212,12 @@ fn panic_propagates_out_of_drain() {
         &mut selector,
         Log::default(),
         async move |ctx| {
-            wait_readable(ctx, &a).await;
+            wait_readable(ctx, &rx).await;
             panic!("boom in drain");
         },
     )
     .unwrap();
-    event_loop.wake_by_writing(&b);
+    event_loop.wake_by_writing(&tx);
     let _ = event_loop.drain_events_without_blocking();
 }
 
@@ -281,7 +281,7 @@ fn root_future_bigger_than_task_size_is_fine() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn tasks_are_dropped_when_the_root_finishes() {
-    let (a, b) = socketpair();
+    let (rx, tx) = socketpair();
     let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
@@ -299,12 +299,12 @@ fn tasks_are_dropped_when_the_root_finishes() {
                 let _guard = DispatchOnDrop(ctx, 20);
                 pending::<()>().await;
             });
-            wait_readable(ctx, &a).await;
+            wait_readable(ctx, &rx).await;
             ctx.dispatch(1);
         },
     )
     .unwrap();
-    event_loop.wake_by_writing(&b);
+    event_loop.wake_by_writing(&tx);
     assert_eq!(
         event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)
@@ -319,7 +319,7 @@ fn tasks_are_dropped_when_the_root_finishes() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn spawning_and_dispatching_from_drop_during_teardown() {
-    struct SpawnOnDrop<'c, 'a>(&'c TestContext<'a>);
+    struct SpawnOnDrop<'c, 'rx>(&'c TestContext<'rx>);
 
     impl Drop for SpawnOnDrop<'_, '_> {
         fn drop(&mut self) {
@@ -328,7 +328,7 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
         }
     }
 
-    let (a, b) = socketpair();
+    let (rx, tx) = socketpair();
     let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
@@ -342,12 +342,12 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
                 let _guard = SpawnOnDrop(ctx);
                 pending::<()>().await;
             });
-            wait_readable(ctx, &a).await;
+            wait_readable(ctx, &rx).await;
             ctx.dispatch(1);
         },
     )
     .unwrap();
-    event_loop.wake_by_writing(&b);
+    event_loop.wake_by_writing(&tx);
     assert_eq!(
         event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)

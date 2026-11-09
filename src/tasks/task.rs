@@ -57,7 +57,7 @@ mod tests {
         task::{Context, Poll, Waker},
     };
 
-    use crate::{tasks::Task, testing::flagged_task};
+    use crate::{tasks::Task, testing::FlagOnDrop};
 
     fn write_task<Fut>(memory: &mut MaybeUninit<Fut>, future: Fut) -> Task
     where
@@ -93,7 +93,7 @@ mod tests {
     fn dropping_drops_the_future_in_place() {
         let dropped = Cell::new(false);
         let mut memory = MaybeUninit::uninit();
-        let task = write_task(&mut memory, flagged_task(&dropped));
+        let task = write_task(&mut memory, FlagOnDrop(&dropped));
         drop(task);
         assert!(dropped.get());
     }

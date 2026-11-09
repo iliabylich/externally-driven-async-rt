@@ -8,7 +8,7 @@ use crate::{
     LoopStorage,
     storage::LoopStorageGuard,
     tasks::{JoinStatus, Root, RootStatus, TaskId},
-    testing::{DropFlag, FixedFuture, flagged_task},
+    testing::{FixedFuture, FlagOnDrop},
 };
 
 const MAX_TASK_SIZE: usize = 1024;
@@ -24,7 +24,7 @@ fn dropping_a_task_drops_its_future_and_finishes_it() {
         STORAGE.claim(&(), ())
     };
     let tasks = &storage.tasks;
-    let id = storage.tasks.insert(flagged_task(&dropped));
+    let id = storage.tasks.insert(FlagOnDrop(&dropped));
     assert!(tasks.contains(id));
     assert_eq!(
         tasks.set_join_waiter(id, Waker::noop()),
@@ -190,7 +190,7 @@ fn an_overaligned_future_panics() {
 fn root_region_holds_a_root_bigger_than_a_slab_block() {
     struct BigRoot<'a> {
         data: [u8; 9000],
-        _flag: DropFlag<'a>,
+        _flag: FlagOnDrop<'a>,
     }
 
     impl Future for BigRoot<'_> {
@@ -214,7 +214,7 @@ fn root_region_holds_a_root_bigger_than_a_slab_block() {
     let tasks = &storage.tasks;
     let root = BigRoot {
         data: [3; 9000],
-        _flag: DropFlag(&dropped),
+        _flag: FlagOnDrop(&dropped),
     };
     storage.tasks.spawn_root(root);
     let Root::Running(id) = tasks.root() else {

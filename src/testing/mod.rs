@@ -1,8 +1,8 @@
 mod assert_yields;
 mod dispatch_on_drop;
-mod drop_flag;
 mod event_loop_testing_ext;
 mod fixed_future;
+mod flag_on_drop;
 mod log;
 mod poll;
 mod sockets;
@@ -13,9 +13,9 @@ use crate::{Context, EventLoop, LoopStorage};
 pub(crate) use self::{
     assert_yields::assert_yields,
     dispatch_on_drop::DispatchOnDrop,
-    drop_flag::{DropFlag, flagged_task},
     event_loop_testing_ext::EventLoopTestingExt,
     fixed_future::FixedFuture,
+    flag_on_drop::FlagOnDrop,
     log::Log,
     poll::{is_readable, is_writable, sleep_blocking, wait_readable},
     sockets::{raw_accept, raw_socket, socketpair},

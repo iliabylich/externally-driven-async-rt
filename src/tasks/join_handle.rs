@@ -48,7 +48,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn joining_a_running_task_waits_for_it() {
-        let (a, b) = socketpair();
+        let (rx, tx) = socketpair();
         let mut selector = Selector::new().unwrap();
         let mut event_loop = TestLoop::new(
             {
@@ -59,7 +59,7 @@ mod tests {
             Log::default(),
             async move |ctx| {
                 ctx.spawn(async move |ctx| {
-                    wait_readable(ctx, &a).await;
+                    wait_readable(ctx, &rx).await;
                     ctx.dispatch(1);
                 })
                 .await;
@@ -68,7 +68,7 @@ mod tests {
         )
         .unwrap();
         assert!(event_loop.state_mut().events().is_empty());
-        event_loop.wake_by_writing(&b);
+        event_loop.wake_by_writing(&tx);
         assert_eq!(
             event_loop.drain_events_without_blocking(),
             Err(Error::RootFinished)
@@ -79,7 +79,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn joining_a_finished_task_resolves_immediately() {
-        let (a, b) = socketpair();
+        let (rx, tx) = socketpair();
         let mut selector = Selector::new().unwrap();
         let mut event_loop = TestLoop::new(
             {
@@ -90,14 +90,14 @@ mod tests {
             Log::default(),
             async move |ctx| {
                 let handle = ctx.spawn(async |ctx| ctx.dispatch(1));
-                wait_readable(ctx, &a).await;
+                wait_readable(ctx, &rx).await;
                 handle.await;
                 ctx.dispatch(2);
             },
         )
         .unwrap();
         assert_eq!(event_loop.state_mut().events(), [1]);
-        event_loop.wake_by_writing(&b);
+        event_loop.wake_by_writing(&tx);
         assert_eq!(
             event_loop.drain_events_without_blocking(),
             Err(Error::RootFinished)
@@ -108,7 +108,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn dropped_handle_detaches_the_task() {
-        let (a, b) = socketpair();
+        let (rx, tx) = socketpair();
         let mut selector = Selector::new().unwrap();
         let mut event_loop = TestLoop::new(
             {
@@ -119,14 +119,14 @@ mod tests {
             Log::default(),
             async move |ctx| {
                 ctx.spawn(async move |ctx| {
-                    wait_readable(ctx, &a).await;
+                    wait_readable(ctx, &rx).await;
                     ctx.dispatch(1);
                 });
                 pending::<()>().await;
             },
         )
         .unwrap();
-        event_loop.wake_by_writing(&b);
+        event_loop.wake_by_writing(&tx);
         assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
         assert_eq!(event_loop.state_mut().events(), [1]);
     }
