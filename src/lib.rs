@@ -22,4 +22,4 @@ pub use selector::Selector;
 pub use state::State;
 pub use storage::LoopStorage;
 pub use tasks::JoinHandle;
-pub use time::Sleep;
+pub use time::{Sleep, Timeout};

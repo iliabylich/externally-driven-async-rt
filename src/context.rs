@@ -1,10 +1,10 @@
-use core::time::Duration;
+use core::{future::Future, time::Duration};
 
 use crate::{
     state::State,
     storage::LoopStorageGuard,
     tasks::JoinHandle,
-    time::{Instant, Sleep},
+    time::{Instant, Sleep, Timeout},
 };
 
 pub struct Context<
@@ -104,5 +104,13 @@ impl<
 
     pub fn sleep(&self, duration: Duration) -> Sleep<'_, MAX_TIMERS_COUNT> {
         Sleep::new(self.storage.timers(), Instant::now() + duration)
+    }
+
+    pub fn timeout<F: Future>(
+        &self,
+        duration: Duration,
+        future: F,
+    ) -> Timeout<'_, F, MAX_TIMERS_COUNT> {
+        Timeout::new(future, self.sleep(duration))
     }
 }
