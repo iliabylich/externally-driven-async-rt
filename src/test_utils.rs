@@ -1,8 +1,7 @@
 use core::{
     cell::Cell,
     future::Future,
-    pin::Pin,
-    task::{Poll, RawWaker, RawWakerVTable, Waker},
+    task::{RawWaker, RawWakerVTable, Waker},
     time::Duration,
 };
 
@@ -235,33 +234,24 @@ pub(crate) fn peer_read_exact<S: State>(
     }
 }
 
-pub(crate) fn has_timers<S: State>(event_loop: &TestLoop<S>) -> bool {
-    event_loop.storage.timers().next_deadline().is_some()
-}
-
-pub(crate) struct RaceFuture<A, B>(pub(crate) A, pub(crate) B);
-
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum RaceFutureWinner {
-    A,
-    B,
-}
-
-impl<A: Future + Unpin, B: Future + Unpin> Future for RaceFuture<A, B> {
-    type Output = RaceFutureWinner;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<RaceFutureWinner> {
-        if Pin::new(&mut self.0).poll(cx).is_ready() {
-            return Poll::Ready(RaceFutureWinner::A);
-        }
-        if Pin::new(&mut self.1).poll(cx).is_ready() {
-            return Poll::Ready(RaceFutureWinner::B);
-        }
-        Poll::Pending
-    }
-}
-
-pub(crate) fn run_until_events(event_loop: &mut TestLoop<Log>, count: usize) {
+pub(crate) fn run_until_events<
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+>(
+    event_loop: &mut EventLoop<
+        '_,
+        Log,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >,
+    count: usize,
+) {
     while event_loop.state_mut().events().len() < count {
         assert!(
             is_readable(&*event_loop, 2000),

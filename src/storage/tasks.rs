@@ -128,11 +128,6 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
     }
 
     #[cfg(test)]
-    pub(crate) fn queue(self) -> &'static WakeQueue<MAX_TASKS_COUNT> {
-        &self.tasks.queue
-    }
-
-    #[cfg(test)]
     pub(crate) fn contains(self, id: TaskId) -> bool {
         self.tasks.pool.get(id).is_some_and(TaskEntry::has_task)
     }
@@ -234,19 +229,6 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
         self.tasks.queue.track(id);
     }
 
-    pub(crate) fn remove(self, id: TaskId) -> Option<Option<Waker>> {
-        let entry = self.tasks.pool.get(id)?;
-        let task = match entry.task.take() {
-            TaskSlot::Idle(task) => task,
-            TaskSlot::Polling => {
-                entry.task.set(TaskSlot::Polling);
-                return None;
-            }
-            TaskSlot::Empty => return None,
-        };
-        Some(self.free(id, entry, task))
-    }
-
     fn free(self, id: TaskId, entry: &TaskEntry, task: Task) -> Option<Waker> {
         entry.task.set(TaskSlot::Empty);
         let join_waiter = entry.join_waiter.take();
@@ -262,9 +244,10 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
             let Some(id) = tasks.queue.pop() else {
                 return RootStatus::Running;
             };
-            let Some(entry) = tasks.pool.get(id) else {
-                continue;
-            };
+            let entry = tasks
+                .pool
+                .get(id)
+                .expect("the queue only yields tracked tasks");
             let mut task = match entry.task.replace(TaskSlot::Polling) {
                 TaskSlot::Idle(task) => task,
                 TaskSlot::Polling => panic!("a task can't be polled re-entrantly"),
@@ -289,8 +272,11 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
     }
 
     pub(crate) fn drop_all(self) {
-        while let Some((id, _)) = self.tasks.pool.iter().find(|(_, entry)| entry.is_idle()) {
-            self.remove(id);
+        while let Some((id, entry)) = self.tasks.pool.iter().find(|(_, entry)| entry.is_idle()) {
+            let TaskSlot::Idle(task) = entry.task.take() else {
+                unreachable!("`is_idle` checked the slot");
+            };
+            self.free(id, entry, task);
         }
     }
 
@@ -315,7 +301,11 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
 
 #[cfg(test)]
 mod tests {
-    use core::{cell::Cell, task::Waker};
+    use core::{
+        cell::Cell,
+        future::poll_fn,
+        task::{Poll, Waker},
+    };
 
     use crate::{
         LoopStorage,
@@ -330,7 +320,7 @@ mod tests {
         LoopStorage<(), MAX_TASKS_COUNT, MAX_TASK_SIZE, 0, 1, 1>;
 
     #[test]
-    fn removing_a_task_drops_its_future_and_returns_its_join_waiter() {
+    fn dropping_a_task_drops_its_future_and_finishes_it() {
         let dropped = Cell::new(false);
         let storage = {
             static STORAGE: TasksStorage<2> = TasksStorage::new();
@@ -343,10 +333,10 @@ mod tests {
             tasks.set_join_waiter(id, Waker::noop()),
             JoinStatus::Running
         );
-        let join_waiter = storage.tasks.remove(id).unwrap();
+        storage.tasks.drop_all();
         assert!(dropped.get());
-        assert!(join_waiter.is_some());
         assert!(!tasks.contains(id));
+        assert_eq!(tasks.count(), 0);
         assert_eq!(
             tasks.set_join_waiter(id, Waker::noop()),
             JoinStatus::Finished
@@ -361,7 +351,7 @@ mod tests {
         };
         let tasks = &storage.tasks;
         let first = storage.tasks.insert(async {});
-        storage.tasks.remove(first);
+        storage.tasks.drop_all();
         let second = storage.tasks.insert(async {});
         assert_ne!(first, second);
         assert!(!tasks.contains(first));
@@ -380,20 +370,6 @@ mod tests {
         };
         storage.tasks.insert(async {});
         storage.tasks.insert(async {});
-    }
-
-    #[test]
-    fn drop_all_drops_every_future() {
-        let dropped = Cell::new(false);
-        let storage = {
-            static STORAGE: TasksStorage<2> = TasksStorage::new();
-            STORAGE.claim(&(), ())
-        };
-        let tasks = &storage.tasks;
-        storage.tasks.insert(flagged_task(&dropped));
-        storage.tasks.drop_all();
-        assert!(dropped.get());
-        assert_eq!(tasks.count(), 0);
     }
 
     struct SpawnOnDrop<'a> {
@@ -434,10 +410,10 @@ mod tests {
             let _guard = guard;
         });
         id.set(Some(dropping));
-        storage.tasks.remove(dropping).unwrap();
+        storage.tasks.drop_all();
         let spawned = spawned.get().unwrap();
         assert_ne!(spawned.slot(), dropping.slot());
-        assert!(tasks.contains(spawned));
+        assert!(!tasks.contains(spawned));
     }
 
     #[test]
@@ -596,5 +572,87 @@ mod tests {
         };
         storage.tasks.spawn_root(core::future::pending::<()>());
         storage.tasks.spawn_root(core::future::pending::<()>());
+    }
+
+    fn counting(polls: &Cell<u32>) -> impl Future<Output = ()> {
+        poll_fn(move |_| {
+            polls.set(polls.get() + 1);
+            Poll::<()>::Pending
+        })
+    }
+
+    #[test]
+    fn finished_task_is_removed() {
+        let storage = {
+            static STORAGE: TasksStorage<1> = TasksStorage::new();
+            STORAGE.claim(&(), ())
+        };
+        let id = storage.tasks.spawn(async {});
+        assert_eq!(storage.tasks.run_ready(), RootStatus::Running);
+        assert!(!storage.tasks.contains(id));
+    }
+
+    #[test]
+    fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
+        let polls = Cell::new(0);
+        let storage = {
+            static STORAGE: TasksStorage<1> = TasksStorage::new();
+            STORAGE.claim(&(), ())
+        };
+        storage.tasks.spawn(poll_fn(|cx| {
+            polls.set(polls.get() + 1);
+            if polls.get() < 3 {
+                cx.waker().wake_by_ref();
+            }
+            Poll::<()>::Pending
+        }));
+        storage.tasks.run_ready();
+        assert_eq!(polls.get(), 3);
+    }
+
+    #[test]
+    fn task_spawned_during_a_poll_runs_in_the_same_run() {
+        let polls = Cell::new(0);
+        let storage = {
+            static STORAGE: TasksStorage<2> = TasksStorage::new();
+            STORAGE.claim(&(), ())
+        };
+        let tasks = storage.tasks;
+        let child = counting(&polls);
+        storage.tasks.spawn(async move {
+            tasks.spawn(child);
+        });
+        storage.tasks.run_ready();
+        assert_eq!(polls.get(), 1);
+    }
+
+    #[test]
+    fn join_waiter_is_woken_when_the_task_finishes() {
+        let polls = Cell::new(0);
+        let storage = {
+            static STORAGE: TasksStorage<2> = TasksStorage::new();
+            STORAGE.claim(&(), ())
+        };
+        let waiter = storage.tasks.spawn(counting(&polls));
+        let task = storage.tasks.spawn(async {});
+        storage
+            .tasks
+            .set_join_waiter(task, &storage.tasks.waker(waiter));
+        storage.tasks.run_ready();
+        assert_eq!(polls.get(), 2);
+    }
+
+    #[test]
+    fn root_finishing_stops_the_run() {
+        let polls = Cell::new(0);
+        let storage = {
+            static STORAGE: TasksStorage<2> = TasksStorage::new();
+            STORAGE.claim(&(), ())
+        };
+        let root = storage.tasks.spawn(async {});
+        storage.tasks.set_root(Root::Running(root));
+        storage.tasks.spawn(counting(&polls));
+        assert_eq!(storage.tasks.run_ready(), RootStatus::Finished);
+        assert_eq!(polls.get(), 0);
     }
 }

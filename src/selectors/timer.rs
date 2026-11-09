@@ -153,4 +153,15 @@ mod tests {
         timer.disarm_in_memory();
         assert_eq!(timer.flush(now), None);
     }
+
+    #[test]
+    fn firing_keeps_a_pending_new_deadline() {
+        let now = Instant::now();
+        let mut timer = Timer::default();
+        timer.arm_in_memory(now + ms(10));
+        timer.flush(now);
+        timer.arm_in_memory(now + ms(20));
+        timer.fired();
+        assert_eq!(timer.flush(now), Some(TimerChange::Arm(ms(20))));
+    }
 }

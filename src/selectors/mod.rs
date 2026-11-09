@@ -3,8 +3,6 @@ mod event;
 mod io_change;
 #[cfg(target_os = "macos")]
 mod kqueue;
-#[cfg(all(test, target_os = "macos"))]
-mod kqueue_tests;
 mod timer;
 mod token;
 
@@ -21,3 +19,6 @@ pub(crate) use self::{
     io_change::{Direction, IoAction, IoChange},
     token::Token,
 };
+
+#[cfg(test)]
+mod tests;

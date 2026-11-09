@@ -1,10 +1,6 @@
-use crate::{
-    LoopStorage,
-    instant::Instant,
-    selectors::Direction,
-    test_utils::{counting_waker, flagged_task},
-};
 use core::cell::Cell;
+
+use crate::{LoopStorage, instant::Instant, selectors::Direction, test_utils::counting_waker};
 
 type SmallStorage = LoopStorage<(), 1, 64, 0, 2, 2>;
 
@@ -28,21 +24,14 @@ fn clearing_drops_live_wakers() {
 }
 
 #[test]
-fn clearing_drops_live_tasks() {
-    let dropped = Cell::new(false);
-    let storage = {
-        static STORAGE: SmallStorage = SmallStorage::new();
-        STORAGE.claim(&(), ())
-    };
-    storage.tasks.insert(flagged_task(&dropped));
-    storage.clear();
-    assert!(dropped.get());
-}
-
-#[test]
 #[should_panic(expected = "a WakeQueue can only be used by one EventLoop")]
 fn a_storage_can_only_be_claimed_once() {
     static STORAGE: SmallStorage = SmallStorage::new();
     STORAGE.claim(&(), ());
     STORAGE.claim(&(), ());
+}
+
+#[test]
+fn storage_can_be_built_at_runtime() {
+    let _storage = SmallStorage::new();
 }

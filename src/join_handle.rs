@@ -49,6 +49,7 @@ mod tests {
     };
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn joining_a_running_task_waits_for_it() {
         let (a, b) = socketpair();
         let mut selector = Selector::new().unwrap();
@@ -79,6 +80,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn joining_a_finished_task_resolves_immediately() {
         let (a, b) = socketpair();
         let mut selector = Selector::new().unwrap();
@@ -107,6 +109,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn dropped_handle_detaches_the_task() {
         let (a, b) = socketpair();
         let mut selector = Selector::new().unwrap();
@@ -132,6 +135,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn spawned_task_can_spawn_and_join() {
         let mut selector = Selector::new().unwrap();
         let event_loop = TestLoop::new(

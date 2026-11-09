@@ -125,6 +125,7 @@ mod tests {
 
     use rustix::{
         fd::OwnedFd,
+        io::Errno,
         net::{AddressFamily, RecvFlags, SendFlags, SocketType},
     };
 
@@ -146,6 +147,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn round_trip_with_a_raw_peer() {
         let (peer, peer_addr) = raw_peer();
         let mut selector = Selector::new().unwrap();
@@ -188,5 +190,39 @@ mod tests {
             );
         }
         run_until_events(&mut event_loop, 1);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn connected_socket_reports_a_refused_peer() {
+        let closed = raw_peer().1;
+        let mut selector = Selector::new().unwrap();
+        let mut event_loop = TestLoop::new(
+            {
+                static STORAGE: TestStorage = TestStorage::new();
+                &STORAGE
+            },
+            &mut selector,
+            Log::default(),
+            async move |ctx| {
+                let mut buf = [0; 8];
+                let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
+                socket.connect(closed).unwrap();
+                socket.send(ctx, b"x").await.unwrap();
+                let errno = socket.recv(ctx, &mut buf).await.err().unwrap();
+                ctx.dispatch(errno.raw_os_error() as u32);
+
+                let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
+                socket.connect(closed).unwrap();
+                socket.send(ctx, b"x").await.unwrap();
+                let errno = socket.recv_from(ctx, &mut buf).await.err().unwrap();
+                ctx.dispatch(errno.raw_os_error() as u32);
+                pending::<()>().await;
+            },
+        )
+        .unwrap();
+        run_until_events(&mut event_loop, 2);
+        let refused = Errno::CONNREFUSED.raw_os_error() as u32;
+        assert_eq!(event_loop.state_mut().events(), [refused, refused]);
     }
 }

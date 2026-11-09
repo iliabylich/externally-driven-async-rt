@@ -178,6 +178,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn echo_with_a_raw_peer() {
         let (listener, addr) = raw_listener();
         let mut selector = Selector::new().unwrap();
@@ -218,6 +219,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn listener_accepts_a_raw_client() {
         let mut listener = TcpListener::bind(LOCALHOST).unwrap();
         let addr = listener.local_addr().unwrap();
@@ -258,6 +260,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn connect_to_a_closed_port_fails() {
         let addr = TcpListener::bind(LOCALHOST).unwrap().local_addr().unwrap();
         let mut selector = Selector::new().unwrap();
@@ -283,6 +286,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn halves_are_used_from_two_tasks() {
         const LEN: usize = 1 << 20;
         const CHUNK: usize = 512;
@@ -342,5 +346,13 @@ mod tests {
         .unwrap();
         run_until_events(&mut event_loop, 1);
         assert_eq!(event_loop.state_mut().events(), [LEN as u32]);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn listener_binds_to_ipv6() {
+        let localhost = SocketAddr::new(core::net::IpAddr::V6(core::net::Ipv6Addr::LOCALHOST), 0);
+        let listener = TcpListener::bind(localhost).unwrap();
+        assert!(listener.local_addr().unwrap().is_ipv6());
     }
 }

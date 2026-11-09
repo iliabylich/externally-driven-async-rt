@@ -1,0 +1,8 @@
+[tasks.test]
+run = "cargo test"
+
+[tasks.miri]
+run = "cargo +nightly miri test"
+
+[tasks.coverage]
+run = ["cargo llvm-cov --html", "open target/llvm-cov/html/index.html"]

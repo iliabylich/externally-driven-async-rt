@@ -67,7 +67,7 @@ impl KqueueSelector {
             match result {
                 Ok((events, _)) => {
                     let full = events.len() == EVENTS_PER_CALL;
-                    let mut translated = events.iter().filter_map(|event| self.consume(event));
+                    let mut translated = events.iter().map(|event| self.consume(event));
                     out.fill_with(|| translated.next());
                     return Ok(full);
                 }
@@ -121,16 +121,16 @@ impl KqueueSelector {
         Ok(())
     }
 
-    fn consume(&self, event: &Event) -> Option<SelectorEvent> {
+    fn consume(&self, event: &Event) -> SelectorEvent {
         let token = Token(event.udata().addr() as u64);
         match event.filter() {
-            EventFilter::Read(_) => Some(SelectorEvent::Readable(token)),
-            EventFilter::Write(_) => Some(SelectorEvent::Writable(token)),
+            EventFilter::Read(_) => SelectorEvent::Readable(token),
+            EventFilter::Write(_) => SelectorEvent::Writable(token),
             EventFilter::Timer { .. } => {
                 self.timer.borrow_mut().fired();
-                Some(SelectorEvent::Timer)
+                SelectorEvent::Timer
             }
-            _ => None,
+            _ => unreachable!("only read, write and timer filters are registered"),
         }
     }
 }

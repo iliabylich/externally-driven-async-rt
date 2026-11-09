@@ -1,8 +1,7 @@
 use core::{
-    future::{pending, poll_fn},
-    pin::pin,
-    task::Poll,
-    time::Duration,
+    future::{Future, pending},
+    pin::Pin,
+    task::{Poll, Waker},
 };
 
 use rustix::{
@@ -11,13 +10,11 @@ use rustix::{
 };
 
 use crate::{
-    Context, EventLoop, LoopStorage, Selector, State,
+    Context, LoopStorage, Selector, State,
     io::IoRegistration,
     selectors::Direction,
     test_utils::{
-        Log, RaceFuture, RaceFutureWinner, TEST_MAX_ROOT_TASK_SIZE, TEST_MAX_TASK_SIZE,
-        TEST_MAX_TASKS_COUNT, TEST_MAX_TIMERS_COUNT, TestContext, TestLoop, TestStorage,
-        is_readable, run_until_root_finishes, socketpair,
+        Log, TestContext, TestLoop, TestStorage, is_readable, run_until_root_finishes, socketpair,
     },
 };
 
@@ -74,6 +71,7 @@ fn registrations(event_loop: &TestLoop<Log>) -> usize {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn read_waits_until_the_peer_writes() {
     let (a, b) = socketpair();
     let mut selector = Selector::new().unwrap();
@@ -102,6 +100,7 @@ fn read_waits_until_the_peer_writes() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn write_waits_on_a_full_buffer() {
     let (a, b) = socketpair();
     fill_send_buffer(&a);
@@ -127,194 +126,98 @@ fn write_waits_on_a_full_buffer() {
     assert_eq!(event_loop.state_mut().events(), [1]);
 }
 
+type IoStorage = LoopStorage<Log, 1, 64, 0, 1, 1>;
+
 #[test]
-fn ready_fd_arms_nothing() {
+#[cfg_attr(miri, ignore)]
+fn dropping_a_pending_wait_deregisters() {
+    let selector = Selector::new().unwrap();
+    let storage = {
+        static STORAGE: IoStorage = IoStorage::new();
+        STORAGE.claim(&selector, Log::default())
+    };
     let (a, b) = socketpair();
+    let mut cx = core::task::Context::from_waker(Waker::noop());
+    let mut registration = IoRegistration::new(&storage, a.as_fd(), Direction::Read);
+    let mut wait = registration.wait();
+    assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
+    storage.flush().unwrap();
+    drop(wait);
+    drop(registration);
+    assert_eq!(storage.io_waiters().count(), 0);
     rustix::io::write(&b, b"abc").unwrap();
-    let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        Log::default(),
-        async move |ctx| {
-            let n = read_some(ctx, &a).await.unwrap();
-            ctx.dispatch(n as u32);
-            pending::<()>().await;
-        },
-    )
-    .unwrap();
-    assert_eq!(event_loop.state_mut().events(), [3]);
-    assert_eq!(registrations(&event_loop), 0);
-    rustix::io::write(&b, b"abc").unwrap();
-    assert!(!is_readable(&event_loop, 0));
+    assert!(!is_readable(&selector, 0));
 }
 
 #[test]
-fn dropping_a_pending_read_deregisters() {
+#[cfg_attr(miri, ignore)]
+fn wait_survives_a_spurious_poll() {
+    let selector = Selector::new().unwrap();
+    let storage = {
+        static STORAGE: IoStorage = IoStorage::new();
+        STORAGE.claim(&selector, Log::default())
+    };
     let (a, b) = socketpair();
-    let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        Log::default(),
-        async move |ctx| {
-            let winner = RaceFuture(
-                pin!(read_some(ctx, &a)),
-                ctx.sleep(Duration::from_millis(10)),
-            )
-            .await;
-            assert_eq!(winner, RaceFutureWinner::B);
-            ctx.dispatch(1);
-            pending::<()>().await;
-        },
-    )
-    .unwrap();
-    assert_eq!(registrations(&event_loop), 1);
-    while event_loop.state_mut().events().is_empty() {
-        assert!(is_readable(&event_loop, 2000));
-        assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
-    }
-    assert_eq!(registrations(&event_loop), 0);
+    let mut cx = core::task::Context::from_waker(Waker::noop());
+    let mut registration = IoRegistration::new(&storage, a.as_fd(), Direction::Read);
+    let mut wait = registration.wait();
+    assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
+    assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
+    storage.flush().unwrap();
     rustix::io::write(&b, b"abc").unwrap();
-    assert!(!is_readable(&event_loop, 0));
+    assert!(is_readable(&selector, 1000));
+    storage.process_selector_events().unwrap();
+    assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Ready(()));
 }
 
 #[test]
-fn read_survives_a_spurious_wake() {
-    let (a, b) = socketpair();
-    let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        Log::default(),
-        async move |ctx| {
-            let mut woken = false;
-            let wake_once = poll_fn(move |cx| {
-                if !woken {
-                    woken = true;
-                    cx.waker().wake_by_ref();
-                }
-                Poll::<()>::Pending
-            });
-            let winner = RaceFuture(pin!(read_some(ctx, &a)), wake_once).await;
-            assert_eq!(winner, RaceFutureWinner::A);
-            ctx.dispatch(1);
-            pending::<()>().await;
-        },
-    )
-    .unwrap();
-    assert!(event_loop.state_mut().events().is_empty());
-    assert_eq!(registrations(&event_loop), 1);
-
-    rustix::io::write(&b, b"abc").unwrap();
-    assert!(is_readable(&event_loop, 1000));
-    assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
-    assert_eq!(event_loop.state_mut().events(), [1]);
-}
-
-#[test]
+#[cfg_attr(miri, ignore)]
 fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
-    let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        Log::default(),
-        async |ctx| {
-            let (a, _b) = socketpair();
-            let winner = RaceFuture(
-                pin!(read_some(ctx, &a)),
-                ctx.sleep(Duration::from_millis(5)),
-            )
-            .await;
-            assert_eq!(winner, RaceFutureWinner::B);
-            drop(a);
-
-            let (c, d) = socketpair();
-            ctx.spawn(async move |ctx| {
-                ctx.sleep(Duration::from_millis(5)).await;
-                rustix::io::write(&d, b"abc").unwrap();
-            });
-            let n = read_some(ctx, &c).await.unwrap();
-            ctx.dispatch(n as u32);
-        },
-    )
-    .unwrap();
-    run_until_root_finishes(&mut event_loop);
-    assert_eq!(event_loop.state_mut().events(), [3]);
-}
-
-#[test]
-#[should_panic(expected = "more than 1 concurrent IO operations")]
-fn exceeding_max_io_count_panics() {
+    let selector = Selector::new().unwrap();
+    let storage = {
+        static STORAGE: IoStorage = IoStorage::new();
+        STORAGE.claim(&selector, Log::default())
+    };
+    let mut cx = core::task::Context::from_waker(Waker::noop());
     let (a, _b) = socketpair();
-    let (c, _d) = socketpair();
-    let mut selector = Selector::new().unwrap();
-    let _ = EventLoop::new(
-        {
-            static STORAGE: LoopStorage<
-                Log,
-                TEST_MAX_TASKS_COUNT,
-                TEST_MAX_TASK_SIZE,
-                TEST_MAX_ROOT_TASK_SIZE,
-                TEST_MAX_TIMERS_COUNT,
-                1,
-            > = LoopStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        Log::default(),
-        async move |ctx| {
-            RaceFuture(pin!(read_some(ctx, &a)), pin!(read_some(ctx, &c))).await;
-        },
-    );
+    let mut old = IoRegistration::new(&storage, a.as_fd(), Direction::Read);
+    let mut wait = old.wait();
+    assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
+    storage.flush().unwrap();
+    drop(wait);
+    drop(old);
+    drop(a);
+
+    let (c, d) = socketpair();
+    let mut registration = IoRegistration::new(&storage, c.as_fd(), Direction::Read);
+    let mut wait = registration.wait();
+    assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
+    storage.flush().unwrap();
+    rustix::io::write(&d, b"abc").unwrap();
+    assert!(is_readable(&selector, 1000));
+    storage.process_selector_events().unwrap();
+    assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Ready(()));
 }
 
 #[test]
-fn sequential_io_reuses_the_slot() {
+#[cfg_attr(miri, ignore)]
+fn sequential_registrations_reuse_the_slot() {
+    let selector = Selector::new().unwrap();
+    let storage = {
+        static STORAGE: IoStorage = IoStorage::new();
+        STORAGE.claim(&selector, Log::default())
+    };
     let (a, b) = socketpair();
-    let mut selector = Selector::new().unwrap();
-    let mut event_loop = EventLoop::new(
-        {
-            static STORAGE: LoopStorage<
-                Log,
-                TEST_MAX_TASKS_COUNT,
-                TEST_MAX_TASK_SIZE,
-                TEST_MAX_ROOT_TASK_SIZE,
-                TEST_MAX_TIMERS_COUNT,
-                1,
-            > = LoopStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        Log::default(),
-        async move |ctx| {
-            for _ in 0..3 {
-                let len = read_some(ctx, &a).await.unwrap();
-                ctx.dispatch(len as u32);
-            }
-            pending::<()>().await;
-        },
-    )
-    .unwrap();
-    for i in 1..=3 {
-        rustix::io::write(&b, &[0; 3][..i]).unwrap();
-        while event_loop.state_mut().events().len() < i {
-            assert!(is_readable(&event_loop, 2000));
-            assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
-        }
+    let mut cx = core::task::Context::from_waker(Waker::noop());
+    for _ in 0..3 {
+        let mut registration = IoRegistration::new(&storage, a.as_fd(), Direction::Read);
+        let mut wait = registration.wait();
+        assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
+        storage.flush().unwrap();
+        rustix::io::write(&b, b"x").unwrap();
+        assert!(is_readable(&selector, 1000));
+        storage.process_selector_events().unwrap();
+        assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Ready(()));
     }
-    assert_eq!(event_loop.state_mut().events(), [1, 2, 3]);
-    assert_eq!(event_loop.storage.io_waiters().count(), 0);
+    assert_eq!(storage.io_waiters().count(), 0);
 }
