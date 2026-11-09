@@ -14,7 +14,7 @@ use crate::{
     io::IoRegistration,
     selector::Direction,
     testing::{
-        Log, TestContext, TestLoop, TestStorage, is_readable, run_until_root_finishes, socketpair,
+        EventLoopTestingExt, Log, TestContext, TestLoop, TestStorage, is_readable, socketpair,
     },
 };
 
@@ -122,7 +122,7 @@ fn write_waits_on_a_full_buffer() {
     assert!(!is_readable(&event_loop, 0));
 
     drain_receive_buffer(&b);
-    run_until_root_finishes(&mut event_loop);
+    event_loop.run_until_root_finishes();
     assert_eq!(event_loop.state_mut().events(), [1]);
 }
 

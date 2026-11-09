@@ -9,10 +9,7 @@ use rustix::{
 use crate::{
     Selector,
     net::{TcpListener, TcpStream},
-    testing::{
-        self, Log, TestLoop, TestStorage, drain_until_readable, is_writable, peer_read_exact,
-        raw_accept, run_until_events,
-    },
+    testing::{self, EventLoopTestingExt, Log, TestLoop, TestStorage, is_writable, raw_accept},
 };
 
 const LOCALHOST: SocketAddr =
@@ -62,13 +59,13 @@ fn echo_with_a_raw_peer() {
     .unwrap();
     let peer = raw_accept(&listener);
     let mut buf = [0; 5];
-    peer_read_exact(&mut event_loop, &peer, &mut buf);
+    event_loop.peer_read_exact(&peer, &mut buf);
     assert_eq!(&buf, b"hello");
     assert_eq!(rustix::io::write(&peer, &buf).unwrap(), 5);
-    drain_until_readable(&mut event_loop, &peer);
+    event_loop.drain_until_readable(&peer);
     assert_eq!(rustix::io::read(&peer, &mut buf).unwrap(), 0, "no EOF");
     drop(peer);
-    run_until_events(&mut event_loop, 1);
+    event_loop.run_until_events(1);
 }
 
 #[test]
@@ -106,9 +103,9 @@ fn listener_accepts_a_raw_client() {
     }
     assert!(is_writable(&client, 2000), "never connected");
     assert_eq!(rustix::io::write(&client, b"ping").unwrap(), 4);
-    run_until_events(&mut event_loop, 1);
+    event_loop.run_until_events(1);
     let mut buf = [0; 4];
-    peer_read_exact(&mut event_loop, &client, &mut buf);
+    event_loop.peer_read_exact(&client, &mut buf);
     assert_eq!(&buf, b"pong");
 }
 
@@ -131,7 +128,7 @@ fn connect_to_a_closed_port_fails() {
         },
     )
     .unwrap();
-    run_until_events(&mut event_loop, 1);
+    event_loop.run_until_events(1);
     assert_eq!(
         event_loop.state_mut().events(),
         [Errno::CONNREFUSED.raw_os_error() as u32]
@@ -197,7 +194,7 @@ fn halves_are_used_from_two_tasks() {
         },
     )
     .unwrap();
-    run_until_events(&mut event_loop, 1);
+    event_loop.run_until_events(1);
     assert_eq!(event_loop.state_mut().events(), [LEN as u32]);
 }
 

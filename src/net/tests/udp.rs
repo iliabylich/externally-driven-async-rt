@@ -12,7 +12,7 @@ use rustix::{
 use crate::{
     Selector,
     net::UdpSocket,
-    testing::{Log, TestLoop, TestStorage, drain_until_readable, raw_socket, run_until_events},
+    testing::{EventLoopTestingExt, Log, TestLoop, TestStorage, raw_socket},
 };
 
 const LOCALHOST: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
@@ -57,7 +57,7 @@ fn round_trip_with_a_raw_peer() {
     .unwrap();
     let mut buf = [0; 64];
     for expected in [&b"ping"[..], b"hello"] {
-        drain_until_readable(&mut event_loop, &peer);
+        event_loop.drain_until_readable(&peer);
         let (len, _, from) = rustix::net::recvfrom(&peer, &mut buf, RecvFlags::empty()).unwrap();
         assert_eq!(&buf[..len], expected);
         let from = from.unwrap();
@@ -66,7 +66,7 @@ fn round_trip_with_a_raw_peer() {
             len
         );
     }
-    run_until_events(&mut event_loop, 1);
+    event_loop.run_until_events(1);
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn connected_socket_reports_a_refused_peer() {
         },
     )
     .unwrap();
-    run_until_events(&mut event_loop, 2);
+    event_loop.run_until_events(2);
     let refused = Errno::CONNREFUSED.raw_os_error() as u32;
     assert_eq!(event_loop.state_mut().events(), [refused, refused]);
 }

@@ -56,9 +56,7 @@ mod tests {
     use crate::{
         Selector,
         tasks::WakeQueue,
-        testing::{
-            Log, TestLoop, TestStorage, is_readable, run_until_root_finishes, sleep_blocking,
-        },
+        testing::{EventLoopTestingExt, Log, TestLoop, TestStorage, is_readable, sleep_blocking},
         time::{Instant, Sleep, Timers},
     };
 
@@ -81,7 +79,7 @@ mod tests {
         )
         .unwrap();
         assert!(event_loop.state_mut().events().is_empty());
-        run_until_root_finishes(&mut event_loop);
+        event_loop.run_until_root_finishes();
         assert!(Instant::now().saturating_duration_since(start) >= Duration::from_millis(20));
         assert_eq!(event_loop.state_mut().events(), [1]);
     }
@@ -110,7 +108,7 @@ mod tests {
             },
         )
         .unwrap();
-        run_until_root_finishes(&mut event_loop);
+        event_loop.run_until_root_finishes();
         assert_eq!(event_loop.state_mut().events(), [10, 20, 30]);
         assert!(!is_readable(&event_loop, 0));
     }
@@ -139,7 +137,7 @@ mod tests {
             },
         )
         .unwrap();
-        run_until_root_finishes(&mut event_loop);
+        event_loop.run_until_root_finishes();
         assert_eq!(event_loop.state_mut().events(), [0, 1, 2, 3, 4]);
         assert!(Instant::now().saturating_duration_since(start) >= period * 5);
     }

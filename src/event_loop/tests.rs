@@ -9,9 +9,9 @@ use rustix::{fd::AsRawFd, io::Errno};
 use crate::{
     Error, EventLoop, LoopStorage, Selector, State,
     testing::{
-        DispatchOnDrop, Log, TEST_MAX_IO_COUNT, TEST_MAX_TASK_SIZE, TEST_MAX_TASKS_COUNT,
-        TEST_MAX_TIMERS_COUNT, TestContext, TestLoop, TestStorage, counting_waker, is_readable,
-        socketpair, wait_readable, wake_by_writing,
+        DispatchOnDrop, EventLoopTestingExt, Log, TEST_MAX_IO_COUNT, TEST_MAX_TASK_SIZE,
+        TEST_MAX_TASKS_COUNT, TEST_MAX_TIMERS_COUNT, TestContext, TestLoop, TestStorage,
+        counting_waker, is_readable, socketpair, wait_readable,
     },
 };
 
@@ -92,7 +92,7 @@ fn root_finishing_inside_a_drain() {
     .unwrap();
     assert_eq!(event_loop.state_mut().events(), [1]);
 
-    wake_by_writing(&event_loop, &b);
+    event_loop.wake_by_writing(&b);
     assert_eq!(
         event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)
@@ -130,7 +130,7 @@ fn root_progresses_across_drains() {
     )
     .unwrap();
     for i in 0..3 {
-        wake_by_writing(&event_loop, &b);
+        event_loop.wake_by_writing(&b);
         assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
         assert_eq!(event_loop.state_mut().events(), &[0, 1, 2][..=i as usize]);
         assert!(!is_readable(&event_loop, 0));
@@ -171,7 +171,7 @@ fn two_loops_on_one_thread_are_independent() {
     )
     .unwrap();
 
-    wake_by_writing(&first, &b1);
+    first.wake_by_writing(&b1);
     assert!(!is_readable(&second, 0));
     assert_eq!(second.drain_events_without_blocking(), Ok(()));
     assert_eq!(
@@ -217,7 +217,7 @@ fn panic_propagates_out_of_drain() {
         },
     )
     .unwrap();
-    wake_by_writing(&event_loop, &b);
+    event_loop.wake_by_writing(&b);
     let _ = event_loop.drain_events_without_blocking();
 }
 
@@ -304,7 +304,7 @@ fn tasks_are_dropped_when_the_root_finishes() {
         },
     )
     .unwrap();
-    wake_by_writing(&event_loop, &b);
+    event_loop.wake_by_writing(&b);
     assert_eq!(
         event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)
@@ -347,7 +347,7 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
         },
     )
     .unwrap();
-    wake_by_writing(&event_loop, &b);
+    event_loop.wake_by_writing(&b);
     assert_eq!(
         event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)

@@ -8,10 +8,7 @@ use rustix::{
 use crate::{
     Selector,
     net::{UnixDatagram, UnixListener, UnixStream},
-    testing::{
-        Log, TestLoop, TestStorage, drain_until_readable, peer_read_exact, raw_accept, raw_socket,
-        run_until_events,
-    },
+    testing::{EventLoopTestingExt, Log, TestLoop, TestStorage, raw_accept, raw_socket},
 };
 
 struct TempPath {
@@ -101,13 +98,13 @@ fn stream_echo_with_a_raw_peer() {
     .unwrap();
     let peer = raw_accept(&listener);
     let mut buf = [0; 5];
-    peer_read_exact(&mut event_loop, &peer, &mut buf);
+    event_loop.peer_read_exact(&peer, &mut buf);
     assert_eq!(&buf, b"hello");
     assert_eq!(rustix::io::write(&peer, &buf).unwrap(), 5);
-    drain_until_readable(&mut event_loop, &peer);
+    event_loop.drain_until_readable(&peer);
     assert_eq!(rustix::io::read(&peer, &mut buf).unwrap(), 0, "no EOF");
     drop(peer);
-    run_until_events(&mut event_loop, 1);
+    event_loop.run_until_events(1);
 }
 
 #[test]
@@ -146,9 +143,9 @@ fn listener_accepts_a_raw_client() {
     let client = raw_socket(AddressFamily::UNIX, SocketType::STREAM);
     rustix::net::connect(&client, &path.addr()).unwrap();
     assert_eq!(rustix::io::write(&client, b"ping").unwrap(), 4);
-    run_until_events(&mut event_loop, 1);
+    event_loop.run_until_events(1);
     let mut buf = [0; 4];
-    peer_read_exact(&mut event_loop, &client, &mut buf);
+    event_loop.peer_read_exact(&client, &mut buf);
     assert_eq!(&buf, b"pong");
 }
 
@@ -190,7 +187,7 @@ fn datagram_round_trip_with_a_raw_peer() {
     .unwrap();
     let mut buf = [0; 64];
     for expected in [&b"ping"[..], b"hello"] {
-        drain_until_readable(&mut event_loop, &peer);
+        event_loop.drain_until_readable(&peer);
         let (len, _, from) = rustix::net::recvfrom(&peer, &mut buf, RecvFlags::empty()).unwrap();
         assert_eq!(&buf[..len], expected);
         let from = SocketAddrUnix::try_from(from.unwrap()).unwrap();
@@ -198,7 +195,7 @@ fn datagram_round_trip_with_a_raw_peer() {
         let sent = rustix::net::sendto(&peer, &buf[..len], SendFlags::empty(), &from).unwrap();
         assert_eq!(sent, len);
     }
-    run_until_events(&mut event_loop, 1);
+    event_loop.run_until_events(1);
 }
 
 #[test]
@@ -227,7 +224,7 @@ fn unbound_datagram_sender_has_an_unnamed_address() {
         },
     )
     .unwrap();
-    run_until_events(&mut event_loop, 1);
+    event_loop.run_until_events(1);
 }
 
 #[test]
@@ -289,7 +286,7 @@ fn stream_halves_echo_with_a_raw_peer() {
     .unwrap();
     let peer = raw_accept(&listener);
     let mut buf = [0; 4];
-    peer_read_exact(&mut event_loop, &peer, &mut buf);
+    event_loop.peer_read_exact(&peer, &mut buf);
     assert_eq!(rustix::io::write(&peer, &buf).unwrap(), 4);
-    run_until_events(&mut event_loop, 1);
+    event_loop.run_until_events(1);
 }

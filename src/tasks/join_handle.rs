@@ -42,7 +42,7 @@ mod tests {
 
     use crate::{
         Error, Selector,
-        testing::{Log, TestLoop, TestStorage, socketpair, wait_readable, wake_by_writing},
+        testing::{EventLoopTestingExt, Log, TestLoop, TestStorage, socketpair, wait_readable},
     };
 
     #[test]
@@ -68,7 +68,7 @@ mod tests {
         )
         .unwrap();
         assert!(event_loop.state_mut().events().is_empty());
-        wake_by_writing(&event_loop, &b);
+        event_loop.wake_by_writing(&b);
         assert_eq!(
             event_loop.drain_events_without_blocking(),
             Err(Error::RootFinished)
@@ -97,7 +97,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(event_loop.state_mut().events(), [1]);
-        wake_by_writing(&event_loop, &b);
+        event_loop.wake_by_writing(&b);
         assert_eq!(
             event_loop.drain_events_without_blocking(),
             Err(Error::RootFinished)
@@ -126,7 +126,7 @@ mod tests {
             },
         )
         .unwrap();
-        wake_by_writing(&event_loop, &b);
+        event_loop.wake_by_writing(&b);
         assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
         assert_eq!(event_loop.state_mut().events(), [1]);
     }
