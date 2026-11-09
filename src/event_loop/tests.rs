@@ -13,7 +13,7 @@ use crate::{
     Error, EventLoop, LoopStorage, State,
     instant::Instant,
     selectors::Direction,
-    storage::{Root, RootStatus, Storage, TaskId},
+    storage::{Root, RootStatus, StorageGuard, TaskId},
     test_utils::{
         DropFlag, Log, TEST_MAX_IO_COUNT, TEST_MAX_ROOT_TASK_SIZE, TEST_MAX_TASK_SIZE,
         TEST_MAX_TASKS_COUNT, TEST_MAX_TIMERS_COUNT, TestContext, TestLoop, TestStorage,
@@ -675,7 +675,7 @@ fn root_finishing_stops_the_run() {
 }
 
 struct SpawnRawOnDrop<'a> {
-    storage: Storage<
+    storage: StorageGuard<
         'a,
         Log,
         TEST_MAX_TASKS_COUNT,

@@ -1,6 +1,7 @@
 use core::{
     cell::{Cell, UnsafeCell},
     future::Future,
+    marker::PhantomData,
     mem::MaybeUninit,
     ptr::NonNull,
     task::Waker,
@@ -93,8 +94,14 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
         }
     }
 
-    pub(crate) fn claim(&self) {
+    pub(crate) fn claim<'a>(
+        &'static self,
+    ) -> TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE> {
         self.queue.claim();
+        TasksGuard {
+            tasks: self,
+            futures: PhantomData,
+        }
     }
 
     pub(crate) fn root(&self) -> Root {
@@ -111,14 +118,49 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
         &self.queue
     }
 
-    /// # Safety
-    ///
-    /// Everything `future` borrows must outlive every later call to `run_ready`, `remove` and
-    /// `drop_all`, because those poll and drop it.
-    pub(crate) unsafe fn insert<Fut>(&self, future: Fut) -> TaskId
+    #[cfg(test)]
+    pub(crate) fn contains(&self, id: TaskId) -> bool {
+        self.pool.get(id).is_some_and(TaskEntry::has_task)
+    }
+
+    pub(crate) fn set_join_waiter(&self, id: TaskId, waker: &Waker) -> JoinStatus {
+        match self.pool.get(id) {
+            Some(entry) if entry.has_task() => {
+                store_waker(&entry.join_waiter, waker);
+                JoinStatus::Running
+            }
+            _ => JoinStatus::Finished,
+        }
+    }
+
+    pub(crate) fn has_ready(&self) -> bool {
+        !self.queue.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn count(&self) -> usize {
+        self.pool.iter().count()
+    }
+}
+
+pub(crate) struct TasksGuard<
+    'a,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+> {
+    tasks: &'static Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
+    futures: PhantomData<(Cell<&'a ()>, *const ())>,
+}
+
+impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize>
+    TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+{
+    pub(crate) fn insert<Fut>(self, future: Fut) -> TaskId
     where
-        Fut: Future<Output = ()>,
+        Fut: Future<Output = ()> + 'a,
     {
+        let tasks = self.tasks;
         assert!(
             size_of::<Fut>() <= MAX_TASK_SIZE,
             "a task future of {} bytes doesn't fit MAX_TASK_SIZE ({MAX_TASK_SIZE} bytes)",
@@ -129,28 +171,38 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
             "a task future aligned to {} bytes doesn't fit (align at most 16)",
             align_of::<Fut>(),
         );
-        let Some((id, entry)) = self.pool.alloc() else {
+        let Some((id, entry)) = tasks.pool.alloc() else {
             panic!("more than {MAX_TASKS_COUNT} concurrent tasks");
         };
-        let memory = NonNull::from(&self.slab[id.slot() as usize].0).cast();
+        let memory = NonNull::from(&tasks.slab[id.slot() as usize].0).cast();
         // SAFETY: `Fut` fits the slab's blocks (checked above). The slot's block is unused: the
         // slot was free, and a slot is only freed after its future was dropped. The slot stays
-        // reserved until this future is dropped, which happens (if at all) while everything it
-        // borrows is alive, as the caller guarantees.
+        // reserved until this future is dropped. `Tasks` keeps its futures in private fields
+        // that only `TasksGuard` touches, and `Tasks::claim` creates a guard once per `Tasks`
+        // (copies share its invariant `'a`), so every future in it was written through a guard
+        // with this same `'a` (which `Fut` outlives), and is polled and dropped only through
+        // one, before `'a` ends.
         let future = unsafe { Task::write(memory, future) };
         self.occupy(id, entry, future);
         id
     }
 
-    /// # Safety
-    ///
-    /// As for `insert`.
-    pub(crate) unsafe fn spawn_root<Fut>(&self, future: Fut)
+    pub(crate) fn spawn<Fut>(self, future: Fut) -> TaskId
     where
-        Fut: Future<Output = ()>,
+        Fut: Future<Output = ()> + 'a,
     {
+        let id = self.insert(future);
+        self.tasks.queue.push(id.slot());
+        id
+    }
+
+    pub(crate) fn spawn_root<Fut>(self, future: Fut)
+    where
+        Fut: Future<Output = ()> + 'a,
+    {
+        let tasks = self.tasks;
         assert!(
-            matches!(self.root.get(), Root::Unset),
+            matches!(tasks.root.get(), Root::Unset),
             "the root is already spawned"
         );
         assert!(
@@ -164,34 +216,26 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
             "the root future aligned to {} bytes doesn't fit (align at most 16)",
             align_of::<Fut>(),
         );
-        let Some((id, entry)) = self.pool.alloc() else {
+        let Some((id, entry)) = tasks.pool.alloc() else {
             unreachable!("the root is the first task, the pool has room for it");
         };
         // SAFETY: `Fut` fits the root region (asserted above), and the region is unused: the root
         // is still `Unset` (asserted above), and leaves that state below, so this is the only
-        // call that gets here. The borrows outlive the future's use as in `insert`.
-        let future = unsafe { Task::write(NonNull::from(&self.root_region.0).cast(), future) };
+        // call that gets here. `Fut` outlives its use as in `insert`.
+        let future = unsafe { Task::write(NonNull::from(&tasks.root_region.0).cast(), future) };
         self.occupy(id, entry, future);
-        self.queue.push(id.slot());
-        self.root.set(Root::Running(id));
+        tasks.queue.push(id.slot());
+        tasks.root.set(Root::Running(id));
     }
 
-    fn occupy(&self, id: TaskId, entry: &TaskEntry, future: Task) {
+    fn occupy(self, id: TaskId, entry: &TaskEntry, future: Task) {
         entry.task.set(TaskSlot::Idle(future));
         entry.join_waiter.set(None);
-        self.queue.track(id);
+        self.tasks.queue.track(id);
     }
 
-    #[cfg(test)]
-    pub(crate) fn contains(&self, id: TaskId) -> bool {
-        self.pool.get(id).is_some_and(TaskEntry::has_task)
-    }
-
-    /// # Safety
-    ///
-    /// Everything the task's future borrows must still be alive, because it's dropped here.
-    pub(crate) unsafe fn remove(&self, id: TaskId) -> Option<Option<Waker>> {
-        let entry = self.pool.get(id)?;
+    pub(crate) fn remove(self, id: TaskId) -> Option<Option<Waker>> {
+        let entry = self.tasks.pool.get(id)?;
         let task = match entry.task.take() {
             TaskSlot::Idle(task) => task,
             TaskSlot::Polling => {
@@ -203,52 +247,22 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
         Some(self.free(id, entry, task))
     }
 
-    fn free(&self, id: TaskId, entry: &TaskEntry, task: Task) -> Option<Waker> {
+    fn free(self, id: TaskId, entry: &TaskEntry, task: Task) -> Option<Waker> {
         entry.task.set(TaskSlot::Empty);
         let join_waiter = entry.join_waiter.take();
-        self.queue.untrack(id);
+        self.tasks.queue.untrack(id);
         drop(task);
-        self.pool.free(id);
+        self.tasks.pool.free(id);
         join_waiter
     }
 
-    pub(crate) fn set_join_waiter(&self, id: TaskId, waker: &Waker) -> JoinStatus {
-        match self.pool.get(id) {
-            Some(entry) if entry.has_task() => {
-                store_waker(&entry.join_waiter, waker);
-                JoinStatus::Running
-            }
-            _ => JoinStatus::Finished,
-        }
-    }
-
-    /// # Safety
-    ///
-    /// As for `insert`.
-    pub(crate) unsafe fn spawn<Fut>(&self, future: Fut) -> TaskId
-    where
-        Fut: Future<Output = ()>,
-    {
-        // SAFETY: guaranteed by the caller.
-        let id = unsafe { self.insert(future) };
-        self.queue.push(id.slot());
-        id
-    }
-
-    pub(crate) fn has_ready(&self) -> bool {
-        !self.queue.is_empty()
-    }
-
-    /// # Safety
-    ///
-    /// Everything the stored futures borrow must still be alive, because they're polled and
-    /// dropped here.
-    pub(crate) unsafe fn run_ready(&'static self) -> RootStatus {
+    pub(crate) fn run_ready(self) -> RootStatus {
+        let tasks = self.tasks;
         loop {
-            let Some(id) = self.queue.pop() else {
+            let Some(id) = tasks.queue.pop() else {
                 return RootStatus::Running;
             };
-            let Some(entry) = self.pool.get(id) else {
+            let Some(entry) = tasks.pool.get(id) else {
                 continue;
             };
             let mut task = match entry.task.replace(TaskSlot::Polling) {
@@ -256,7 +270,7 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
                 TaskSlot::Polling => panic!("a task can't be polled re-entrantly"),
                 TaskSlot::Empty => unreachable!("an allocated task always has a future"),
             };
-            let waker = self.queue.waker(id.slot());
+            let waker = tasks.queue.waker(id.slot());
             let mut cx = core::task::Context::from_waker(&waker);
             if task.poll(&mut cx).is_pending() {
                 entry.task.set(TaskSlot::Idle(task));
@@ -265,29 +279,38 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
             if let Some(join_waiter) = self.free(id, entry, task) {
                 join_waiter.wake();
             }
-            if let Root::Running(root) = self.root.get()
+            if let Root::Running(root) = tasks.root.get()
                 && id == root
             {
-                self.root.set(Root::Finished);
+                tasks.root.set(Root::Finished);
                 return RootStatus::Finished;
             }
         }
     }
 
-    /// # Safety
-    ///
-    /// As for `run_ready`.
-    pub(crate) unsafe fn drop_all(&self) {
-        while let Some((id, _)) = self.pool.iter().find(|(_, entry)| entry.is_idle()) {
-            // SAFETY: guaranteed by the caller.
-            unsafe { self.remove(id) };
+    pub(crate) fn drop_all(self) {
+        while let Some((id, _)) = self.tasks.pool.iter().find(|(_, entry)| entry.is_idle()) {
+            self.remove(id);
         }
     }
 
     #[cfg(test)]
-    pub(crate) fn count(&self) -> usize {
-        self.pool.iter().count()
+    pub(crate) fn waker(self, id: TaskId) -> Waker {
+        self.tasks.queue.waker(id.slot())
     }
+}
+
+impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize>
+    Clone for TasksGuard<'_, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+{
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize> Copy
+    for TasksGuard<'_, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+{
 }
 
 #[cfg(test)]
@@ -296,7 +319,7 @@ mod tests {
 
     use crate::{
         LoopStorage,
-        storage::{Root, RootStatus, Storage, TaskId},
+        storage::{Root, RootStatus, StorageGuard, TaskId},
         task::JoinStatus,
         test_utils::{DropFlag, flagged_task},
     };
@@ -304,14 +327,14 @@ mod tests {
     const MAX_TASK_SIZE: usize = 1024;
 
     type TasksStorage<const MAX_TASKS_COUNT: usize> =
-        LoopStorage<(), MAX_TASKS_COUNT, MAX_TASK_SIZE, 0, 1, 1>;
+        LoopStorage<(), MAX_TASKS_COUNT, MAX_TASK_SIZE, 0, 1, 1, ()>;
 
     #[test]
     fn removing_a_task_drops_its_future_and_returns_its_join_waiter() {
         let dropped = Cell::new(false);
         let storage = {
             static STORAGE: TasksStorage<2> = TasksStorage::new();
-            STORAGE.claim(None, ())
+            STORAGE.claim((), ())
         };
         let tasks = &storage.tasks;
         let id = storage.insert(flagged_task(&dropped));
@@ -334,7 +357,7 @@ mod tests {
     fn finished_task_id_never_matches_a_reused_slot() {
         let storage = {
             static STORAGE: TasksStorage<1> = TasksStorage::new();
-            STORAGE.claim(None, ())
+            STORAGE.claim((), ())
         };
         let tasks = &storage.tasks;
         let first = storage.insert(async {});
@@ -353,7 +376,7 @@ mod tests {
     fn full_task_pool_panics() {
         let storage = {
             static STORAGE: TasksStorage<1> = TasksStorage::new();
-            STORAGE.claim(None, ())
+            STORAGE.claim((), ())
         };
         storage.insert(async {});
         storage.insert(async {});
@@ -364,7 +387,7 @@ mod tests {
         let dropped = Cell::new(false);
         let storage = {
             static STORAGE: TasksStorage<2> = TasksStorage::new();
-            STORAGE.claim(None, ())
+            STORAGE.claim((), ())
         };
         let tasks = &storage.tasks;
         storage.insert(flagged_task(&dropped));
@@ -374,7 +397,7 @@ mod tests {
     }
 
     struct SpawnOnDrop<'a> {
-        storage: Storage<'a, (), 2, MAX_TASK_SIZE, 0, 1, 1>,
+        storage: StorageGuard<'a, (), 2, MAX_TASK_SIZE, 0, 1, 1, ()>,
         id: &'a Cell<Option<TaskId>>,
         spawned: &'a Cell<Option<TaskId>>,
     }
@@ -399,7 +422,7 @@ mod tests {
         let spawned = Cell::new(None);
         let storage = {
             static STORAGE: TasksStorage<2> = TasksStorage::new();
-            STORAGE.claim(None, ())
+            STORAGE.claim((), ())
         };
         let tasks = &storage.tasks;
         let guard = SpawnOnDrop {
@@ -421,7 +444,7 @@ mod tests {
     fn full_size_futures_in_neighbouring_slots_do_not_overlap() {
         let storage = {
             static STORAGE: TasksStorage<2> = TasksStorage::new();
-            STORAGE.claim(None, ())
+            STORAGE.claim((), ())
         };
         let tasks = &storage.tasks;
         let ids = [1u8, 2].map(|byte| {
@@ -439,7 +462,7 @@ mod tests {
     fn a_too_big_future_panics() {
         let storage = {
             static STORAGE: TasksStorage<1> = TasksStorage::new();
-            STORAGE.claim(None, ())
+            STORAGE.claim((), ())
         };
         let data = [0u8; 8192];
         storage.insert(async move {
@@ -466,8 +489,8 @@ mod tests {
     #[test]
     fn futures_up_to_task_size_fit() {
         let storage = {
-            static STORAGE: LoopStorage<(), 2, 100, 0, 1, 1> = LoopStorage::new();
-            STORAGE.claim(None, ())
+            static STORAGE: LoopStorage<(), 2, 100, 0, 1, 1, ()> = LoopStorage::new();
+            STORAGE.claim((), ())
         };
         let tasks = &storage.tasks;
         let ids = [
@@ -482,8 +505,8 @@ mod tests {
     #[should_panic(expected = "a task future of 101 bytes doesn't fit MAX_TASK_SIZE (100 bytes)")]
     fn a_future_one_byte_bigger_than_task_size_panics() {
         let storage = {
-            static STORAGE: LoopStorage<(), 1, 100, 0, 1, 1> = LoopStorage::new();
-            STORAGE.claim(None, ())
+            static STORAGE: LoopStorage<(), 1, 100, 0, 1, 1, ()> = LoopStorage::new();
+            STORAGE.claim((), ())
         };
         storage.insert(FixedFuture([0u8; 101]));
     }
@@ -495,7 +518,7 @@ mod tests {
         struct Aligned;
         let storage = {
             static STORAGE: TasksStorage<1> = TasksStorage::new();
-            STORAGE.claim(None, ())
+            STORAGE.claim((), ())
         };
         let aligned = Aligned;
         storage.insert(async move {
@@ -531,8 +554,9 @@ mod tests {
                 { size_of::<BigRoot<'static>>() },
                 1,
                 1,
+                (),
             > = LoopStorage::new();
-            STORAGE.claim(None, ())
+            STORAGE.claim((), ())
         };
         let tasks = &storage.tasks;
         let root = BigRoot {
@@ -559,7 +583,7 @@ mod tests {
     fn a_too_big_root_panics() {
         let storage = {
             static STORAGE: TasksStorage<1> = TasksStorage::new();
-            STORAGE.claim(None, ())
+            STORAGE.claim((), ())
         };
         storage.spawn_root(FixedFuture(0u8));
     }
@@ -569,7 +593,7 @@ mod tests {
     fn spawning_a_second_root_panics() {
         let storage = {
             static STORAGE: TasksStorage<2> = TasksStorage::new();
-            STORAGE.claim(None, ())
+            STORAGE.claim((), ())
         };
         storage.spawn_root(core::future::pending::<()>());
         storage.spawn_root(core::future::pending::<()>());

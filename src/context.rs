@@ -1,7 +1,7 @@
 use core::time::Duration;
 
 use crate::{
-    instant::Instant, join_handle::JoinHandle, sleep::Sleep, state::State, storage::Storage,
+    instant::Instant, join_handle::JoinHandle, sleep::Sleep, state::State, storage::StorageGuard,
 };
 
 pub struct Context<
@@ -13,7 +13,7 @@ pub struct Context<
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
 > {
-    storage: Storage<
+    storage: StorageGuard<
         'a,
         S,
         MAX_TASKS_COUNT,
@@ -45,7 +45,7 @@ impl<
 {
     pub(crate) fn storage(
         &self,
-    ) -> &Storage<
+    ) -> &StorageGuard<
         'a,
         S,
         MAX_TASKS_COUNT,
@@ -80,11 +80,11 @@ impl<
     {
         let storage = self.storage;
         let id = storage.spawn(async move { f(&Self { storage }).await });
-        JoinHandle::new(&self.storage.tasks, id)
+        JoinHandle::new(self.storage.tasks, id)
     }
 
     pub(crate) fn spawn_root<F>(
-        storage: Storage<
+        storage: StorageGuard<
             'a,
             S,
             MAX_TASKS_COUNT,
@@ -101,6 +101,6 @@ impl<
     }
 
     pub fn sleep(&self, duration: Duration) -> Sleep<'_, MAX_TIMERS_COUNT> {
-        Sleep::new(&self.storage.timers, Instant::now() + duration)
+        Sleep::new(self.storage.timers, Instant::now() + duration)
     }
 }

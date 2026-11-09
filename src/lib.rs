@@ -1,10 +1,5 @@
 #![no_std]
 
-#[cfg(not(target_os = "macos"))]
-compile_error!(
-    "externally-driven-async-rt currently supports only macOS (Linux support is planned)"
-);
-
 mod context;
 mod event_loop;
 mod instant;
@@ -25,6 +20,7 @@ mod wake_queue;
 pub use context::Context;
 pub use event_loop::{Error, EventLoop};
 pub use join_handle::JoinHandle;
+pub use selectors::Selector;
 pub use sleep::Sleep;
 pub use state::State;
 pub use storage::LoopStorage;

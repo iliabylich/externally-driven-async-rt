@@ -4,7 +4,7 @@ use crate::{
     context::Context,
     selectors::Selector,
     state::State,
-    storage::{LoopStorage, Root, RootStatus, Storage},
+    storage::{LoopStorage, Root, RootStatus, StorageGuard},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,7 +33,7 @@ pub struct EventLoop<
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
 > {
-    pub(crate) storage: Storage<
+    pub(crate) storage: StorageGuard<
         'a,
         S,
         MAX_TASKS_COUNT,
@@ -89,7 +89,7 @@ impl<
             ) + 'a,
     {
         let selector = Selector::new().map_err(Error::Io)?;
-        let storage = storage.claim(Some(selector), state);
+        let storage = storage.claim(selector, state);
         let event_loop = Self { storage };
         Context::spawn_root(storage, f);
         match storage.run_ready() {

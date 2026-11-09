@@ -5,7 +5,8 @@ use rustix::fd::{AsRawFd, OwnedFd};
 use crate::{
     instant::Instant,
     selectors::{
-        Direction, EVENTS_PER_CALL, IoAction, IoChange, SelectorEvent, Token, kqueue::Selector,
+        Direction, EVENTS_PER_CALL, IoAction, IoChange, SelectorEvent, Token,
+        kqueue::KqueueSelector,
     },
     test_utils::{assert_yields, is_readable, socketpair},
 };
@@ -27,7 +28,7 @@ fn disarm(token: u64, fd: &OwnedFd, direction: Direction) -> IoChange {
     change(token, fd, direction, IoAction::Disarm)
 }
 
-fn events(selector: &Selector) -> impl Iterator<Item = SelectorEvent> + '_ {
+fn events(selector: &KqueueSelector) -> impl Iterator<Item = SelectorEvent> + '_ {
     let mut batch = [None; EVENTS_PER_CALL];
     let mut next = EVENTS_PER_CALL;
     let mut full = true;
@@ -48,7 +49,7 @@ fn events(selector: &Selector) -> impl Iterator<Item = SelectorEvent> + '_ {
 
 #[test]
 fn nothing_armed_produces_no_events() {
-    let selector = Selector::new().unwrap();
+    let selector = KqueueSelector::new().unwrap();
     let (_a, b) = socketpair();
     selector.flush([]).unwrap();
     rustix::io::write(&b, b"x").unwrap();
@@ -58,7 +59,7 @@ fn nothing_armed_produces_no_events() {
 
 #[test]
 fn armed_write_is_reported_with_its_token() {
-    let selector = Selector::new().unwrap();
+    let selector = KqueueSelector::new().unwrap();
     let (a, _b) = socketpair();
     selector.flush([arm(1, &a, Direction::Write)]).unwrap();
     assert_yields(events(&selector), [SelectorEvent::Writable(Token(1))]);
@@ -66,7 +67,7 @@ fn armed_write_is_reported_with_its_token() {
 
 #[test]
 fn read_interest_is_one_shot() {
-    let selector = Selector::new().unwrap();
+    let selector = KqueueSelector::new().unwrap();
     let (a, b) = socketpair();
     selector.flush([arm(2, &a, Direction::Read)]).unwrap();
 
@@ -82,7 +83,7 @@ fn read_interest_is_one_shot() {
 
 #[test]
 fn data_that_arrived_before_arming_is_reported() {
-    let selector = Selector::new().unwrap();
+    let selector = KqueueSelector::new().unwrap();
     let (a, b) = socketpair();
     rustix::io::write(&b, b"early").unwrap();
     selector.flush([arm(3, &a, Direction::Read)]).unwrap();
@@ -91,7 +92,7 @@ fn data_that_arrived_before_arming_is_reported() {
 
 #[test]
 fn disarming_prevents_events() {
-    let selector = Selector::new().unwrap();
+    let selector = KqueueSelector::new().unwrap();
     let (a, b) = socketpair();
     selector.flush([arm(4, &a, Direction::Read)]).unwrap();
     selector.flush([disarm(4, &a, Direction::Read)]).unwrap();
@@ -101,7 +102,7 @@ fn disarming_prevents_events() {
 
 #[test]
 fn apply_now_deletes_an_armed_filter_without_flush() {
-    let selector = Selector::new().unwrap();
+    let selector = KqueueSelector::new().unwrap();
     let (a, b) = socketpair();
     selector.flush([arm(5, &a, Direction::Read)]).unwrap();
     selector.apply_now(disarm(5, &a, Direction::Read)).unwrap();
@@ -111,7 +112,7 @@ fn apply_now_deletes_an_armed_filter_without_flush() {
 
 #[test]
 fn deleted_then_closed_fd_produces_no_events() {
-    let selector = Selector::new().unwrap();
+    let selector = KqueueSelector::new().unwrap();
     let (a, b) = socketpair();
     selector.flush([arm(6, &a, Direction::Read)]).unwrap();
     selector.apply_now(disarm(6, &a, Direction::Read)).unwrap();
@@ -122,7 +123,7 @@ fn deleted_then_closed_fd_produces_no_events() {
 
 #[test]
 fn disarming_a_filter_that_already_fired_is_ok() {
-    let selector = Selector::new().unwrap();
+    let selector = KqueueSelector::new().unwrap();
     let (a, _b) = socketpair();
     selector.flush([arm(7, &a, Direction::Write)]).unwrap();
     assert_yields(events(&selector), [SelectorEvent::Writable(Token(7))]);
@@ -131,7 +132,7 @@ fn disarming_a_filter_that_already_fired_is_ok() {
 
 #[test]
 fn reused_fd_number_reports_the_new_token() {
-    let selector = Selector::new().unwrap();
+    let selector = KqueueSelector::new().unwrap();
     let (a, _b) = socketpair();
     selector.flush([arm(8, &a, Direction::Write)]).unwrap();
     selector.apply_now(disarm(8, &a, Direction::Write)).unwrap();
@@ -144,7 +145,7 @@ fn reused_fd_number_reports_the_new_token() {
 
 #[test]
 fn changes_and_events_beyond_one_batch_are_all_delivered() {
-    let selector = Selector::new().unwrap();
+    let selector = KqueueSelector::new().unwrap();
     let [(a0, b0), (a1, b1), (a2, b2)] = core::array::from_fn(|_| socketpair());
     let fds = [&a0, &b0, &a1, &b1, &a2, &b2];
     let arm_first = |count: usize| {
@@ -164,7 +165,7 @@ fn changes_and_events_beyond_one_batch_are_all_delivered() {
 
 #[test]
 fn timer_fires_after_flush() {
-    let selector = Selector::new().unwrap();
+    let selector = KqueueSelector::new().unwrap();
     let start = Instant::now();
     selector.arm_timer(start + Duration::from_millis(20));
     selector.flush([]).unwrap();
@@ -176,14 +177,14 @@ fn timer_fires_after_flush() {
 
 #[test]
 fn timer_is_not_armed_without_flush() {
-    let selector = Selector::new().unwrap();
+    let selector = KqueueSelector::new().unwrap();
     selector.arm_timer(Instant::now() + Duration::from_millis(1));
     assert!(!is_readable(&selector, 50));
 }
 
 #[test]
 fn last_timer_change_before_flush_wins() {
-    let selector = Selector::new().unwrap();
+    let selector = KqueueSelector::new().unwrap();
     selector.arm_timer(Instant::now() + Duration::from_millis(1));
     selector.arm_timer(Instant::now() + Duration::from_secs(10));
     selector.flush([]).unwrap();
@@ -197,7 +198,7 @@ fn last_timer_change_before_flush_wins() {
 
 #[test]
 fn disarm_prevents_firing() {
-    let selector = Selector::new().unwrap();
+    let selector = KqueueSelector::new().unwrap();
     selector.arm_timer(Instant::now() + Duration::from_millis(10));
     selector.flush([]).unwrap();
     selector.disarm_timer();
@@ -208,7 +209,7 @@ fn disarm_prevents_firing() {
 
 #[test]
 fn disarm_after_timer_fired_is_ok() {
-    let selector = Selector::new().unwrap();
+    let selector = KqueueSelector::new().unwrap();
     selector.arm_timer(Instant::now() + Duration::ZERO);
     selector.flush([]).unwrap();
     assert!(is_readable(&selector, 500));
@@ -219,7 +220,7 @@ fn disarm_after_timer_fired_is_ok() {
 
 #[test]
 fn disarm_when_never_armed_is_ok() {
-    let selector = Selector::new().unwrap();
+    let selector = KqueueSelector::new().unwrap();
     selector.disarm_timer();
     selector.flush([]).unwrap();
 }

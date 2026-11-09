@@ -17,12 +17,12 @@ use crate::{
 const TIMER_IDENT: isize = 0;
 const CHANGES_PER_CALL: usize = if cfg!(test) { 4 } else { 64 };
 
-pub(crate) struct Selector {
+pub struct KqueueSelector {
     kq: OwnedFd,
     timer: RefCell<Timer>,
 }
 
-impl Selector {
+impl KqueueSelector {
     pub(crate) fn new() -> rustix::io::Result<Self> {
         let kq = kqueue()?;
         fcntl_setfd(&kq, FdFlags::CLOEXEC)?;
@@ -167,13 +167,13 @@ impl IoChange {
     }
 }
 
-impl AsFd for Selector {
+impl AsFd for KqueueSelector {
     fn as_fd(&self) -> BorrowedFd<'_> {
         self.kq.as_fd()
     }
 }
 
-impl AsRawFd for Selector {
+impl AsRawFd for KqueueSelector {
     fn as_raw_fd(&self) -> RawFd {
         self.kq.as_raw_fd()
     }

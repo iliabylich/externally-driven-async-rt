@@ -3,14 +3,11 @@ use core::{
     task::Waker,
 };
 
-use crate::{
-    instant::Instant,
-    selectors::{Direction, EVENTS_PER_CALL, Selector, SelectorEvent},
-};
+use crate::selectors::Selector;
 
-pub(crate) use handle::Storage;
+pub(crate) use guard::StorageGuard;
 pub(crate) use io_waiters::{IoIndex, IoWaiters};
-pub(crate) use tasks::{Root, RootStatus, TaskId, Tasks};
+pub(crate) use tasks::{Root, RootStatus, TaskId, Tasks, TasksGuard};
 pub(crate) use timers::{TimerIndex, Timers};
 
 fn store_waker(cell: &Cell<Option<Waker>>, waker: &Waker) {
@@ -31,12 +28,13 @@ pub struct LoopStorage<
     const MAX_ROOT_TASK_SIZE: usize,
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
+    Sel = Selector,
 > {
-    pub(crate) selector: UnsafeCell<Option<Selector>>,
-    pub(crate) state: UnsafeCell<Option<S>>,
-    pub(crate) timers: Timers<MAX_TIMERS_COUNT>,
-    pub(crate) io_waiters: IoWaiters<MAX_IO_COUNT>,
-    pub(crate) tasks: Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
+    selector: UnsafeCell<Option<Sel>>,
+    state: UnsafeCell<Option<S>>,
+    timers: Timers<MAX_TIMERS_COUNT>,
+    io_waiters: IoWaiters<MAX_IO_COUNT>,
+    tasks: Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
 }
 
 // SAFETY: a storage has no public methods, so other threads can only pass `&LoopStorage` around.
@@ -50,6 +48,7 @@ unsafe impl<
     const MAX_ROOT_TASK_SIZE: usize,
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
+    Sel,
 > Sync
     for LoopStorage<
         S,
@@ -58,6 +57,7 @@ unsafe impl<
         MAX_ROOT_TASK_SIZE,
         MAX_TIMERS_COUNT,
         MAX_IO_COUNT,
+        Sel,
     >
 {
 }
@@ -69,6 +69,7 @@ impl<
     const MAX_ROOT_TASK_SIZE: usize,
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
+    Sel: 'static,
 >
     LoopStorage<
         S,
@@ -77,6 +78,7 @@ impl<
         MAX_ROOT_TASK_SIZE,
         MAX_TIMERS_COUNT,
         MAX_IO_COUNT,
+        Sel,
     >
 {
     #[expect(
@@ -95,9 +97,9 @@ impl<
 
     pub(crate) fn claim<'a>(
         &'static self,
-        selector: Option<Selector>,
+        selector: Sel,
         state: S,
-    ) -> Storage<
+    ) -> StorageGuard<
         'a,
         S,
         MAX_TASKS_COUNT,
@@ -105,69 +107,27 @@ impl<
         MAX_ROOT_TASK_SIZE,
         MAX_TIMERS_COUNT,
         MAX_IO_COUNT,
+        Sel,
     > {
-        self.tasks.claim();
+        let tasks_guard = self.tasks.claim();
         // SAFETY: the claim above succeeds only once per storage, so nothing has accessed (or
         // holds a reference to) the selector or the state yet.
         unsafe {
-            *self.selector.get() = selector;
+            *self.selector.get() = Some(selector);
             *self.state.get() = Some(state);
         }
-        Storage::new(self)
-    }
-
-    pub(crate) fn selector(&self) -> &Selector {
-        // SAFETY: the selector is written only in `claim`, before any reference to it can exist,
-        // and taken only in `EventLoop`'s `drop`, after the tasks (which hold the only other
-        // references, besides the loop's own borrows) are gone.
-        unsafe { &*self.selector.get() }
-            .as_ref()
-            .expect("the storage is claimed by an EventLoop")
-    }
-
-    pub(crate) fn process_selector_events(&self) -> rustix::io::Result<()> {
-        let mut events = [None; EVENTS_PER_CALL];
-        loop {
-            let full = self.selector().poll_nonblocking(&mut events)?;
-            for event in events.iter().map_while(|event| *event) {
-                match event {
-                    SelectorEvent::Readable(token) => {
-                        if let Some(waker) = self.io_waiters.take_waker(token, Direction::Read) {
-                            waker.wake();
-                        }
-                    }
-                    SelectorEvent::Writable(token) => {
-                        if let Some(waker) = self.io_waiters.take_waker(token, Direction::Write) {
-                            waker.wake();
-                        }
-                    }
-                    SelectorEvent::Timer => {
-                        let now = Instant::now();
-                        while let Some(waker) = self.timers.take_expired(now) {
-                            waker.wake();
-                        }
-                    }
-                }
-            }
-            if !full {
-                return Ok(());
-            }
+        StorageGuard {
+            selector: &self.selector,
+            state: &self.state,
+            timers: &self.timers,
+            io_waiters: &self.io_waiters,
+            tasks: &self.tasks,
+            tasks_guard,
         }
-    }
-
-    pub(crate) fn flush(&self) -> rustix::io::Result<()> {
-        let selector = self.selector();
-        match self.timers.next_deadline() {
-            Some(deadline) => selector.arm_timer(deadline),
-            None => selector.disarm_timer(),
-        }
-        selector.flush(self.io_waiters.pending_changes())?;
-        self.io_waiters.mark_flushed();
-        Ok(())
     }
 }
 
-mod handle;
+mod guard;
 mod io_waiters;
 mod tasks;
 mod timers;
