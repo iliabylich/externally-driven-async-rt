@@ -14,7 +14,6 @@ use rustix::{
 
 use crate::{
     Context, Error, EventLoop, LoopStorage, State, io::IoRegistration, selectors::Direction,
-    wake_queue::WakeQueue,
 };
 
 pub(crate) const TEST_MAX_TASKS_COUNT: usize = 16;
@@ -107,7 +106,7 @@ fn is_ready(fd: impl AsFd, flags: PollFlags, timeout_ms: i64) -> bool {
     poll(&mut fds, Some(&timeout)).unwrap() == 1
 }
 
-pub(crate) fn sleep(duration: Duration) {
+pub(crate) fn sleep_blocking(duration: Duration) {
     let timeout = Timespec {
         tv_sec: duration.as_secs() as i64,
         tv_nsec: i64::from(duration.subsec_nanos()),
@@ -115,25 +114,7 @@ pub(crate) fn sleep(duration: Duration) {
     assert_eq!(poll(&mut [], Some(&timeout)).unwrap(), 0);
 }
 
-pub(crate) async fn wait_readable<
-    S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
->(
-    ctx: &Context<
-        '_,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >,
-    fd: &OwnedFd,
-) {
+pub(crate) async fn wait_readable(ctx: &TestContext<'_>, fd: &OwnedFd) {
     let mut registration = IoRegistration::new(ctx.storage(), fd.as_fd(), Direction::Read);
     while !is_readable(fd, 0) {
         registration.wait().await;
@@ -152,16 +133,6 @@ pub(crate) fn assert_yields<T: PartialEq + core::fmt::Debug>(
             (actual, expected) => assert_eq!(actual, expected, "item {i}"),
         }
     }
-}
-
-pub(crate) fn waker<const N: usize>(queue: &'static WakeQueue<N>, id: u32) -> Waker {
-    queue.waker(id)
-}
-
-pub(crate) fn waker_id<const N: usize>(queue: &'static WakeQueue<N>, waker: &Waker) -> u32 {
-    (0..N as u32)
-        .find(|&id| waker.data() == queue.waker(id).data())
-        .expect("the waker comes from `waker`")
 }
 
 pub(crate) fn counting_waker(drops: &Cell<u32>) -> Waker {
@@ -201,23 +172,7 @@ pub(crate) fn wake_by_writing(event_loop: &impl AsFd, peer: &OwnedFd) {
     assert!(is_readable(event_loop, 1000));
 }
 
-pub(crate) fn run_until_root_finishes<
-    S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
->(
-    event_loop: &mut EventLoop<
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >,
-) {
+pub(crate) fn run_until_root_finishes<S: State>(event_loop: &mut TestLoop<'_, S>) {
     loop {
         assert!(
             is_readable(&*event_loop, 2000),
@@ -244,24 +199,7 @@ pub(crate) fn raw_accept(listener: &OwnedFd) -> OwnedFd {
     fd
 }
 
-pub(crate) fn drain_until_readable<
-    S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
->(
-    event_loop: &mut EventLoop<
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >,
-    peer: impl AsFd,
-) {
+pub(crate) fn drain_until_readable<S: State>(event_loop: &mut TestLoop<S>, peer: impl AsFd) {
     loop {
         let mut fds = [
             PollFd::new(&peer, PollFlags::IN),
@@ -283,22 +221,8 @@ pub(crate) fn drain_until_readable<
     }
 }
 
-pub(crate) fn peer_read_exact<
-    S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
->(
-    event_loop: &mut EventLoop<
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >,
+pub(crate) fn peer_read_exact<S: State>(
+    event_loop: &mut TestLoop<S>,
     peer: impl AsFd,
     buf: &mut [u8],
 ) {
@@ -311,65 +235,33 @@ pub(crate) fn peer_read_exact<
     }
 }
 
-pub(crate) fn has_timers<
-    S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
->(
-    event_loop: &EventLoop<
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >,
-) -> bool {
+pub(crate) fn has_timers<S: State>(event_loop: &TestLoop<S>) -> bool {
     event_loop.storage.timers().next_deadline().is_some()
 }
 
-pub(crate) struct First<A, B>(pub(crate) A, pub(crate) B);
+pub(crate) struct RaceFuture<A, B>(pub(crate) A, pub(crate) B);
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Winner {
+pub(crate) enum RaceFutureWinner {
     A,
     B,
 }
 
-impl<A: Future + Unpin, B: Future + Unpin> Future for First<A, B> {
-    type Output = Winner;
+impl<A: Future + Unpin, B: Future + Unpin> Future for RaceFuture<A, B> {
+    type Output = RaceFutureWinner;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<Winner> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<RaceFutureWinner> {
         if Pin::new(&mut self.0).poll(cx).is_ready() {
-            return Poll::Ready(Winner::A);
+            return Poll::Ready(RaceFutureWinner::A);
         }
         if Pin::new(&mut self.1).poll(cx).is_ready() {
-            return Poll::Ready(Winner::B);
+            return Poll::Ready(RaceFutureWinner::B);
         }
         Poll::Pending
     }
 }
 
-pub(crate) fn run_until_events<
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
->(
-    event_loop: &mut EventLoop<
-        Log,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >,
-    count: usize,
-) {
+pub(crate) fn run_until_events(event_loop: &mut TestLoop<Log>, count: usize) {
     while event_loop.state_mut().events().len() < count {
         assert!(
             is_readable(&*event_loop, 2000),

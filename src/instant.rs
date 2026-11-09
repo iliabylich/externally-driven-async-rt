@@ -30,7 +30,7 @@ impl Add<Duration> for Instant {
 mod tests {
     use core::time::Duration;
 
-    use crate::{instant::Instant, test_utils::sleep};
+    use crate::{instant::Instant, test_utils::sleep_blocking};
 
     #[test]
     fn now_is_monotonic() {
@@ -58,7 +58,7 @@ mod tests {
     #[test]
     fn advances_at_least_as_long_as_a_sleep() {
         let start = Instant::now();
-        sleep(Duration::from_millis(20));
+        sleep_blocking(Duration::from_millis(20));
         assert!(Instant::now().saturating_duration_since(start) >= Duration::from_millis(20));
     }
 }

@@ -15,9 +15,9 @@ use crate::{
     io::IoRegistration,
     selectors::Direction,
     test_utils::{
-        First, Log, TEST_MAX_ROOT_TASK_SIZE, TEST_MAX_TASK_SIZE, TEST_MAX_TASKS_COUNT,
-        TEST_MAX_TIMERS_COUNT, TestContext, TestLoop, TestStorage, Winner, is_readable,
-        run_until_root_finishes, socketpair,
+        Log, RaceFuture, RaceFutureWinner, TEST_MAX_ROOT_TASK_SIZE, TEST_MAX_TASK_SIZE,
+        TEST_MAX_TASKS_COUNT, TEST_MAX_TIMERS_COUNT, TestContext, TestLoop, TestStorage,
+        is_readable, run_until_root_finishes, socketpair,
     },
 };
 
@@ -156,12 +156,12 @@ fn dropping_a_pending_read_deregisters() {
         },
         Log::default(),
         async move |ctx| {
-            let winner = First(
+            let winner = RaceFuture(
                 pin!(read_some(ctx, &a)),
                 ctx.sleep(Duration::from_millis(10)),
             )
             .await;
-            assert_eq!(winner, Winner::B);
+            assert_eq!(winner, RaceFutureWinner::B);
             ctx.dispatch(1);
             pending::<()>().await;
         },
@@ -195,8 +195,8 @@ fn read_survives_a_spurious_wake() {
                 }
                 Poll::<()>::Pending
             });
-            let winner = First(pin!(read_some(ctx, &a)), wake_once).await;
-            assert_eq!(winner, Winner::A);
+            let winner = RaceFuture(pin!(read_some(ctx, &a)), wake_once).await;
+            assert_eq!(winner, RaceFutureWinner::A);
             ctx.dispatch(1);
             pending::<()>().await;
         },
@@ -221,12 +221,12 @@ fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
         Log::default(),
         async |ctx| {
             let (a, _b) = socketpair();
-            let winner = First(
+            let winner = RaceFuture(
                 pin!(read_some(ctx, &a)),
                 ctx.sleep(Duration::from_millis(5)),
             )
             .await;
-            assert_eq!(winner, Winner::B);
+            assert_eq!(winner, RaceFutureWinner::B);
             drop(a);
 
             let (c, d) = socketpair();
@@ -262,7 +262,7 @@ fn exceeding_max_io_count_panics() {
         },
         Log::default(),
         async move |ctx| {
-            First(pin!(read_some(ctx, &a)), pin!(read_some(ctx, &c))).await;
+            RaceFuture(pin!(read_some(ctx, &a)), pin!(read_some(ctx, &c))).await;
         },
     );
 }

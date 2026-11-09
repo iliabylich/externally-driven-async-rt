@@ -152,6 +152,13 @@ impl<const N: usize> WakeQueue<N> {
     pub(crate) fn is_empty(&self) -> bool {
         decode(self.head.load(Relaxed)).is_none()
     }
+
+    #[cfg(test)]
+    pub(crate) fn id_by_waker_data(&'static self, waker: &Waker) -> u32 {
+        (0..N as u32)
+            .find(|&id| waker.data() == self.waker(id).data())
+            .expect("the waker comes from `waker`")
+    }
 }
 
 fn vtable<const N: usize>() -> &'static RawWakerVTable {

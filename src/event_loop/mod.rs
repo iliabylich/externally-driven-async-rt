@@ -4,7 +4,7 @@ use crate::{
     context::Context,
     selectors::Selector,
     state::State,
-    storage::{LoopStorage, Root, RootStatus, LoopStorageGuard},
+    storage::{LoopStorage, LoopStorageGuard, Root, RootStatus},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

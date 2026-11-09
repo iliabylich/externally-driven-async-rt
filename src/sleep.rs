@@ -56,9 +56,9 @@ mod tests {
         EventLoop, LoopStorage,
         instant::Instant,
         test_utils::{
-            First, Log, TEST_MAX_IO_COUNT, TEST_MAX_ROOT_TASK_SIZE, TEST_MAX_TASK_SIZE,
-            TEST_MAX_TASKS_COUNT, TestLoop, TestStorage, Winner, has_timers, is_readable,
-            run_until_root_finishes, socketpair, wait_readable, wake_by_writing,
+            Log, RaceFuture, RaceFutureWinner, TEST_MAX_IO_COUNT, TEST_MAX_ROOT_TASK_SIZE,
+            TEST_MAX_TASK_SIZE, TEST_MAX_TASKS_COUNT, TestLoop, TestStorage, has_timers,
+            is_readable, run_until_root_finishes, socketpair, wait_readable, wake_by_writing,
         },
     };
 
@@ -163,12 +163,12 @@ mod tests {
             },
             Log::default(),
             async move |ctx| {
-                let winner = First(
+                let winner = RaceFuture(
                     pin!(wait_readable(ctx, &a)),
                     ctx.sleep(Duration::from_millis(50)),
                 )
                 .await;
-                assert_eq!(winner, Winner::A);
+                assert_eq!(winner, RaceFutureWinner::A);
                 ctx.dispatch(1);
                 pending::<()>().await;
             },
@@ -196,12 +196,12 @@ mod tests {
             },
             Log::default(),
             async move |ctx| {
-                let winner = First(
+                let winner = RaceFuture(
                     pin!(wait_readable(ctx, &a)),
                     ctx.sleep(Duration::from_millis(10)),
                 )
                 .await;
-                assert_eq!(winner, Winner::B);
+                assert_eq!(winner, RaceFutureWinner::B);
                 ctx.dispatch(1);
                 pending::<()>().await;
             },
@@ -260,7 +260,7 @@ mod tests {
             Log::default(),
             async |ctx| {
                 let long = Duration::from_secs(60);
-                First(ctx.sleep(long), ctx.sleep(long)).await;
+                RaceFuture(ctx.sleep(long), ctx.sleep(long)).await;
             },
         );
     }

@@ -148,7 +148,7 @@ mod tests {
     use crate::{
         selectors::{Direction, IoAction, IoChange, Token},
         storage::{IoIndex, IoWaiters},
-        test_utils::{assert_yields, waker, waker_id},
+        test_utils::assert_yields,
         wake_queue::WakeQueue,
     };
 
@@ -220,11 +220,11 @@ mod tests {
         static WAKERS: WakeQueue<2> = WakeQueue::new();
         let io_waiters = &IoWaiters::<1>::new();
         let index = io_waiters.register(3, Direction::Read);
-        io_waiters.set_waker(index, &waker(&WAKERS, 1));
+        io_waiters.set_waker(index, &WAKERS.waker(1));
         let token = Token(index.to_bits());
         assert!(io_waiters.take_waker(token, Direction::Write).is_none());
         let woken = io_waiters.take_waker(token, Direction::Read).unwrap();
-        assert_eq!(waker_id(&WAKERS, &woken), 1);
+        assert_eq!(WAKERS.id_by_waker_data(&woken), 1);
         assert!(!io_waiters.has_waker(index));
     }
 
