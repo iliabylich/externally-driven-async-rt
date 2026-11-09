@@ -319,7 +319,7 @@ mod tests {
 
     use crate::{
         LoopStorage,
-        storage::{Root, RootStatus, StorageGuard, TaskId},
+        storage::{LoopStorageGuard, Root, RootStatus, TaskId},
         task::JoinStatus,
         test_utils::{DropFlag, flagged_task},
     };
@@ -397,7 +397,7 @@ mod tests {
     }
 
     struct SpawnOnDrop<'a> {
-        storage: StorageGuard<'a, (), 2, MAX_TASK_SIZE, 0, 1, 1, ()>,
+        storage: LoopStorageGuard<'a, (), 2, MAX_TASK_SIZE, 0, 1, 1, ()>,
         id: &'a Cell<Option<TaskId>>,
         spawned: &'a Cell<Option<TaskId>>,
     }

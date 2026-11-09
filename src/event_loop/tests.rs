@@ -12,7 +12,7 @@ use crate::{
     Error, EventLoop, LoopStorage, State,
     instant::Instant,
     selectors::Direction,
-    storage::{Root, RootStatus, StorageGuard, TaskId},
+    storage::{Root, RootStatus, LoopStorageGuard, TaskId},
     test_utils::{
         DropFlag, Log, TEST_MAX_IO_COUNT, TEST_MAX_ROOT_TASK_SIZE, TEST_MAX_TASK_SIZE,
         TEST_MAX_TASKS_COUNT, TEST_MAX_TIMERS_COUNT, TestContext, TestLoop, TestStorage,
@@ -645,7 +645,7 @@ fn root_finishing_stops_the_run() {
 }
 
 struct SpawnRawOnDrop<'a> {
-    storage: StorageGuard<
+    storage: LoopStorageGuard<
         'a,
         Log,
         TEST_MAX_TASKS_COUNT,
@@ -710,9 +710,9 @@ fn readable_event_wakes_the_reader_once() {
     let (task, waker) = parked_task(event_loop);
     let io = event_loop
         .storage
-        .io_waiters
+        .io_waiters()
         .register(a.as_raw_fd(), Direction::Read);
-    event_loop.storage.io_waiters.set_waker(io, &waker);
+    event_loop.storage.io_waiters().set_waker(io, &waker);
     event_loop.storage.flush().unwrap();
     rustix::io::write(&b, b"x").unwrap();
     event_loop.storage.process_selector_events().unwrap();
@@ -739,10 +739,10 @@ fn removed_io_waker_arms_nothing() {
     let (_, waker) = parked_task(event_loop);
     let io = event_loop
         .storage
-        .io_waiters
+        .io_waiters()
         .register(a.as_raw_fd(), Direction::Read);
-    event_loop.storage.io_waiters.set_waker(io, &waker);
-    event_loop.storage.io_waiters.remove_waker(io);
+    event_loop.storage.io_waiters().set_waker(io, &waker);
+    event_loop.storage.io_waiters().remove_waker(io);
     rustix::io::write(&b, b"x").unwrap();
     event_loop.storage.flush().unwrap();
     assert!(!is_readable(event_loop, 0));
@@ -764,11 +764,11 @@ fn deregistered_io_produces_no_events() {
     let (_, waker) = parked_task(event_loop);
     let io = event_loop
         .storage
-        .io_waiters
+        .io_waiters()
         .register(a.as_raw_fd(), Direction::Read);
-    event_loop.storage.io_waiters.set_waker(io, &waker);
+    event_loop.storage.io_waiters().set_waker(io, &waker);
     event_loop.storage.flush().unwrap();
-    let change = event_loop.storage.io_waiters.release(io).unwrap();
+    let change = event_loop.storage.io_waiters().release(io).unwrap();
     event_loop.storage.selector().apply_now(change).unwrap();
     rustix::io::write(&b, b"x").unwrap();
     assert!(!is_readable(event_loop, 0));
@@ -790,9 +790,11 @@ fn expired_timer_wakes_its_task() {
     let (_, later_waker) = parked_task(event_loop);
     let now = Instant::now();
     let storage = event_loop.storage;
-    storage.timers.alloc(now + Duration::from_millis(5), waker);
     storage
-        .timers
+        .timers()
+        .alloc(now + Duration::from_millis(5), waker);
+    storage
+        .timers()
         .alloc(now + Duration::from_secs(60), later_waker);
     event_loop.storage.flush().unwrap();
     assert!(is_readable(event_loop, 500));

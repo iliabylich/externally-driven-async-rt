@@ -5,7 +5,7 @@ use core::{
 
 use crate::selectors::Selector;
 
-pub(crate) use guard::StorageGuard;
+pub(crate) use guard::LoopStorageGuard;
 pub(crate) use io_waiters::{IoIndex, IoWaiters};
 pub(crate) use tasks::{Root, RootStatus, TaskId, Tasks, TasksGuard};
 pub(crate) use timers::{TimerIndex, Timers};
@@ -99,7 +99,7 @@ impl<
         &'static self,
         selector: Sel,
         state: S,
-    ) -> StorageGuard<
+    ) -> LoopStorageGuard<
         'a,
         S,
         MAX_TASKS_COUNT,
@@ -116,11 +116,8 @@ impl<
             *self.selector.get() = Some(selector);
             *self.state.get() = Some(state);
         }
-        StorageGuard {
-            selector: &self.selector,
-            state: &self.state,
-            timers: &self.timers,
-            io_waiters: &self.io_waiters,
+        LoopStorageGuard {
+            storage: self,
             tasks: tasks_guard,
         }
     }

@@ -15,10 +15,12 @@ fn clearing_drops_live_wakers() {
         static STORAGE: SmallStorage = SmallStorage::new();
         STORAGE.claim((), ())
     };
-    storage.timers.alloc(Instant::now(), counting_waker(&drops));
-    let io = storage.io_waiters.register(3, Direction::Read);
+    storage
+        .timers()
+        .alloc(Instant::now(), counting_waker(&drops));
+    let io = storage.io_waiters().register(3, Direction::Read);
     let io_waker = counting_waker(&drops);
-    storage.io_waiters.set_waker(io, &io_waker);
+    storage.io_waiters().set_waker(io, &io_waker);
     drop(io_waker);
     assert_eq!(drops.get(), 1);
     storage.clear();

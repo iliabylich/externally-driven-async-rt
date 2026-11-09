@@ -4,7 +4,7 @@ use crate::{
     context::Context,
     selectors::Selector,
     state::State,
-    storage::{LoopStorage, Root, RootStatus, StorageGuard},
+    storage::{LoopStorage, Root, RootStatus, LoopStorageGuard},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,7 +33,7 @@ pub struct EventLoop<
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
 > {
-    pub(crate) storage: StorageGuard<
+    pub(crate) storage: LoopStorageGuard<
         'a,
         S,
         MAX_TASKS_COUNT,
@@ -121,7 +121,7 @@ impl<
         // SAFETY: the state is only accessed mutably here and in `Context::dispatch`, which runs
         // inside tasks, i.e. only while `new`, a drain or `drop` holds exclusive access to the
         // loop; `&mut self` rules all of those out.
-        unsafe { &mut *self.storage.state.get() }
+        unsafe { &mut *self.storage.state_slot().get() }
             .as_mut()
             .expect("the state is set until the loop is dropped")
     }
@@ -164,8 +164,8 @@ impl<
         // `&mut self` rules out the loop's own borrows.
         let (state, selector) = unsafe {
             (
-                (*self.storage.state.get()).take(),
-                (*self.storage.selector.get()).take(),
+                (*self.storage.state_slot().get()).take(),
+                (*self.storage.selector_slot().get()).take(),
             )
         };
         drop(state);

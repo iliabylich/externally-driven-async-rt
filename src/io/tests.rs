@@ -70,7 +70,7 @@ fn drain_receive_buffer(fd: &OwnedFd) {
 }
 
 fn registrations(event_loop: &TestLoop<Log>) -> usize {
-    event_loop.storage.io_waiters.count()
+    event_loop.storage.io_waiters().count()
 }
 
 #[test]
@@ -300,5 +300,5 @@ fn sequential_io_reuses_the_slot() {
         }
     }
     assert_eq!(event_loop.state_mut().events(), [1, 2, 3]);
-    assert_eq!(event_loop.storage.io_waiters.count(), 0);
+    assert_eq!(event_loop.storage.io_waiters().count(), 0);
 }

@@ -1,7 +1,7 @@
 use core::time::Duration;
 
 use crate::{
-    instant::Instant, join_handle::JoinHandle, sleep::Sleep, state::State, storage::StorageGuard,
+    instant::Instant, join_handle::JoinHandle, sleep::Sleep, state::State, storage::LoopStorageGuard,
 };
 
 pub struct Context<
@@ -13,7 +13,7 @@ pub struct Context<
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
 > {
-    storage: StorageGuard<
+    storage: LoopStorageGuard<
         'a,
         S,
         MAX_TASKS_COUNT,
@@ -45,7 +45,7 @@ impl<
 {
     pub(crate) fn storage(
         &self,
-    ) -> &StorageGuard<
+    ) -> &LoopStorageGuard<
         'a,
         S,
         MAX_TASKS_COUNT,
@@ -65,7 +65,7 @@ impl<
         // can't reach one: the task lends it to its closure for a higher-ranked lifetime, so it
         // can't be stored in `S` or its events, whose lifetimes are fixed when the loop is
         // created. So `apply` can't re-enter `dispatch`: this is the only reference.
-        unsafe { &mut *self.storage.state.get() }
+        unsafe { &mut *self.storage.state_slot().get() }
             .as_mut()
             .expect("the state is set while tasks run")
             .apply(event);
@@ -86,7 +86,7 @@ impl<
     }
 
     pub(crate) fn spawn_root<F>(
-        storage: StorageGuard<
+        storage: LoopStorageGuard<
             'a,
             S,
             MAX_TASKS_COUNT,
@@ -105,6 +105,6 @@ impl<
     }
 
     pub fn sleep(&self, duration: Duration) -> Sleep<'_, MAX_TIMERS_COUNT> {
-        Sleep::new(self.storage.timers, Instant::now() + duration)
+        Sleep::new(self.storage.timers(), Instant::now() + duration)
     }
 }

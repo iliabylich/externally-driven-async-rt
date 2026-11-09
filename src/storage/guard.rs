@@ -3,10 +3,10 @@ use core::cell::UnsafeCell;
 use crate::{
     instant::Instant,
     selectors::{Direction, EVENTS_PER_CALL, Selector, SelectorEvent},
-    storage::{IoWaiters, TasksGuard, Timers},
+    storage::{IoWaiters, LoopStorage, TasksGuard, Timers},
 };
 
-pub(crate) struct StorageGuard<
+pub(crate) struct LoopStorageGuard<
     'a,
     S: 'static,
     const MAX_TASKS_COUNT: usize,
@@ -16,10 +16,15 @@ pub(crate) struct StorageGuard<
     const MAX_IO_COUNT: usize,
     Sel: 'static = Selector,
 > {
-    pub(crate) selector: &'static UnsafeCell<Option<Sel>>,
-    pub(crate) state: &'static UnsafeCell<Option<S>>,
-    pub(crate) timers: &'static Timers<MAX_TIMERS_COUNT>,
-    pub(crate) io_waiters: &'static IoWaiters<MAX_IO_COUNT>,
+    pub(super) storage: &'static LoopStorage<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+        Sel,
+    >,
     pub(crate) tasks: TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
 }
 
@@ -33,7 +38,7 @@ impl<
     const MAX_IO_COUNT: usize,
     Sel: 'static,
 >
-    StorageGuard<
+    LoopStorageGuard<
         'a,
         S,
         MAX_TASKS_COUNT,
@@ -44,10 +49,26 @@ impl<
         Sel,
     >
 {
+    pub(crate) fn timers(self) -> &'static Timers<MAX_TIMERS_COUNT> {
+        &self.storage.timers
+    }
+
+    pub(crate) fn io_waiters(self) -> &'static IoWaiters<MAX_IO_COUNT> {
+        &self.storage.io_waiters
+    }
+
+    pub(crate) fn state_slot(self) -> &'static UnsafeCell<Option<S>> {
+        &self.storage.state
+    }
+
+    pub(crate) fn selector_slot(self) -> &'static UnsafeCell<Option<Sel>> {
+        &self.storage.selector
+    }
+
     pub(crate) fn clear(self) {
         self.tasks.drop_all();
-        self.timers.clear();
-        self.io_waiters.clear();
+        self.timers().clear();
+        self.io_waiters().clear();
     }
 }
 
@@ -59,7 +80,7 @@ impl<
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
 >
-    StorageGuard<
+    LoopStorageGuard<
         '_,
         S,
         MAX_TASKS_COUNT,
@@ -74,7 +95,7 @@ impl<
         // SAFETY: the selector is written only in `claim`, before any reference to it can exist,
         // and taken only in `EventLoop`'s `drop`, after the tasks (which hold the only other
         // references, besides the loop's own borrows) are gone.
-        unsafe { &*self.selector.get() }
+        unsafe { &*self.selector_slot().get() }
             .as_ref()
             .expect("the selector is set until the loop is dropped")
     }
@@ -86,18 +107,18 @@ impl<
             for event in events.iter().map_while(|event| *event) {
                 match event {
                     SelectorEvent::Readable(token) => {
-                        if let Some(waker) = self.io_waiters.take_waker(token, Direction::Read) {
+                        if let Some(waker) = self.io_waiters().take_waker(token, Direction::Read) {
                             waker.wake();
                         }
                     }
                     SelectorEvent::Writable(token) => {
-                        if let Some(waker) = self.io_waiters.take_waker(token, Direction::Write) {
+                        if let Some(waker) = self.io_waiters().take_waker(token, Direction::Write) {
                             waker.wake();
                         }
                     }
                     SelectorEvent::Timer => {
                         let now = Instant::now();
-                        while let Some(waker) = self.timers.take_expired(now) {
+                        while let Some(waker) = self.timers().take_expired(now) {
                             waker.wake();
                         }
                     }
@@ -111,12 +132,12 @@ impl<
 
     pub(crate) fn flush(&self) -> rustix::io::Result<()> {
         let selector = self.selector();
-        match self.timers.next_deadline() {
+        match self.timers().next_deadline() {
             Some(deadline) => selector.arm_timer(deadline),
             None => selector.disarm_timer(),
         }
-        selector.flush(self.io_waiters.pending_changes())?;
-        self.io_waiters.mark_flushed();
+        selector.flush(self.io_waiters().pending_changes())?;
+        self.io_waiters().mark_flushed();
         Ok(())
     }
 }
@@ -130,7 +151,7 @@ impl<
     const MAX_IO_COUNT: usize,
     Sel: 'static,
 > Clone
-    for StorageGuard<
+    for LoopStorageGuard<
         '_,
         S,
         MAX_TASKS_COUNT,
@@ -155,7 +176,7 @@ impl<
     const MAX_IO_COUNT: usize,
     Sel: 'static,
 > Copy
-    for StorageGuard<
+    for LoopStorageGuard<
         '_,
         S,
         MAX_TASKS_COUNT,

@@ -328,7 +328,7 @@ pub(crate) fn has_timers<
         MAX_IO_COUNT,
     >,
 ) -> bool {
-    event_loop.storage.timers.next_deadline().is_some()
+    event_loop.storage.timers().next_deadline().is_some()
 }
 
 pub(crate) struct First<A, B>(pub(crate) A, pub(crate) B);
