@@ -1,4 +1,5 @@
 use core::{net::SocketAddr, time::Duration};
+use std::os::fd::AsFd;
 
 use externally_driven_async_rt::{
     Context, Error, EventLoop, LoopStorage, State,
@@ -194,8 +195,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{line}");
     }
     println!("commands: stats, quit");
-    // SAFETY: fd 0 is stdin, which stays open for the whole process.
-    let stdin = unsafe { BorrowedFd::borrow_raw(0) };
+    let stdin = std::io::stdin();
+    let stdin = stdin.as_fd();
     let mut pending = Vec::new();
     let mut commands = Vec::new();
 

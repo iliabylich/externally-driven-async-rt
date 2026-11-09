@@ -8,4 +8,4 @@ rust-version = "1.99"
 rustix = { version = "1", default-features = false, features = ["event", "net"] }
 
 [dev-dependencies]
-rustix = { version = "1", default-features = false, features = ["fs", "process"] }
+rustix = { version = "1", default-features = false, features = ["fs", "process", "std"] }
