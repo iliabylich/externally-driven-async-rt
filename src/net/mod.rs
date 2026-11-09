@@ -1,5 +1,6 @@
 mod address;
 mod read_half;
+mod retry;
 mod socket;
 mod tcp_listener;
 mod tcp_stream;

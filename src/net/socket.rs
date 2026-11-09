@@ -10,7 +10,7 @@ use rustix::{
 use crate::{
     context::Context,
     io::IoRegistration,
-    net::address::Address,
+    net::{address::Address, retry::Retry},
     selector::Direction,
     state::State,
     strace::{syscall, syscall_end, syscall_start},
@@ -134,7 +134,9 @@ impl Socket {
         Ok((socket, A::from_any(addr)?))
     }
 
-    pub(super) async fn read<
+    pub(super) fn read<
+        'a,
+        'ctx,
         S: State,
         const MAX_TASKS_COUNT: usize,
         const MAX_TASK_SIZE: usize,
@@ -142,9 +144,9 @@ impl Socket {
         const MAX_TIMERS_COUNT: usize,
         const MAX_IO_COUNT: usize,
     >(
-        &self,
-        ctx: &Context<
-            '_,
+        &'a self,
+        ctx: &'a Context<
+            'ctx,
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,
@@ -152,18 +154,19 @@ impl Socket {
             MAX_TIMERS_COUNT,
             MAX_IO_COUNT,
         >,
-        buf: &mut [u8],
-    ) -> rustix::io::Result<usize> {
-        self.retry(ctx, Direction::Read, |fd| {
+        buf: &'a mut [u8],
+    ) -> impl Future<Output = rustix::io::Result<usize>> {
+        self.retry(ctx, Direction::Read, move |fd| {
             syscall_start!("read", fd);
             let result = rustix::io::read(fd, &mut *buf);
             syscall_end!(result; &buf[..result.unwrap_or(0)], buf.len());
             result
         })
-        .await
     }
 
-    pub(super) async fn write<
+    pub(super) fn write<
+        'a,
+        'ctx,
         S: State,
         const MAX_TASKS_COUNT: usize,
         const MAX_TASK_SIZE: usize,
@@ -171,9 +174,9 @@ impl Socket {
         const MAX_TIMERS_COUNT: usize,
         const MAX_IO_COUNT: usize,
     >(
-        &self,
-        ctx: &Context<
-            '_,
+        &'a self,
+        ctx: &'a Context<
+            'ctx,
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,
@@ -181,18 +184,19 @@ impl Socket {
             MAX_TIMERS_COUNT,
             MAX_IO_COUNT,
         >,
-        buf: &[u8],
-    ) -> rustix::io::Result<usize> {
-        self.retry(ctx, Direction::Write, |fd| {
+        buf: &'a [u8],
+    ) -> impl Future<Output = rustix::io::Result<usize>> {
+        self.retry(ctx, Direction::Write, move |fd| {
             syscall_start!("send", fd, buf, buf.len(), STREAM_SEND_FLAGS);
             let result = rustix::net::send(fd, buf, STREAM_SEND_FLAGS);
             syscall_end!(result);
             result
         })
-        .await
     }
 
-    pub(super) async fn send<
+    pub(super) fn send<
+        'a,
+        'ctx,
         S: State,
         const MAX_TASKS_COUNT: usize,
         const MAX_TASK_SIZE: usize,
@@ -200,9 +204,9 @@ impl Socket {
         const MAX_TIMERS_COUNT: usize,
         const MAX_IO_COUNT: usize,
     >(
-        &self,
-        ctx: &Context<
-            '_,
+        &'a self,
+        ctx: &'a Context<
+            'ctx,
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,
@@ -210,15 +214,14 @@ impl Socket {
             MAX_TIMERS_COUNT,
             MAX_IO_COUNT,
         >,
-        buf: &[u8],
-    ) -> rustix::io::Result<usize> {
-        self.retry(ctx, Direction::Write, |fd| {
+        buf: &'a [u8],
+    ) -> impl Future<Output = rustix::io::Result<usize>> {
+        self.retry(ctx, Direction::Write, move |fd| {
             syscall_start!("send", fd, buf, buf.len(), SendFlags::empty());
             let result = rustix::net::send(fd, buf, SendFlags::empty());
             syscall_end!(result);
             result
         })
-        .await
     }
 
     pub(super) async fn recv<
@@ -257,7 +260,9 @@ impl Socket {
         Ok(len)
     }
 
-    pub(super) async fn send_to<
+    pub(super) fn send_to<
+        'a,
+        'ctx,
         S: State,
         const MAX_TASKS_COUNT: usize,
         const MAX_TASK_SIZE: usize,
@@ -266,9 +271,9 @@ impl Socket {
         const MAX_IO_COUNT: usize,
         A: Address,
     >(
-        &self,
-        ctx: &Context<
-            '_,
+        &'a self,
+        ctx: &'a Context<
+            'ctx,
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,
@@ -276,10 +281,10 @@ impl Socket {
             MAX_TIMERS_COUNT,
             MAX_IO_COUNT,
         >,
-        buf: &[u8],
-        addr: &A,
-    ) -> rustix::io::Result<usize> {
-        self.retry(ctx, Direction::Write, |fd| {
+        buf: &'a [u8],
+        addr: &'a A,
+    ) -> impl Future<Output = rustix::io::Result<usize>> {
+        self.retry(ctx, Direction::Write, move |fd| {
             syscall_start!(
                 "sendto",
                 fd,
@@ -292,7 +297,6 @@ impl Socket {
             syscall_end!(result);
             result
         })
-        .await
     }
 
     pub(super) async fn recv_from<
@@ -383,7 +387,9 @@ impl Socket {
         Ok(())
     }
 
-    async fn retry<
+    fn retry<
+        'a,
+        'ctx,
         S: State,
         const MAX_TASKS_COUNT: usize,
         const MAX_TASK_SIZE: usize,
@@ -391,10 +397,11 @@ impl Socket {
         const MAX_TIMERS_COUNT: usize,
         const MAX_IO_COUNT: usize,
         T,
+        F: FnMut(&OwnedFd) -> rustix::io::Result<T> + Unpin,
     >(
-        &self,
-        ctx: &Context<
-            '_,
+        &'a self,
+        ctx: &'a Context<
+            'ctx,
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,
@@ -403,16 +410,19 @@ impl Socket {
             MAX_IO_COUNT,
         >,
         direction: Direction,
-        mut op: impl FnMut(&OwnedFd) -> rustix::io::Result<T>,
-    ) -> rustix::io::Result<T> {
-        let mut registration = IoRegistration::new(ctx.storage(), self.0.as_fd(), direction);
-        loop {
-            match op(&self.0) {
-                Err(Errno::INTR) => {}
-                Err(Errno::AGAIN) => registration.wait().await,
-                result => return result,
-            }
-        }
+        op: F,
+    ) -> Retry<
+        'a,
+        'ctx,
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+        F,
+    > {
+        Retry::new(ctx, &self.0, direction, op)
     }
 }
 

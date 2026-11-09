@@ -18,7 +18,9 @@ impl UnixDatagram {
         Ok(Self { socket })
     }
 
-    pub async fn send_to<
+    pub fn send_to<
+        'a,
+        'ctx,
         S: State,
         const MAX_TASKS_COUNT: usize,
         const MAX_TASK_SIZE: usize,
@@ -26,9 +28,9 @@ impl UnixDatagram {
         const MAX_TIMERS_COUNT: usize,
         const MAX_IO_COUNT: usize,
     >(
-        &mut self,
-        ctx: &Context<
-            '_,
+        &'a mut self,
+        ctx: &'a Context<
+            'ctx,
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,
@@ -36,13 +38,15 @@ impl UnixDatagram {
             MAX_TIMERS_COUNT,
             MAX_IO_COUNT,
         >,
-        buf: &[u8],
-        addr: &SocketAddrUnix,
-    ) -> rustix::io::Result<usize> {
-        self.socket.send_to(ctx, buf, addr).await
+        buf: &'a [u8],
+        addr: &'a SocketAddrUnix,
+    ) -> impl Future<Output = rustix::io::Result<usize>> {
+        self.socket.send_to(ctx, buf, addr)
     }
 
-    pub async fn recv_from<
+    pub fn recv_from<
+        'a,
+        'ctx,
         S: State,
         const MAX_TASKS_COUNT: usize,
         const MAX_TASK_SIZE: usize,
@@ -50,9 +54,9 @@ impl UnixDatagram {
         const MAX_TIMERS_COUNT: usize,
         const MAX_IO_COUNT: usize,
     >(
-        &mut self,
-        ctx: &Context<
-            '_,
+        &'a mut self,
+        ctx: &'a Context<
+            'ctx,
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,
@@ -60,16 +64,18 @@ impl UnixDatagram {
             MAX_TIMERS_COUNT,
             MAX_IO_COUNT,
         >,
-        buf: &mut [u8],
-    ) -> rustix::io::Result<(usize, SocketAddrUnix)> {
-        self.socket.recv_from(ctx, buf).await
+        buf: &'a mut [u8],
+    ) -> impl Future<Output = rustix::io::Result<(usize, SocketAddrUnix)>> {
+        self.socket.recv_from(ctx, buf)
     }
 
     pub fn connect(&self, addr: &SocketAddrUnix) -> rustix::io::Result<()> {
         self.socket.connect(addr)
     }
 
-    pub async fn send<
+    pub fn send<
+        'a,
+        'ctx,
         S: State,
         const MAX_TASKS_COUNT: usize,
         const MAX_TASK_SIZE: usize,
@@ -77,9 +83,9 @@ impl UnixDatagram {
         const MAX_TIMERS_COUNT: usize,
         const MAX_IO_COUNT: usize,
     >(
-        &mut self,
-        ctx: &Context<
-            '_,
+        &'a mut self,
+        ctx: &'a Context<
+            'ctx,
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,
@@ -87,12 +93,14 @@ impl UnixDatagram {
             MAX_TIMERS_COUNT,
             MAX_IO_COUNT,
         >,
-        buf: &[u8],
-    ) -> rustix::io::Result<usize> {
-        self.socket.send(ctx, buf).await
+        buf: &'a [u8],
+    ) -> impl Future<Output = rustix::io::Result<usize>> {
+        self.socket.send(ctx, buf)
     }
 
-    pub async fn recv<
+    pub fn recv<
+        'a,
+        'ctx,
         S: State,
         const MAX_TASKS_COUNT: usize,
         const MAX_TASK_SIZE: usize,
@@ -100,9 +108,9 @@ impl UnixDatagram {
         const MAX_TIMERS_COUNT: usize,
         const MAX_IO_COUNT: usize,
     >(
-        &mut self,
-        ctx: &Context<
-            '_,
+        &'a mut self,
+        ctx: &'a Context<
+            'ctx,
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,
@@ -110,9 +118,9 @@ impl UnixDatagram {
             MAX_TIMERS_COUNT,
             MAX_IO_COUNT,
         >,
-        buf: &mut [u8],
-    ) -> rustix::io::Result<usize> {
-        self.socket.recv(ctx, buf).await
+        buf: &'a mut [u8],
+    ) -> impl Future<Output = rustix::io::Result<usize>> {
+        self.socket.recv(ctx, buf)
     }
 
     pub fn local_addr(&self) -> rustix::io::Result<SocketAddrUnix> {

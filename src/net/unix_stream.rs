@@ -38,7 +38,9 @@ impl UnixStream {
         Ok(Self { socket })
     }
 
-    pub async fn read<
+    pub fn read<
+        'a,
+        'ctx,
         S: State,
         const MAX_TASKS_COUNT: usize,
         const MAX_TASK_SIZE: usize,
@@ -46,9 +48,9 @@ impl UnixStream {
         const MAX_TIMERS_COUNT: usize,
         const MAX_IO_COUNT: usize,
     >(
-        &mut self,
-        ctx: &Context<
-            '_,
+        &'a mut self,
+        ctx: &'a Context<
+            'ctx,
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,
@@ -56,12 +58,14 @@ impl UnixStream {
             MAX_TIMERS_COUNT,
             MAX_IO_COUNT,
         >,
-        buf: &mut [u8],
-    ) -> rustix::io::Result<usize> {
-        self.socket.read(ctx, buf).await
+        buf: &'a mut [u8],
+    ) -> impl Future<Output = rustix::io::Result<usize>> {
+        self.socket.read(ctx, buf)
     }
 
-    pub async fn write<
+    pub fn write<
+        'a,
+        'ctx,
         S: State,
         const MAX_TASKS_COUNT: usize,
         const MAX_TASK_SIZE: usize,
@@ -69,9 +73,9 @@ impl UnixStream {
         const MAX_TIMERS_COUNT: usize,
         const MAX_IO_COUNT: usize,
     >(
-        &mut self,
-        ctx: &Context<
-            '_,
+        &'a mut self,
+        ctx: &'a Context<
+            'ctx,
             S,
             MAX_TASKS_COUNT,
             MAX_TASK_SIZE,
@@ -79,9 +83,9 @@ impl UnixStream {
             MAX_TIMERS_COUNT,
             MAX_IO_COUNT,
         >,
-        buf: &[u8],
-    ) -> rustix::io::Result<usize> {
-        self.socket.write(ctx, buf).await
+        buf: &'a [u8],
+    ) -> impl Future<Output = rustix::io::Result<usize>> {
+        self.socket.write(ctx, buf)
     }
 
     pub fn shutdown(&self, how: Shutdown) -> rustix::io::Result<()> {

@@ -1,3 +1,5 @@
+use core::task::{Context, Poll};
+
 use rustix::fd::{AsRawFd, BorrowedFd};
 
 use crate::{
@@ -44,6 +46,22 @@ impl<'a, const MAX_IO_COUNT: usize> IoRegistration<'a, MAX_IO_COUNT> {
         Wait {
             registration: self,
             waiting: false,
+        }
+    }
+
+    pub(crate) fn poll_wait(&self, waiting: &mut bool, cx: &mut Context<'_>) -> Poll<()> {
+        if *waiting && !self.io_waiters.has_waker(self.index) {
+            *waiting = false;
+            return Poll::Ready(());
+        }
+        self.io_waiters.set_waker(self.index, cx.waker());
+        *waiting = true;
+        Poll::Pending
+    }
+
+    pub(crate) fn cancel_wait(&self, waiting: bool) {
+        if waiting {
+            self.io_waiters.remove_waker(self.index);
         }
     }
 }
