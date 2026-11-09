@@ -1,9 +1,7 @@
 use core::{
-    cell::{Cell, RefCell, UnsafeCell},
+    cell::{Cell, RefCell},
     task::Waker,
 };
-
-use crate::selectors::Selector;
 
 pub(crate) use guard::LoopStorageGuard;
 pub(crate) use io_waiters::{IoIndex, IoWaiters};
@@ -28,9 +26,7 @@ pub struct LoopStorage<
     const MAX_ROOT_TASK_SIZE: usize,
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
-    Sel = Selector,
 > {
-    selector: UnsafeCell<Option<Sel>>,
     state: RefCell<Option<S>>,
     timers: Timers<MAX_TIMERS_COUNT>,
     io_waiters: IoWaiters<MAX_IO_COUNT>,
@@ -48,7 +44,6 @@ unsafe impl<
     const MAX_ROOT_TASK_SIZE: usize,
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
-    Sel,
 > Sync
     for LoopStorage<
         S,
@@ -57,7 +52,6 @@ unsafe impl<
         MAX_ROOT_TASK_SIZE,
         MAX_TIMERS_COUNT,
         MAX_IO_COUNT,
-        Sel,
     >
 {
 }
@@ -69,7 +63,6 @@ impl<
     const MAX_ROOT_TASK_SIZE: usize,
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
-    Sel: 'static,
 >
     LoopStorage<
         S,
@@ -78,7 +71,6 @@ impl<
         MAX_ROOT_TASK_SIZE,
         MAX_TIMERS_COUNT,
         MAX_IO_COUNT,
-        Sel,
     >
 {
     #[expect(
@@ -87,7 +79,6 @@ impl<
     )]
     pub const fn new() -> Self {
         Self {
-            selector: UnsafeCell::new(None),
             state: RefCell::new(None),
             timers: Timers::new(),
             io_waiters: IoWaiters::new(),
@@ -95,9 +86,9 @@ impl<
         }
     }
 
-    pub(crate) fn claim<'a>(
+    pub(crate) fn claim<'a, Sel>(
         &'static self,
-        selector: Sel,
+        selector: &'a Sel,
         state: S,
     ) -> LoopStorageGuard<
         'a,
@@ -110,12 +101,10 @@ impl<
         Sel,
     > {
         let tasks_guard = self.tasks.claim();
-        // SAFETY: the claim above succeeds only once per storage, so nothing has accessed (or
-        // holds a reference to) the selector yet.
-        unsafe { *self.selector.get() = Some(selector) };
         *self.state.borrow_mut() = Some(state);
         LoopStorageGuard {
             storage: self,
+            selector,
             tasks: tasks_guard,
         }
     }

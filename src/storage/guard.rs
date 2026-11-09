@@ -1,4 +1,4 @@
-use core::cell::{RefCell, UnsafeCell};
+use core::cell::RefCell;
 
 use crate::{
     instant::Instant,
@@ -14,7 +14,7 @@ pub(crate) struct LoopStorageGuard<
     const MAX_ROOT_TASK_SIZE: usize,
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
-    Sel: 'static = Selector,
+    Sel = Selector,
 > {
     pub(super) storage: &'static LoopStorage<
         S,
@@ -23,8 +23,8 @@ pub(crate) struct LoopStorageGuard<
         MAX_ROOT_TASK_SIZE,
         MAX_TIMERS_COUNT,
         MAX_IO_COUNT,
-        Sel,
     >,
+    pub(super) selector: &'a Sel,
     pub(crate) tasks: TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
 }
 
@@ -36,7 +36,7 @@ impl<
     const MAX_ROOT_TASK_SIZE: usize,
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
-    Sel: 'static,
+    Sel,
 >
     LoopStorageGuard<
         'a,
@@ -61,10 +61,6 @@ impl<
         &self.storage.state
     }
 
-    pub(crate) fn selector_slot(self) -> &'static UnsafeCell<Option<Sel>> {
-        &self.storage.selector
-    }
-
     pub(crate) fn clear(self) {
         self.tasks.drop_all();
         self.timers().clear();
@@ -73,6 +69,7 @@ impl<
 }
 
 impl<
+    'a,
     S: 'static,
     const MAX_TASKS_COUNT: usize,
     const MAX_TASK_SIZE: usize,
@@ -81,7 +78,7 @@ impl<
     const MAX_IO_COUNT: usize,
 >
     LoopStorageGuard<
-        '_,
+        'a,
         S,
         MAX_TASKS_COUNT,
         MAX_TASK_SIZE,
@@ -91,13 +88,8 @@ impl<
         Selector,
     >
 {
-    pub(crate) fn selector(&self) -> &Selector {
-        // SAFETY: the selector is written only in `claim`, before any reference to it can exist,
-        // and taken only in `EventLoop`'s `drop`, after the tasks (which hold the only other
-        // references, besides the loop's own borrows) are gone.
-        unsafe { &*self.selector_slot().get() }
-            .as_ref()
-            .expect("the selector is set until the loop is dropped")
+    pub(crate) fn selector(self) -> &'a Selector {
+        self.selector
     }
 
     pub(crate) fn process_selector_events(&self) -> rustix::io::Result<()> {
@@ -149,7 +141,7 @@ impl<
     const MAX_ROOT_TASK_SIZE: usize,
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
-    Sel: 'static,
+    Sel,
 > Clone
     for LoopStorageGuard<
         '_,
@@ -174,7 +166,7 @@ impl<
     const MAX_ROOT_TASK_SIZE: usize,
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
-    Sel: 'static,
+    Sel,
 > Copy
     for LoopStorageGuard<
         '_,

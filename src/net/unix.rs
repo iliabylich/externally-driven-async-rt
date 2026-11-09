@@ -263,6 +263,7 @@ mod tests {
     use rustix::net::{AddressFamily, RecvFlags, SendFlags, Shutdown, SocketAddrUnix, SocketType};
 
     use crate::{
+        Selector,
         net::{UnixDatagram, UnixListener, UnixStream},
         test_utils::{
             Log, TestLoop, TestStorage, drain_until_readable, peer_read_exact, raw_accept,
@@ -328,11 +329,13 @@ mod tests {
         let listener = raw_socket(AddressFamily::UNIX, SocketType::STREAM);
         rustix::net::bind(&listener, &server_addr).unwrap();
         rustix::net::listen(&listener, 1).unwrap();
+        let mut selector = Selector::new().unwrap();
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
+            &mut selector,
             Log::default(),
             async move |ctx| {
                 let mut stream = UnixStream::connect(ctx, &server_addr).await.unwrap();
@@ -372,11 +375,13 @@ mod tests {
             path_of(&listener.local_addr().unwrap()),
             path_of(&listener_addr)
         );
+        let mut selector = Selector::new().unwrap();
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
+            &mut selector,
             Log::default(),
             async move |ctx| {
                 let (mut stream, peer) = listener.accept(ctx).await.unwrap();
@@ -409,11 +414,13 @@ mod tests {
         let (ours_addr, theirs_addr) = (ours.addr(), theirs.addr());
         let peer = raw_socket(AddressFamily::UNIX, SocketType::DGRAM);
         rustix::net::bind(&peer, &theirs_addr).unwrap();
+        let mut selector = Selector::new().unwrap();
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
+            &mut selector,
             Log::default(),
             async move |ctx| {
                 let mut socket = UnixDatagram::bind(&ours_addr).unwrap();
@@ -453,11 +460,13 @@ mod tests {
     fn unbound_datagram_sender_has_an_unnamed_address() {
         let path = TempPath::new("dgram-unbound");
         let bound_addr = path.addr();
+        let mut selector = Selector::new().unwrap();
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
+            &mut selector,
             Log::default(),
             async move |ctx| {
                 let mut bound = UnixDatagram::bind(&bound_addr).unwrap();

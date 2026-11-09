@@ -44,18 +44,20 @@ mod tests {
     use core::future::pending;
 
     use crate::{
-        Error,
+        Error, Selector,
         test_utils::{Log, TestLoop, TestStorage, socketpair, wait_readable, wake_by_writing},
     };
 
     #[test]
     fn joining_a_running_task_waits_for_it() {
         let (a, b) = socketpair();
+        let mut selector = Selector::new().unwrap();
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
+            &mut selector,
             Log::default(),
             async move |ctx| {
                 ctx.spawn(async move |ctx| {
@@ -79,11 +81,13 @@ mod tests {
     #[test]
     fn joining_a_finished_task_resolves_immediately() {
         let (a, b) = socketpair();
+        let mut selector = Selector::new().unwrap();
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
+            &mut selector,
             Log::default(),
             async move |ctx| {
                 let handle = ctx.spawn(async |ctx| ctx.dispatch(1));
@@ -105,11 +109,13 @@ mod tests {
     #[test]
     fn dropped_handle_detaches_the_task() {
         let (a, b) = socketpair();
+        let mut selector = Selector::new().unwrap();
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
+            &mut selector,
             Log::default(),
             async move |ctx| {
                 ctx.spawn(async move |ctx| {
@@ -127,11 +133,13 @@ mod tests {
 
     #[test]
     fn spawned_task_can_spawn_and_join() {
+        let mut selector = Selector::new().unwrap();
         let event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
+            &mut selector,
             Log::default(),
             async |ctx| {
                 ctx.spawn(async |ctx| {

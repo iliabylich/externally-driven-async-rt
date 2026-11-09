@@ -23,7 +23,7 @@ pub struct KqueueSelector {
 }
 
 impl KqueueSelector {
-    pub(crate) fn new() -> rustix::io::Result<Self> {
+    pub fn new() -> rustix::io::Result<Self> {
         let kq = kqueue()?;
         fcntl_setfd(&kq, FdFlags::CLOEXEC)?;
         Ok(Self {

@@ -2,7 +2,7 @@ use core::{net::SocketAddr, time::Duration};
 use std::os::fd::AsFd;
 
 use externally_driven_async_rt::{
-    Context, Error, EventLoop, LoopStorage, State,
+    Context, Error, EventLoop, LoopStorage, Selector, State,
     net::{TcpListener, TcpStream},
 };
 
@@ -190,7 +190,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         accept_loop(ctx, addr).await;
     };
     static STORAGE: ServerStorage = ServerStorage::new();
-    let mut event_loop = ServerLoop::new(&STORAGE, Server::default(), root)?;
+    let mut selector = Selector::new()?;
+    let mut event_loop = ServerLoop::new(&STORAGE, &mut selector, Server::default(), root)?;
     for line in core::mem::take(&mut event_loop.state_mut().log) {
         println!("{line}");
     }

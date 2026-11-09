@@ -129,6 +129,7 @@ mod tests {
     };
 
     use crate::{
+        Selector,
         net::UdpSocket,
         test_utils::{
             Log, TestLoop, TestStorage, drain_until_readable, raw_socket, run_until_events,
@@ -147,11 +148,13 @@ mod tests {
     #[test]
     fn round_trip_with_a_raw_peer() {
         let (peer, peer_addr) = raw_peer();
+        let mut selector = Selector::new().unwrap();
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
+            &mut selector,
             Log::default(),
             async move |ctx| {
                 let mut socket = UdpSocket::bind(LOCALHOST).unwrap();

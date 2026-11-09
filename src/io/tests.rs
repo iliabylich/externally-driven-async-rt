@@ -11,7 +11,7 @@ use rustix::{
 };
 
 use crate::{
-    Context, EventLoop, LoopStorage, State,
+    Context, EventLoop, LoopStorage, Selector, State,
     io::IoRegistration,
     selectors::Direction,
     test_utils::{
@@ -76,11 +76,13 @@ fn registrations(event_loop: &TestLoop<Log>) -> usize {
 #[test]
 fn read_waits_until_the_peer_writes() {
     let (a, b) = socketpair();
+    let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
+        &mut selector,
         Log::default(),
         async move |ctx| {
             let n = read_some(ctx, &a).await.unwrap();
@@ -103,11 +105,13 @@ fn read_waits_until_the_peer_writes() {
 fn write_waits_on_a_full_buffer() {
     let (a, b) = socketpair();
     fill_send_buffer(&a);
+    let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
+        &mut selector,
         Log::default(),
         async move |ctx| {
             let n = write_some(ctx, &a).await.unwrap();
@@ -127,11 +131,13 @@ fn write_waits_on_a_full_buffer() {
 fn ready_fd_arms_nothing() {
     let (a, b) = socketpair();
     rustix::io::write(&b, b"abc").unwrap();
+    let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
+        &mut selector,
         Log::default(),
         async move |ctx| {
             let n = read_some(ctx, &a).await.unwrap();
@@ -149,11 +155,13 @@ fn ready_fd_arms_nothing() {
 #[test]
 fn dropping_a_pending_read_deregisters() {
     let (a, b) = socketpair();
+    let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
+        &mut selector,
         Log::default(),
         async move |ctx| {
             let winner = RaceFuture(
@@ -180,11 +188,13 @@ fn dropping_a_pending_read_deregisters() {
 #[test]
 fn read_survives_a_spurious_wake() {
     let (a, b) = socketpair();
+    let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
+        &mut selector,
         Log::default(),
         async move |ctx| {
             let mut woken = false;
@@ -213,11 +223,13 @@ fn read_survives_a_spurious_wake() {
 
 #[test]
 fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
+    let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
+        &mut selector,
         Log::default(),
         async |ctx| {
             let (a, _b) = socketpair();
@@ -248,6 +260,7 @@ fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
 fn exceeding_max_io_count_panics() {
     let (a, _b) = socketpair();
     let (c, _d) = socketpair();
+    let mut selector = Selector::new().unwrap();
     let _ = EventLoop::new(
         {
             static STORAGE: LoopStorage<
@@ -260,6 +273,7 @@ fn exceeding_max_io_count_panics() {
             > = LoopStorage::new();
             &STORAGE
         },
+        &mut selector,
         Log::default(),
         async move |ctx| {
             RaceFuture(pin!(read_some(ctx, &a)), pin!(read_some(ctx, &c))).await;
@@ -270,6 +284,7 @@ fn exceeding_max_io_count_panics() {
 #[test]
 fn sequential_io_reuses_the_slot() {
     let (a, b) = socketpair();
+    let mut selector = Selector::new().unwrap();
     let mut event_loop = EventLoop::new(
         {
             static STORAGE: LoopStorage<
@@ -282,6 +297,7 @@ fn sequential_io_reuses_the_slot() {
             > = LoopStorage::new();
             &STORAGE
         },
+        &mut selector,
         Log::default(),
         async move |ctx| {
             for _ in 0..3 {

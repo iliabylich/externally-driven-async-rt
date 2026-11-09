@@ -327,14 +327,14 @@ mod tests {
     const MAX_TASK_SIZE: usize = 1024;
 
     type TasksStorage<const MAX_TASKS_COUNT: usize> =
-        LoopStorage<(), MAX_TASKS_COUNT, MAX_TASK_SIZE, 0, 1, 1, ()>;
+        LoopStorage<(), MAX_TASKS_COUNT, MAX_TASK_SIZE, 0, 1, 1>;
 
     #[test]
     fn removing_a_task_drops_its_future_and_returns_its_join_waiter() {
         let dropped = Cell::new(false);
         let storage = {
             static STORAGE: TasksStorage<2> = TasksStorage::new();
-            STORAGE.claim((), ())
+            STORAGE.claim(&(), ())
         };
         let tasks = &storage.tasks;
         let id = storage.tasks.insert(flagged_task(&dropped));
@@ -357,7 +357,7 @@ mod tests {
     fn finished_task_id_never_matches_a_reused_slot() {
         let storage = {
             static STORAGE: TasksStorage<1> = TasksStorage::new();
-            STORAGE.claim((), ())
+            STORAGE.claim(&(), ())
         };
         let tasks = &storage.tasks;
         let first = storage.tasks.insert(async {});
@@ -376,7 +376,7 @@ mod tests {
     fn full_task_pool_panics() {
         let storage = {
             static STORAGE: TasksStorage<1> = TasksStorage::new();
-            STORAGE.claim((), ())
+            STORAGE.claim(&(), ())
         };
         storage.tasks.insert(async {});
         storage.tasks.insert(async {});
@@ -387,7 +387,7 @@ mod tests {
         let dropped = Cell::new(false);
         let storage = {
             static STORAGE: TasksStorage<2> = TasksStorage::new();
-            STORAGE.claim((), ())
+            STORAGE.claim(&(), ())
         };
         let tasks = &storage.tasks;
         storage.tasks.insert(flagged_task(&dropped));
@@ -422,7 +422,7 @@ mod tests {
         let spawned = Cell::new(None);
         let storage = {
             static STORAGE: TasksStorage<2> = TasksStorage::new();
-            STORAGE.claim((), ())
+            STORAGE.claim(&(), ())
         };
         let tasks = &storage.tasks;
         let guard = SpawnOnDrop {
@@ -444,7 +444,7 @@ mod tests {
     fn full_size_futures_in_neighbouring_slots_do_not_overlap() {
         let storage = {
             static STORAGE: TasksStorage<2> = TasksStorage::new();
-            STORAGE.claim((), ())
+            STORAGE.claim(&(), ())
         };
         let tasks = &storage.tasks;
         let ids = [1u8, 2].map(|byte| {
@@ -462,7 +462,7 @@ mod tests {
     fn a_too_big_future_panics() {
         let storage = {
             static STORAGE: TasksStorage<1> = TasksStorage::new();
-            STORAGE.claim((), ())
+            STORAGE.claim(&(), ())
         };
         let data = [0u8; 8192];
         storage.tasks.insert(async move {
@@ -489,8 +489,8 @@ mod tests {
     #[test]
     fn futures_up_to_task_size_fit() {
         let storage = {
-            static STORAGE: LoopStorage<(), 2, 100, 0, 1, 1, ()> = LoopStorage::new();
-            STORAGE.claim((), ())
+            static STORAGE: LoopStorage<(), 2, 100, 0, 1, 1> = LoopStorage::new();
+            STORAGE.claim(&(), ())
         };
         let tasks = &storage.tasks;
         let ids = [
@@ -505,8 +505,8 @@ mod tests {
     #[should_panic(expected = "a task future of 101 bytes doesn't fit MAX_TASK_SIZE (100 bytes)")]
     fn a_future_one_byte_bigger_than_task_size_panics() {
         let storage = {
-            static STORAGE: LoopStorage<(), 1, 100, 0, 1, 1, ()> = LoopStorage::new();
-            STORAGE.claim((), ())
+            static STORAGE: LoopStorage<(), 1, 100, 0, 1, 1> = LoopStorage::new();
+            STORAGE.claim(&(), ())
         };
         storage.tasks.insert(FixedFuture([0u8; 101]));
     }
@@ -518,7 +518,7 @@ mod tests {
         struct Aligned;
         let storage = {
             static STORAGE: TasksStorage<1> = TasksStorage::new();
-            STORAGE.claim((), ())
+            STORAGE.claim(&(), ())
         };
         let aligned = Aligned;
         storage.tasks.insert(async move {
@@ -554,9 +554,8 @@ mod tests {
                 { size_of::<BigRoot<'static>>() },
                 1,
                 1,
-                (),
             > = LoopStorage::new();
-            STORAGE.claim((), ())
+            STORAGE.claim(&(), ())
         };
         let tasks = &storage.tasks;
         let root = BigRoot {
@@ -583,7 +582,7 @@ mod tests {
     fn a_too_big_root_panics() {
         let storage = {
             static STORAGE: TasksStorage<1> = TasksStorage::new();
-            STORAGE.claim((), ())
+            STORAGE.claim(&(), ())
         };
         storage.tasks.spawn_root(FixedFuture(0u8));
     }
@@ -593,7 +592,7 @@ mod tests {
     fn spawning_a_second_root_panics() {
         let storage = {
             static STORAGE: TasksStorage<2> = TasksStorage::new();
-            STORAGE.claim((), ())
+            STORAGE.claim(&(), ())
         };
         storage.tasks.spawn_root(core::future::pending::<()>());
         storage.tasks.spawn_root(core::future::pending::<()>());

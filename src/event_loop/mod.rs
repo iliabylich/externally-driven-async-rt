@@ -74,6 +74,7 @@ impl<
             MAX_TIMERS_COUNT,
             MAX_IO_COUNT,
         >,
+        selector: &'a mut Selector,
         state: S,
         f: F,
     ) -> Result<Self, Error>
@@ -90,7 +91,6 @@ impl<
                 >,
             ) + 'a,
     {
-        let selector = Selector::new().map_err(Error::Io)?;
         let storage = storage.claim(selector, state);
         let event_loop = Self { storage };
         Context::spawn_root(storage, f);
@@ -160,13 +160,7 @@ impl<
 {
     fn drop(&mut self) {
         self.storage.clear();
-        let state = self.storage.state_slot().borrow_mut().take();
-        // SAFETY: this loop is the only one using the storage (it claimed it), and no task (so no
-        // `Context`, and no reference to the selector) is left after `clear`; `&mut self` rules
-        // out the loop's own borrows.
-        let selector = unsafe { (*self.storage.selector_slot().get()).take() };
-        drop(state);
-        drop(selector);
+        drop(self.storage.state_slot().borrow_mut().take());
     }
 }
 
