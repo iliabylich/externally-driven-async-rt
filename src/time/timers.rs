@@ -29,7 +29,7 @@ impl<const N: usize> Timers<N> {
 
     pub(crate) fn alloc(&self, deadline: Instant, waker: Waker) -> TimerIndex {
         let Some((index, timer)) = self.pool.alloc() else {
-            panic!("more than {N} concurrent sleeps");
+            panic!("more than {N} concurrent timers");
         };
         let seq = self.next_seq.get();
         self.next_seq.set(seq + 1);
@@ -116,7 +116,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "more than 1 concurrent sleeps")]
+    #[should_panic(expected = "more than 1 concurrent timers")]
     fn capacity_is_bounded() {
         let now = Instant::now();
         let timers = &Timers::<1>::new();
