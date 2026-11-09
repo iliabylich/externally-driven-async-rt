@@ -84,7 +84,7 @@ fn root_finishing_inside_a_drain() {
         Log::default(),
         async move |ctx| {
             ctx.dispatch(1);
-            wait_readable(ctx, &rx).await;
+            wait_readable(&ctx, &rx).await;
             ctx.dispatch(2);
             ctx.dispatch(3);
         },
@@ -120,7 +120,7 @@ fn root_progresses_across_drains() {
         async move |ctx| {
             let mut i = 0;
             loop {
-                wait_readable(ctx, &rx).await;
+                wait_readable(&ctx, &rx).await;
                 let mut buf = [0; 16];
                 rustix::io::read(&rx, &mut buf).unwrap();
                 ctx.dispatch(i);
@@ -151,7 +151,7 @@ fn two_loops_on_one_thread_are_independent() {
         &mut selector,
         Log::default(),
         async move |ctx| {
-            wait_readable(ctx, &rx1).await;
+            wait_readable(&ctx, &rx1).await;
             ctx.dispatch(1);
         },
     )
@@ -165,7 +165,7 @@ fn two_loops_on_one_thread_are_independent() {
         &mut selector,
         Log::default(),
         async move |ctx| {
-            wait_readable(ctx, &rx2).await;
+            wait_readable(&ctx, &rx2).await;
             ctx.dispatch(2);
         },
     )
@@ -212,7 +212,7 @@ fn panic_propagates_out_of_drain() {
         &mut selector,
         Log::default(),
         async move |ctx| {
-            wait_readable(ctx, &rx).await;
+            wait_readable(&ctx, &rx).await;
             panic!("boom in drain");
         },
     )
@@ -292,14 +292,14 @@ fn tasks_are_dropped_when_the_root_finishes() {
         Log::default(),
         async move |ctx| {
             ctx.spawn(async |ctx| {
-                let _guard = DispatchOnDrop(ctx, 10);
+                let _guard = DispatchOnDrop(&ctx, 10);
                 pending::<()>().await;
             });
             ctx.spawn(async |ctx| {
-                let _guard = DispatchOnDrop(ctx, 20);
+                let _guard = DispatchOnDrop(&ctx, 20);
                 pending::<()>().await;
             });
-            wait_readable(ctx, &rx).await;
+            wait_readable(&ctx, &rx).await;
             ctx.dispatch(1);
         },
     )
@@ -339,10 +339,10 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
         Log::default(),
         async move |ctx| {
             ctx.spawn(async |ctx| {
-                let _guard = SpawnOnDrop(ctx);
+                let _guard = SpawnOnDrop(&ctx);
                 pending::<()>().await;
             });
-            wait_readable(ctx, &rx).await;
+            wait_readable(&ctx, &rx).await;
             ctx.dispatch(1);
         },
     )
@@ -389,7 +389,7 @@ fn events_dispatched_while_dropping_the_loop_are_applied() {
         async |ctx| {
             ctx.dispatch(1);
             ctx.spawn(async |ctx| {
-                let _guard = DispatchOnDrop(ctx, 2);
+                let _guard = DispatchOnDrop(&ctx, 2);
                 pending::<()>().await;
             });
             pending::<()>().await;

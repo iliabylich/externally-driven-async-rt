@@ -83,17 +83,15 @@ impl<
             .apply(event);
     }
 
-    pub fn spawn<F>(
+    pub fn spawn<F, Fut>(
         &self,
         f: F,
     ) -> JoinHandle<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
     where
-        F: AsyncFnOnce(&Self) + 'a,
+        F: FnOnce(Self) -> Fut,
+        Fut: Future<Output = ()> + 'a,
     {
-        let storage = self.storage;
-        let id = storage
-            .tasks
-            .spawn(async move { f(&Self::new(storage)).await });
+        let id = self.storage.tasks.spawn(f(*self));
         JoinHandle::new(self.storage.tasks, id)
     }
 
@@ -111,7 +109,7 @@ impl<
         ReserveTask::new(self.storage)
     }
 
-    pub(crate) fn spawn_root<F>(
+    pub(crate) fn spawn_root<F, Fut>(
         storage: LoopStorageGuard<
             'a,
             S,
@@ -123,11 +121,10 @@ impl<
         >,
         f: F,
     ) where
-        F: AsyncFnOnce(&Self) + 'a,
+        F: FnOnce(Self) -> Fut,
+        Fut: Future<Output = ()> + 'a,
     {
-        storage
-            .tasks
-            .spawn_root(async move { f(&Self::new(storage)).await });
+        storage.tasks.spawn_root(f(Self::new(storage)));
     }
 
     pub fn sleep(&self, duration: Duration) -> Sleep<'_, MAX_TIMERS_COUNT> {
@@ -141,4 +138,47 @@ impl<
     ) -> Timeout<'_, F, MAX_TIMERS_COUNT> {
         Timeout::new(future, self.sleep(duration))
     }
+}
+
+impl<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+> Clone
+    for Context<
+        '_,
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >
+{
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+> Copy
+    for Context<
+        '_,
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >
+{
 }

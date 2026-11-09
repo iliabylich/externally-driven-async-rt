@@ -69,7 +69,7 @@ mod tests {
             Log::default(),
             async move |ctx| {
                 let result = ctx
-                    .timeout(Duration::from_secs(60), wait_readable(ctx, &rx))
+                    .timeout(Duration::from_secs(60), wait_readable(&ctx, &rx))
                     .await;
                 ctx.dispatch(result.map_or(0, |()| 1));
                 pending::<()>().await;
@@ -99,7 +99,7 @@ mod tests {
             Log::default(),
             async move |ctx| {
                 let result = ctx
-                    .timeout(Duration::from_millis(10), wait_readable(ctx, &rx))
+                    .timeout(Duration::from_millis(10), wait_readable(&ctx, &rx))
                     .await;
                 ctx.dispatch(result.map_or(0, |()| 1));
                 pending::<()>().await;
@@ -126,7 +126,7 @@ mod tests {
             &mut selector,
             Log::default(),
             async move |ctx| {
-                let result = ctx.timeout(Duration::ZERO, wait_readable(ctx, &rx)).await;
+                let result = ctx.timeout(Duration::ZERO, wait_readable(&ctx, &rx)).await;
                 ctx.dispatch(result.map_or(0, |()| 1));
                 pending::<()>().await;
             },

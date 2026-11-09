@@ -41,13 +41,13 @@ fn round_trip_with_a_raw_peer() {
             assert!(socket.local_addr().unwrap().port() != 0);
             let mut buf = [0; 64];
 
-            assert_eq!(socket.send_to(ctx, b"ping", peer_addr).await.unwrap(), 4);
-            let (len, from) = socket.recv_from(ctx, &mut buf).await.unwrap();
+            assert_eq!(socket.send_to(&ctx, b"ping", peer_addr).await.unwrap(), 4);
+            let (len, from) = socket.recv_from(&ctx, &mut buf).await.unwrap();
             assert_eq!((&buf[..len], from), (&b"ping"[..], peer_addr));
 
             socket.connect(peer_addr).unwrap();
-            assert_eq!(socket.send(ctx, b"hello").await.unwrap(), 5);
-            let len = socket.recv(ctx, &mut buf).await.unwrap();
+            assert_eq!(socket.send(&ctx, b"hello").await.unwrap(), 5);
+            let len = socket.recv(&ctx, &mut buf).await.unwrap();
             assert_eq!(&buf[..len], b"hello");
 
             ctx.dispatch(1);
@@ -85,14 +85,14 @@ fn connected_socket_reports_a_refused_peer() {
             let mut buf = [0; 8];
             let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
             socket.connect(closed).unwrap();
-            socket.send(ctx, b"x").await.unwrap();
-            let errno = socket.recv(ctx, &mut buf).await.err().unwrap();
+            socket.send(&ctx, b"x").await.unwrap();
+            let errno = socket.recv(&ctx, &mut buf).await.err().unwrap();
             ctx.dispatch(errno.raw_os_error() as u32);
 
             let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
             socket.connect(closed).unwrap();
-            socket.send(ctx, b"x").await.unwrap();
-            let errno = socket.recv_from(ctx, &mut buf).await.err().unwrap();
+            socket.send(&ctx, b"x").await.unwrap();
+            let errno = socket.recv_from(&ctx, &mut buf).await.err().unwrap();
             ctx.dispatch(errno.raw_os_error() as u32);
             pending::<()>().await;
         },

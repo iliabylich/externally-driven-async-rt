@@ -59,7 +59,7 @@ mod tests {
             Log::default(),
             async move |ctx| {
                 ctx.spawn(async move |ctx| {
-                    wait_readable(ctx, &rx).await;
+                    wait_readable(&ctx, &rx).await;
                     ctx.dispatch(1);
                 })
                 .await;
@@ -90,7 +90,7 @@ mod tests {
             Log::default(),
             async move |ctx| {
                 let handle = ctx.spawn(async |ctx| ctx.dispatch(1));
-                wait_readable(ctx, &rx).await;
+                wait_readable(&ctx, &rx).await;
                 handle.await;
                 ctx.dispatch(2);
             },
@@ -119,7 +119,7 @@ mod tests {
             Log::default(),
             async move |ctx| {
                 ctx.spawn(async move |ctx| {
-                    wait_readable(ctx, &rx).await;
+                    wait_readable(&ctx, &rx).await;
                     ctx.dispatch(1);
                 });
                 pending::<()>().await;

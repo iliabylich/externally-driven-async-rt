@@ -61,27 +61,26 @@ impl<
         Self { storage, id }
     }
 
-    pub fn spawn<F>(
+    pub fn spawn<F, Fut>(
         self,
         f: F,
     ) -> JoinHandle<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
     where
-        F: AsyncFnOnce(
-                &Context<
-                    'a,
-                    S,
-                    MAX_TASKS_COUNT,
-                    MAX_TASK_SIZE,
-                    MAX_ROOT_TASK_SIZE,
-                    MAX_TIMERS_COUNT,
-                    MAX_IO_COUNT,
-                >,
-            ) + 'a,
+        F: FnOnce(
+            Context<
+                'a,
+                S,
+                MAX_TASKS_COUNT,
+                MAX_TASK_SIZE,
+                MAX_ROOT_TASK_SIZE,
+                MAX_TIMERS_COUNT,
+                MAX_IO_COUNT,
+            >,
+        ) -> Fut,
+        Fut: Future<Output = ()> + 'a,
     {
         let Self { storage, id } = self;
-        storage
-            .tasks
-            .spawn_reserved(id, async move { f(&Context::new(storage)).await });
+        storage.tasks.spawn_reserved(id, f(Context::new(storage)));
         core::mem::forget(self);
         JoinHandle::new(storage.tasks, id)
     }

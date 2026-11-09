@@ -83,7 +83,7 @@ fn read_waits_until_the_peer_writes() {
         &mut selector,
         Log::default(),
         async move |ctx| {
-            let n = read_some(ctx, &rx).await.unwrap();
+            let n = read_some(&ctx, &rx).await.unwrap();
             ctx.dispatch(n as u32);
             pending::<()>().await;
         },
@@ -113,7 +113,7 @@ fn write_waits_on_a_full_buffer() {
         &mut selector,
         Log::default(),
         async move |ctx| {
-            let n = write_some(ctx, &tx).await.unwrap();
+            let n = write_some(&ctx, &tx).await.unwrap();
             ctx.dispatch(n as u32);
         },
     )

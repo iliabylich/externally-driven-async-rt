@@ -53,7 +53,7 @@ impl<
         MAX_IO_COUNT,
     >
 {
-    pub fn new<F>(
+    pub fn new<F, Fut>(
         storage: &'static LoopStorage<
             S,
             MAX_TASKS_COUNT,
@@ -67,17 +67,18 @@ impl<
         f: F,
     ) -> Result<Self, Error>
     where
-        F: AsyncFnOnce(
-                &Context<
-                    'a,
-                    S,
-                    MAX_TASKS_COUNT,
-                    MAX_TASK_SIZE,
-                    MAX_ROOT_TASK_SIZE,
-                    MAX_TIMERS_COUNT,
-                    MAX_IO_COUNT,
-                >,
-            ) + 'a,
+        F: FnOnce(
+            Context<
+                'a,
+                S,
+                MAX_TASKS_COUNT,
+                MAX_TASK_SIZE,
+                MAX_ROOT_TASK_SIZE,
+                MAX_TIMERS_COUNT,
+                MAX_IO_COUNT,
+            >,
+        ) -> Fut,
+        Fut: Future<Output = ()> + 'a,
     {
         let storage = storage.claim(selector, state);
         let event_loop = Self { storage };

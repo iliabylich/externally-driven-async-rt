@@ -144,7 +144,7 @@ async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
         };
         ctx.dispatch(Event::Connected(peer));
         task.spawn(async move |ctx| {
-            let event = serve(ctx, stream, peer).await;
+            let event = serve(&ctx, stream, peer).await;
             ctx.dispatch(event);
         });
     }
@@ -203,8 +203,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(arg) => arg.parse()?,
         None => "127.0.0.1:7879".parse()?,
     };
-    let root = async move |ctx: &ServerContext<'_>| {
-        accept_loop(ctx, addr).await;
+    let root = async move |ctx: ServerContext<'_>| {
+        accept_loop(&ctx, addr).await;
     };
     static STORAGE: ServerStorage = ServerStorage::new();
     let mut selector = Selector::new()?;

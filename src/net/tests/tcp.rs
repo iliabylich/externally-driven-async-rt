@@ -40,18 +40,18 @@ fn echo_with_a_raw_peer() {
         &mut selector,
         Log::default(),
         async move |ctx| {
-            let mut stream = TcpStream::connect(ctx, addr).await.unwrap();
+            let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
             assert_eq!(stream.peer_addr().unwrap(), addr);
             assert!(stream.local_addr().unwrap().ip().is_loopback());
-            assert_eq!(stream.write(ctx, b"hello").await.unwrap(), 5);
+            assert_eq!(stream.write(&ctx, b"hello").await.unwrap(), 5);
             let mut buf = [0; 5];
             let mut len = 0;
             while len < 5 {
-                len += stream.read(ctx, &mut buf[len..]).await.unwrap();
+                len += stream.read(&ctx, &mut buf[len..]).await.unwrap();
             }
             assert_eq!(&buf, b"hello");
             stream.shutdown(Shutdown::Write).unwrap();
-            assert_eq!(stream.read(ctx, &mut buf).await.unwrap(), 0);
+            assert_eq!(stream.read(&ctx, &mut buf).await.unwrap(), 0);
             ctx.dispatch(1);
             pending::<()>().await;
         },
@@ -82,15 +82,15 @@ fn listener_accepts_a_raw_client() {
         &mut selector,
         Log::default(),
         async move |ctx| {
-            let (mut stream, peer) = listener.accept(ctx).await.unwrap();
+            let (mut stream, peer) = listener.accept(&ctx).await.unwrap();
             assert_eq!(stream.peer_addr().unwrap(), peer);
             let mut buf = [0; 4];
             let mut len = 0;
             while len < 4 {
-                len += stream.read(ctx, &mut buf[len..]).await.unwrap();
+                len += stream.read(&ctx, &mut buf[len..]).await.unwrap();
             }
             assert_eq!(&buf, b"ping");
-            stream.write(ctx, b"pong").await.unwrap();
+            stream.write(&ctx, b"pong").await.unwrap();
             ctx.dispatch(1);
             pending::<()>().await;
         },
@@ -122,7 +122,7 @@ fn connect_to_a_closed_port_fails() {
         &mut selector,
         Log::default(),
         async move |ctx| {
-            let errno = TcpStream::connect(ctx, addr).await.err().unwrap();
+            let errno = TcpStream::connect(&ctx, addr).await.err().unwrap();
             ctx.dispatch(errno.raw_os_error() as u32);
             pending::<()>().await;
         },
@@ -152,26 +152,26 @@ fn halves_are_used_from_two_tasks() {
         Log::default(),
         async move |ctx| {
             ctx.spawn(async move |ctx| {
-                let (mut stream, _) = listener.accept(ctx).await.unwrap();
+                let (mut stream, _) = listener.accept(&ctx).await.unwrap();
                 let mut buf = [0; CHUNK];
                 loop {
-                    let len = stream.read(ctx, &mut buf).await.unwrap();
+                    let len = stream.read(&ctx, &mut buf).await.unwrap();
                     if len == 0 {
                         return;
                     }
                     let mut sent = 0;
                     while sent < len {
-                        sent += stream.write(ctx, &buf[sent..len]).await.unwrap();
+                        sent += stream.write(&ctx, &buf[sent..len]).await.unwrap();
                     }
                 }
             });
-            let stream = TcpStream::connect(ctx, addr).await.unwrap();
+            let stream = TcpStream::connect(&ctx, addr).await.unwrap();
             let (mut read, mut write) = stream.into_split().unwrap();
             let reader = ctx.spawn(async move |ctx| {
                 let mut buf = [0; CHUNK];
                 let mut received = 0;
                 loop {
-                    let len = read.read(ctx, &mut buf).await.unwrap();
+                    let len = read.read(&ctx, &mut buf).await.unwrap();
                     if len == 0 {
                         break;
                     }
@@ -186,7 +186,7 @@ fn halves_are_used_from_two_tasks() {
             while sent < LEN {
                 let chunk: [u8; CHUNK] = core::array::from_fn(|i| (sent + i) as u8);
                 let len = CHUNK.min(LEN - sent);
-                sent += write.write(ctx, &chunk[..len]).await.unwrap();
+                sent += write.write(&ctx, &chunk[..len]).await.unwrap();
             }
             drop(write);
             reader.await;
