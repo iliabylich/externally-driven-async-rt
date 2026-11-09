@@ -92,7 +92,7 @@ impl<
         let storage = storage.claim(selector, state);
         let event_loop = Self { storage };
         Context::spawn_root(storage, f);
-        match storage.run_ready() {
+        match storage.tasks.run_ready() {
             RootStatus::Running => {}
             RootStatus::Finished => return Err(Error::RootFinished),
         }
@@ -110,7 +110,7 @@ impl<
             if !storage.tasks.has_ready() {
                 break RootStatus::Running;
             }
-            if storage.run_ready() == RootStatus::Finished {
+            if storage.tasks.run_ready() == RootStatus::Finished {
                 break RootStatus::Finished;
             }
         };
@@ -128,7 +128,7 @@ impl<
 
     fn finish_drain(&self, status: RootStatus) -> Result<(), Error> {
         if status == RootStatus::Finished {
-            self.storage.drop_all();
+            self.storage.tasks.drop_all();
         }
         self.storage.flush().map_err(Error::Io)?;
         match status {

@@ -74,12 +74,14 @@ impl<
     pub fn spawn<F>(
         &self,
         f: F,
-    ) -> JoinHandle<'_, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+    ) -> JoinHandle<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
     where
         F: AsyncFnOnce(&Self) + 'a,
     {
         let storage = self.storage;
-        let id = storage.spawn(async move { f(&Self { storage }).await });
+        let id = storage
+            .tasks
+            .spawn(async move { f(&Self { storage }).await });
         JoinHandle::new(self.storage.tasks, id)
     }
 
@@ -97,7 +99,9 @@ impl<
     ) where
         F: AsyncFnOnce(&Self) + 'a,
     {
-        storage.spawn_root(async move { f(&Self { storage }).await });
+        storage
+            .tasks
+            .spawn_root(async move { f(&Self { storage }).await });
     }
 
     pub fn sleep(&self, duration: Duration) -> Sleep<'_, MAX_TIMERS_COUNT> {

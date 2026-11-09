@@ -32,7 +32,7 @@ fn clearing_drops_live_tasks() {
         static STORAGE: SmallStorage = SmallStorage::new();
         STORAGE.claim((), ())
     };
-    storage.insert(flagged_task(&dropped));
+    storage.tasks.insert(flagged_task(&dropped));
     storage.clear();
     assert!(dropped.get());
 }

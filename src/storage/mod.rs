@@ -121,8 +121,7 @@ impl<
             state: &self.state,
             timers: &self.timers,
             io_waiters: &self.io_waiters,
-            tasks: &self.tasks,
-            tasks_guard,
+            tasks: tasks_guard,
         }
     }
 }

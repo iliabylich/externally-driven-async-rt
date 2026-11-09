@@ -535,8 +535,8 @@ fn ready_tasks<'a>(event_loop: &'a TestLoop<'_, Log>) -> impl Iterator<Item = Ta
 }
 
 fn parked_task(event_loop: &TestLoop<Log>) -> (TaskId, Waker) {
-    let id = event_loop.storage.insert(pending());
-    let waker = event_loop.storage.waker(id);
+    let id = event_loop.storage.tasks.insert(pending());
+    let waker = event_loop.storage.tasks.waker(id);
     (id, waker)
 }
 
@@ -552,8 +552,8 @@ fn finished_task_is_removed() {
     )
     .unwrap();
     let event_loop = &owned;
-    let id = event_loop.storage.spawn(async {});
-    assert_eq!(event_loop.storage.run_ready(), RootStatus::Running);
+    let id = event_loop.storage.tasks.spawn(async {});
+    assert_eq!(event_loop.storage.tasks.run_ready(), RootStatus::Running);
     assert!(!event_loop.storage.tasks.contains(id));
 }
 
@@ -570,14 +570,14 @@ fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
     )
     .unwrap();
     let event_loop = &owned;
-    event_loop.storage.spawn(poll_fn(|cx| {
+    event_loop.storage.tasks.spawn(poll_fn(|cx| {
         polls.set(polls.get() + 1);
         if polls.get() < 3 {
             cx.waker().wake_by_ref();
         }
         Poll::<()>::Pending
     }));
-    event_loop.storage.run_ready();
+    event_loop.storage.tasks.run_ready();
     assert_eq!(polls.get(), 3);
 }
 
@@ -596,10 +596,10 @@ fn task_spawned_during_a_poll_runs_in_the_same_run() {
     let event_loop = &owned;
     let storage = event_loop.storage;
     let child = counting(&polls);
-    event_loop.storage.spawn(async move {
-        storage.spawn(child);
+    event_loop.storage.tasks.spawn(async move {
+        storage.tasks.spawn(child);
     });
-    event_loop.storage.run_ready();
+    event_loop.storage.tasks.run_ready();
     assert_eq!(polls.get(), 1);
 }
 
@@ -616,11 +616,11 @@ fn join_waiter_is_woken_when_the_task_finishes() {
     )
     .unwrap();
     let event_loop = &owned;
-    let waiter = event_loop.storage.spawn(counting(&polls));
-    let task = event_loop.storage.spawn(async {});
-    let waker = event_loop.storage.waker(waiter);
+    let waiter = event_loop.storage.tasks.spawn(counting(&polls));
+    let task = event_loop.storage.tasks.spawn(async {});
+    let waker = event_loop.storage.tasks.waker(waiter);
     event_loop.storage.tasks.set_join_waiter(task, &waker);
-    event_loop.storage.run_ready();
+    event_loop.storage.tasks.run_ready();
     assert_eq!(polls.get(), 2);
 }
 
@@ -637,10 +637,10 @@ fn root_finishing_stops_the_run() {
     )
     .unwrap();
     let event_loop = &owned;
-    let root = event_loop.storage.spawn(async {});
+    let root = event_loop.storage.tasks.spawn(async {});
     event_loop.storage.tasks.set_root(Root::Running(root));
-    event_loop.storage.spawn(counting(&polls));
-    assert_eq!(event_loop.storage.run_ready(), RootStatus::Finished);
+    event_loop.storage.tasks.spawn(counting(&polls));
+    assert_eq!(event_loop.storage.tasks.run_ready(), RootStatus::Finished);
     assert_eq!(polls.get(), 0);
 }
 
@@ -668,7 +668,7 @@ impl Future for SpawnRawOnDrop<'_> {
 impl Drop for SpawnRawOnDrop<'_> {
     fn drop(&mut self) {
         let guard = DropFlag(self.spawned_dropped);
-        self.storage.spawn(async move {
+        self.storage.tasks.spawn(async move {
             let _guard = guard;
         });
     }
@@ -686,7 +686,7 @@ fn dropping_the_loop_drops_tasks_spawned_from_drop() {
         async |_| pending().await,
     )
     .unwrap();
-    owned.storage.spawn(SpawnRawOnDrop {
+    owned.storage.tasks.spawn(SpawnRawOnDrop {
         storage: owned.storage,
         spawned_dropped: &spawned_dropped,
     });

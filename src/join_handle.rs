@@ -1,29 +1,25 @@
 use core::{future::Future, pin::Pin, task::Poll};
 
 use crate::{
-    storage::{TaskId, Tasks},
+    storage::{TaskId, TasksGuard},
     task::JoinStatus,
 };
 
 pub struct JoinHandle<
-    'ctx,
+    'a,
     const MAX_TASKS_COUNT: usize,
     const MAX_TASK_SIZE: usize,
     const MAX_ROOT_TASK_SIZE: usize,
 > {
-    tasks: &'ctx Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
+    tasks: TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
     id: TaskId,
 }
 
-impl<
-    'ctx,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-> JoinHandle<'ctx, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize>
+    JoinHandle<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
 {
     pub(crate) fn new(
-        tasks: &'ctx Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
+        tasks: TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
         id: TaskId,
     ) -> Self {
         Self { tasks, id }

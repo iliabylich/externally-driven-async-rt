@@ -1,12 +1,9 @@
-use core::{cell::UnsafeCell, future::Future};
-
-#[cfg(test)]
-use core::task::Waker;
+use core::cell::UnsafeCell;
 
 use crate::{
     instant::Instant,
     selectors::{Direction, EVENTS_PER_CALL, Selector, SelectorEvent},
-    storage::{IoWaiters, RootStatus, TaskId, Tasks, TasksGuard, Timers},
+    storage::{IoWaiters, TasksGuard, Timers},
 };
 
 pub(crate) struct StorageGuard<
@@ -23,8 +20,7 @@ pub(crate) struct StorageGuard<
     pub(crate) state: &'static UnsafeCell<Option<S>>,
     pub(crate) timers: &'static Timers<MAX_TIMERS_COUNT>,
     pub(crate) io_waiters: &'static IoWaiters<MAX_IO_COUNT>,
-    pub(crate) tasks: &'static Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
-    pub(crate) tasks_guard: TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
+    pub(crate) tasks: TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
 }
 
 impl<
@@ -48,48 +44,8 @@ impl<
         Sel,
     >
 {
-    pub(crate) fn spawn<Fut>(self, future: Fut) -> TaskId
-    where
-        Fut: Future<Output = ()> + 'a,
-    {
-        self.tasks_guard.spawn(future)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn insert<Fut>(self, future: Fut) -> TaskId
-    where
-        Fut: Future<Output = ()> + 'a,
-    {
-        self.tasks_guard.insert(future)
-    }
-
-    pub(crate) fn spawn_root<Fut>(self, future: Fut)
-    where
-        Fut: Future<Output = ()> + 'a,
-    {
-        self.tasks_guard.spawn_root(future)
-    }
-
-    pub(crate) fn run_ready(self) -> RootStatus {
-        self.tasks_guard.run_ready()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn remove(self, id: TaskId) -> Option<Option<Waker>> {
-        self.tasks_guard.remove(id)
-    }
-
-    pub(crate) fn drop_all(self) {
-        self.tasks_guard.drop_all()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn waker(self, id: TaskId) -> Waker {
-        self.tasks_guard.waker(id)
-    }
-
     pub(crate) fn clear(self) {
-        self.drop_all();
+        self.tasks.drop_all();
         self.timers.clear();
         self.io_waiters.clear();
     }
