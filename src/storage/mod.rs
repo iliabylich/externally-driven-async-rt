@@ -1,5 +1,5 @@
 use core::{
-    cell::{Cell, UnsafeCell},
+    cell::{Cell, RefCell, UnsafeCell},
     task::Waker,
 };
 
@@ -31,7 +31,7 @@ pub struct LoopStorage<
     Sel = Selector,
 > {
     selector: UnsafeCell<Option<Sel>>,
-    state: UnsafeCell<Option<S>>,
+    state: RefCell<Option<S>>,
     timers: Timers<MAX_TIMERS_COUNT>,
     io_waiters: IoWaiters<MAX_IO_COUNT>,
     tasks: Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
@@ -88,7 +88,7 @@ impl<
     pub const fn new() -> Self {
         Self {
             selector: UnsafeCell::new(None),
-            state: UnsafeCell::new(None),
+            state: RefCell::new(None),
             timers: Timers::new(),
             io_waiters: IoWaiters::new(),
             tasks: Tasks::new(),
@@ -111,11 +111,9 @@ impl<
     > {
         let tasks_guard = self.tasks.claim();
         // SAFETY: the claim above succeeds only once per storage, so nothing has accessed (or
-        // holds a reference to) the selector or the state yet.
-        unsafe {
-            *self.selector.get() = Some(selector);
-            *self.state.get() = Some(state);
-        }
+        // holds a reference to) the selector yet.
+        unsafe { *self.selector.get() = Some(selector) };
+        *self.state.borrow_mut() = Some(state);
         LoopStorageGuard {
             storage: self,
             tasks: tasks_guard,

@@ -1,4 +1,4 @@
-use core::cell::UnsafeCell;
+use core::cell::{RefCell, UnsafeCell};
 
 use crate::{
     instant::Instant,
@@ -57,7 +57,7 @@ impl<
         &self.storage.io_waiters
     }
 
-    pub(crate) fn state_slot(self) -> &'static UnsafeCell<Option<S>> {
+    pub(crate) fn state_slot(self) -> &'static RefCell<Option<S>> {
         &self.storage.state
     }
 

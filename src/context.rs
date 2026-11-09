@@ -59,14 +59,9 @@ impl<
     }
 
     pub fn dispatch(&self, event: S::Event) {
-        // SAFETY: a `Context` is only created inside the futures that `spawn` and `spawn_root`
-        // store as tasks right away, so `dispatch` runs inside a task (polled, or dropped), and
-        // tasks only run while the caller of `EventLoop::new`, a drain or `drop` holds exclusive
-        // access to the loop: no `state_mut` reference can be live. `apply` gets no `Context`, and
-        // can't reach one: the task lends it to its closure for a higher-ranked lifetime, so it
-        // can't be stored in `S` or its events, whose lifetimes are fixed when the loop is
-        // created. So `apply` can't re-enter `dispatch`: this is the only reference.
-        unsafe { &mut *self.storage.state_slot().get() }
+        self.storage
+            .state_slot()
+            .borrow_mut()
             .as_mut()
             .expect("the state is set while tasks run")
             .apply(event);

@@ -353,7 +353,8 @@ fn tasks_are_dropped_when_the_root_finishes() {
         event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)
     );
-    let log = event_loop.state_mut().events_mut();
+    let mut state = event_loop.state_mut();
+    let log = state.events_mut();
     assert_eq!(log[0], 1);
     log[1..].sort_unstable();
     assert_eq!(log[1..], [10, 20]);

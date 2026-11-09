@@ -1,3 +1,5 @@
+use core::cell::RefMut;
+
 use rustix::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
 use crate::{
@@ -117,13 +119,12 @@ impl<
         self.finish_drain(status)
     }
 
-    pub fn state_mut(&mut self) -> &mut S {
-        // SAFETY: the state is only accessed mutably here and in `Context::dispatch`, which runs
-        // inside tasks, i.e. only while `new`, a drain or `drop` holds exclusive access to the
-        // loop; `&mut self` rules all of those out.
-        unsafe { &mut *self.storage.state_slot().get() }
-            .as_mut()
-            .expect("the state is set until the loop is dropped")
+    pub fn state_mut(&mut self) -> RefMut<'_, S> {
+        RefMut::map(self.storage.state_slot().borrow_mut(), |state| {
+            state
+                .as_mut()
+                .expect("the state is set until the loop is dropped")
+        })
     }
 
     fn finish_drain(&self, status: RootStatus) -> Result<(), Error> {
@@ -159,15 +160,11 @@ impl<
 {
     fn drop(&mut self) {
         self.storage.clear();
+        let state = self.storage.state_slot().borrow_mut().take();
         // SAFETY: this loop is the only one using the storage (it claimed it), and no task (so no
-        // `Context`, and no reference to the state or the selector) is left after `clear`;
-        // `&mut self` rules out the loop's own borrows.
-        let (state, selector) = unsafe {
-            (
-                (*self.storage.state_slot().get()).take(),
-                (*self.storage.selector_slot().get()).take(),
-            )
-        };
+        // `Context`, and no reference to the selector) is left after `clear`; `&mut self` rules
+        // out the loop's own borrows.
+        let selector = unsafe { (*self.storage.selector_slot().get()).take() };
         drop(state);
         drop(selector);
     }
