@@ -205,7 +205,7 @@ fn dropping_a_pending_wait_deregisters() {
     drop(registration);
     assert_eq!(storage.io_waiters().count(), 0);
     rustix::io::write(&tx, b"abc").unwrap();
-    assert!(!is_readable(&selector, 0));
+    assert!(!is_readable(selector.as_fd(), 0));
 }
 
 #[test]
@@ -225,7 +225,7 @@ fn wait_survives_a_spurious_poll() {
     assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
     storage.flush().unwrap();
     rustix::io::write(&tx, b"abc").unwrap();
-    assert!(is_readable(&selector, 1000));
+    assert!(is_readable(selector.as_fd(), 1000));
     storage.process_selector_events().unwrap();
     assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Ready(()));
 }
@@ -255,7 +255,7 @@ fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
     assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
     storage.flush().unwrap();
     rustix::io::write(&tx, b"abc").unwrap();
-    assert!(is_readable(&selector, 1000));
+    assert!(is_readable(selector.as_fd(), 1000));
     storage.process_selector_events().unwrap();
     assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Ready(()));
 }
@@ -277,7 +277,7 @@ fn sequential_registrations_reuse_the_slot() {
         assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
         storage.flush().unwrap();
         rustix::io::write(&tx, b"x").unwrap();
-        assert!(is_readable(&selector, 1000));
+        assert!(is_readable(selector.as_fd(), 1000));
         storage.process_selector_events().unwrap();
         assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Ready(()));
     }

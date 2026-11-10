@@ -6,11 +6,13 @@ use crate::{
     state::State,
 };
 
+/// A Unix stream listener.
 pub struct UnixListener {
     socket: Socket,
 }
 
 impl UnixListener {
+    /// Binds on a given address, starts listening.
     pub fn bind(addr: &SocketAddrUnix) -> rustix::io::Result<Self> {
         let socket = Socket::new(AddressFamily::UNIX, SocketType::STREAM)?;
         socket.bind(addr)?;
@@ -18,6 +20,7 @@ impl UnixListener {
         Ok(Self { socket })
     }
 
+    /// Accepts incoming connection.
     pub async fn accept<
         S: State,
         const MAX_TASKS_COUNT: usize,
@@ -41,7 +44,14 @@ impl UnixListener {
         Ok((UnixStream::new(socket), addr))
     }
 
+    /// Returns local address.
     pub fn local_addr(&self) -> rustix::io::Result<SocketAddrUnix> {
         self.socket.local_addr()
+    }
+}
+
+impl core::fmt::Debug for UnixListener {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("UnixListener")
     }
 }

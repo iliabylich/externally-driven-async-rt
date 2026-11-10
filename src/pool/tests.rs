@@ -26,7 +26,8 @@ fn highly_aligned_slots_are_aligned() {
     slot.0.set(7);
     let value = pool.get(index).unwrap();
     assert_eq!(value.0.get(), 7);
-    assert_eq!((value as *const Aligned).addr() % 64, 0);
+    let value: *const Aligned = value;
+    assert_eq!(value.addr() % 64, 0);
 }
 
 #[test]

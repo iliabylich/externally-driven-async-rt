@@ -1,6 +1,10 @@
+/// An error that can be returned from an [`EventLoop`](crate::EventLoop).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
+    /// An epoll or kqueue call failed.
     Io(rustix::io::Errno),
+    /// [`EventLoop::drain_events_without_blocking`](crate::EventLoop::drain_events_without_blocking)
+    /// is called on the [`EventLoop`](crate::EventLoop) that has already finished
     RootFinished,
 }
 

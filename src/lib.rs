@@ -1,8 +1,20 @@
 #![no_std]
+#![doc = include_str!("../README.md")]
+#![warn(
+    missing_debug_implementations,
+    missing_docs,
+    trivial_casts,
+    trivial_numeric_casts,
+    unused_qualifications,
+    deprecated_in_future,
+    unused_lifetimes
+)]
+#![allow(clippy::new_without_default)]
 
 mod context;
 mod event_loop;
 mod io;
+/// A module that implements TCP/UDP/Unix sockets.
 pub mod net;
 mod pool;
 mod selector;

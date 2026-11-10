@@ -8,11 +8,13 @@ use crate::{
     state::State,
 };
 
+/// A TCP listener.
 pub struct TcpListener {
     socket: Socket,
 }
 
 impl TcpListener {
+    /// Binds on a given address with `SO_REUSEADDR` set, starts listening.
     pub fn bind(addr: SocketAddr) -> rustix::io::Result<Self> {
         let socket = Socket::new(addr.family(), SocketType::STREAM)?;
         socket.set_reuseaddr()?;
@@ -21,6 +23,7 @@ impl TcpListener {
         Ok(Self { socket })
     }
 
+    /// Accepts incoming connection.
     pub async fn accept<
         S: State,
         const MAX_TASKS_COUNT: usize,
@@ -44,7 +47,14 @@ impl TcpListener {
         Ok((TcpStream::new(socket), addr))
     }
 
+    /// Returns local address, useful when you bind on port 0.
     pub fn local_addr(&self) -> rustix::io::Result<SocketAddr> {
         self.socket.local_addr()
+    }
+}
+
+impl core::fmt::Debug for TcpListener {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("TcpListener")
     }
 }

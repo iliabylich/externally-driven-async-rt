@@ -3,6 +3,9 @@ use core::cell::RefCell;
 pub(crate) use self::guard::LoopStorageGuard;
 use crate::{io::IoWaiters, tasks::Tasks, time::Timers};
 
+/// The main pre-allocated storage that [`EventLoop`](crate::EventLoop) needs.
+///
+/// A storage can be used by only one [`EventLoop`](crate::EventLoop) ever.
 pub struct LoopStorage<
     S,
     const MAX_TASKS_COUNT: usize,
@@ -59,10 +62,7 @@ impl<
         MAX_IO_COUNT,
     >
 {
-    #[expect(
-        clippy::new_without_default,
-        reason = "a storage lives in a `static`, which needs a `const fn`"
-    )]
+    /// Constructor of an empty storage, **can be called in const-context**, so you can put it into a static variable.
     pub const fn new() -> Self {
         Self {
             state: RefCell::new(None),
@@ -87,6 +87,28 @@ impl<
         Sel,
     > {
         LoopStorageGuard::claim(self, selector, state)
+    }
+}
+
+impl<
+    S,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+> core::fmt::Debug
+    for LoopStorage<
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("LoopStorage")
     }
 }
 

@@ -2,6 +2,7 @@ use core::{future::Future, pin::Pin, task::Poll};
 
 use crate::time::Sleep;
 
+/// A timeout future.
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 pub struct Timeout<'ctx, F, const MAX_TIMERS_COUNT: usize> {
     future: F,
@@ -29,6 +30,12 @@ impl<F: Future, const MAX_TIMERS_COUNT: usize> Future for Timeout<'_, F, MAX_TIM
             return Poll::Ready(Some(output));
         }
         Pin::new(sleep).poll(cx).map(|()| None)
+    }
+}
+
+impl<F, const MAX_TIMERS_COUNT: usize> core::fmt::Debug for Timeout<'_, F, MAX_TIMERS_COUNT> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Timeout")
     }
 }
 

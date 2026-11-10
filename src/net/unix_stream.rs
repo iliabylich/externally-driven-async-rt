@@ -6,6 +6,7 @@ use crate::{
     state::State,
 };
 
+/// A Unix stream.
 pub struct UnixStream {
     socket: Socket,
 }
@@ -15,6 +16,7 @@ impl UnixStream {
         Self { socket }
     }
 
+    /// Connects to a given address.
     pub async fn connect<
         S: State,
         const MAX_TASKS_COUNT: usize,
@@ -38,6 +40,7 @@ impl UnixStream {
         Ok(Self { socket })
     }
 
+    /// Reads from the underlying socket into a given buffer.
     pub fn read<
         'a,
         'ctx,
@@ -63,6 +66,7 @@ impl UnixStream {
         self.socket.read(ctx, buf)
     }
 
+    /// Writes from a given buffer into the underlying socket.
     pub fn write<
         'a,
         'ctx,
@@ -88,22 +92,34 @@ impl UnixStream {
         self.socket.write(ctx, buf)
     }
 
+    /// Shuts down the connection (which also impacts potentially existing read/write halves).
+    ///
+    /// The underlying file descriptor stays open until this value is dropped.
     pub fn shutdown(&self, how: Shutdown) -> rustix::io::Result<()> {
         self.socket.shutdown(how)
     }
 
+    /// Returns local address.
     pub fn local_addr(&self) -> rustix::io::Result<SocketAddrUnix> {
         self.socket.local_addr()
     }
 
+    /// Returns peer address.
     pub fn peer_addr(&self) -> rustix::io::Result<SocketAddrUnix> {
         self.socket.peer_addr()
     }
 
+    /// Splits the [`UnixStream`] into two halves: reader and writer.
     pub fn split(&mut self) -> (BorrowedReadHalf<'_>, BorrowedWriteHalf<'_>) {
         (
             BorrowedReadHalf::new(&self.socket),
             BorrowedWriteHalf::new(&self.socket),
         )
+    }
+}
+
+impl core::fmt::Debug for UnixStream {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("UnixStream")
     }
 }

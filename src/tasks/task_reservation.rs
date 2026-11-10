@@ -5,6 +5,7 @@ use crate::{
     tasks::{JoinHandle, TaskId},
 };
 
+/// A task reservation that can be used to spawn a task without waiting for a free slot.
 #[must_use = "a reservation holds a task slot until it is spawned into or dropped"]
 pub struct TaskReservation<
     'a,
@@ -61,6 +62,14 @@ impl<
         Self { storage, id }
     }
 
+    /// Spawns a task using a reserved slot that is held by this [`TaskReservation`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if:
+    ///
+    /// 1. the future is bigger than `MAX_TASK_SIZE` bytes
+    /// 2. it is aligned to more than 16 bytes.
     pub fn spawn<F, Fut>(
         self,
         f: F,
@@ -106,6 +115,30 @@ impl<
 {
     fn drop(&mut self) {
         self.storage.tasks().release(self.id);
+    }
+}
+
+impl<
+    'a,
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+> core::fmt::Debug
+    for TaskReservation<
+        'a,
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("TaskReservation")
     }
 }
 

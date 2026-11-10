@@ -464,7 +464,7 @@ fn waking_after_the_loop_is_gone_is_harmless() {
 #[cfg_attr(miri, ignore)]
 fn loop_exposes_the_selector_fd() {
     let mut selector = Selector::new().unwrap();
-    let fd = selector.as_raw_fd();
+    let fd = selector.as_fd().as_raw_fd();
     let event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();

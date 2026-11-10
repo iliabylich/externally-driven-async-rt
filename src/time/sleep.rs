@@ -2,6 +2,7 @@ use core::{future::Future, pin::Pin, task::Poll};
 
 use crate::time::{Instant, TimerIndex, Timers};
 
+/// A sleep future.
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 pub struct Sleep<'ctx, const MAX_TIMERS_COUNT: usize> {
     timers: &'ctx Timers<MAX_TIMERS_COUNT>,
@@ -42,6 +43,12 @@ impl<const MAX_TIMERS_COUNT: usize> Drop for Sleep<'_, MAX_TIMERS_COUNT> {
         if let Some(timer) = self.timer {
             self.timers.release(timer);
         }
+    }
+}
+
+impl<const MAX_TIMERS_COUNT: usize> core::fmt::Debug for Sleep<'_, MAX_TIMERS_COUNT> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Sleep")
     }
 }
 

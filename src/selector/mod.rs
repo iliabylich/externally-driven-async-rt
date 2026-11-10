@@ -9,13 +9,15 @@ mod selector_event;
 mod timer_change;
 mod token;
 
-#[cfg(target_os = "macos")]
-pub type Selector = kqueue::KqueueSelector;
-#[cfg(target_os = "linux")]
-pub type Selector = epoll::EpollSelector;
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 compile_error!("externally-driven-async-rt supports only macOS and Linux");
 
+use rustix::fd::{AsFd, BorrowedFd};
+
+#[cfg(target_os = "linux")]
+use self::epoll::EpollSelector as Backend;
+#[cfg(target_os = "macos")]
+use self::kqueue::KqueueSelector as Backend;
 pub(crate) use self::{
     direction::{Direction, Directions},
     io_change::IoChange,
@@ -24,6 +26,57 @@ pub(crate) use self::{
     timer_change::TimerChange,
     token::Token,
 };
+use crate::time::Instant;
+
+/// A selector for your current platform (epoll on Linux and kqueue on macOS).
+pub struct Selector {
+    backend: Backend,
+}
+
+impl Selector {
+    /// Constructor.
+    pub fn new() -> rustix::io::Result<Self> {
+        Ok(Self {
+            backend: Backend::new()?,
+        })
+    }
+
+    pub(crate) fn apply_now(&self, change: IoChange) -> rustix::io::Result<()> {
+        self.backend.apply_now(change)
+    }
+
+    pub(crate) fn arm_timer(&self, deadline: Instant) {
+        self.backend.arm_timer(deadline);
+    }
+
+    pub(crate) fn disarm_timer(&self) {
+        self.backend.disarm_timer();
+    }
+
+    pub(crate) fn flush(
+        &self,
+        io_changes: impl IntoIterator<Item = IoChange>,
+    ) -> rustix::io::Result<()> {
+        self.backend.flush(io_changes)
+    }
+
+    pub(crate) fn poll_nonblocking(
+        &self,
+        out: &mut [Option<SelectorEvent>; EVENTS_PER_CALL],
+    ) -> rustix::io::Result<bool> {
+        self.backend.poll_nonblocking(out)
+    }
+
+    pub(crate) fn as_fd(&self) -> BorrowedFd<'_> {
+        self.backend.as_fd()
+    }
+}
+
+impl core::fmt::Debug for Selector {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Selector")
+    }
+}
 
 #[cfg(test)]
 mod tests;

@@ -8,17 +8,20 @@ use crate::{
     state::State,
 };
 
+/// A UDP socket.
 pub struct UdpSocket {
     socket: Socket,
 }
 
 impl UdpSocket {
+    /// Binds on a given address.
     pub fn bind(addr: SocketAddr) -> rustix::io::Result<Self> {
         let socket = Socket::new(addr.family(), SocketType::DGRAM)?;
         socket.bind(&addr)?;
         Ok(Self { socket })
     }
 
+    /// Sends a given buffer to a given address.
     pub async fn send_to<
         S: State,
         const MAX_TASKS_COUNT: usize,
@@ -43,6 +46,7 @@ impl UdpSocket {
         self.socket.send_to(ctx, buf, &addr).await
     }
 
+    /// Receives a datagram from any sender into a given buffer, returns its size and the sender address.
     pub fn recv_from<
         'a,
         'ctx,
@@ -68,10 +72,12 @@ impl UdpSocket {
         self.socket.recv_from(ctx, buf)
     }
 
+    /// Connects to a given address, which makes it the peer of [`send`](Self::send) and [`recv`](Self::recv).
     pub fn connect(&self, addr: SocketAddr) -> rustix::io::Result<()> {
         self.socket.connect(&addr)
     }
 
+    /// Sends a given buffer to the connected peer, see [`connect`](Self::connect).
     pub fn send<
         'a,
         'ctx,
@@ -97,6 +103,7 @@ impl UdpSocket {
         self.socket.send(ctx, buf)
     }
 
+    /// Receives a datagram from the connected peer into a given buffer, see [`connect`](Self::connect).
     pub fn recv<
         'a,
         'ctx,
@@ -122,7 +129,14 @@ impl UdpSocket {
         self.socket.recv(ctx, buf)
     }
 
+    /// Returns local address.
     pub fn local_addr(&self) -> rustix::io::Result<SocketAddr> {
         self.socket.local_addr()
+    }
+}
+
+impl core::fmt::Debug for UdpSocket {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("UdpSocket")
     }
 }

@@ -1,5 +1,6 @@
 use crate::{context::Context, net::socket::Socket, state::State};
 
+/// Write half of a TCP/Unix stream.
 pub struct BorrowedWriteHalf<'s> {
     socket: &'s Socket,
 }
@@ -9,6 +10,7 @@ impl<'s> BorrowedWriteHalf<'s> {
         Self { socket }
     }
 
+    /// Writes from a given buffer into the underlying socket.
     pub fn write<
         'a,
         'ctx,
@@ -32,5 +34,11 @@ impl<'s> BorrowedWriteHalf<'s> {
         buf: &'a [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.socket.write(ctx, buf)
+    }
+}
+
+impl core::fmt::Debug for BorrowedWriteHalf<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("BorrowedWriteHalf")
     }
 }

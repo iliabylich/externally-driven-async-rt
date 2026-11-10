@@ -2,7 +2,7 @@ use core::{cell::RefCell, ffi::c_void, mem::MaybeUninit, time::Duration};
 
 use rustix::{
     event::kqueue::{Event, EventFilter, EventFlags, kevent, kqueue},
-    fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd},
+    fd::{AsFd, BorrowedFd, OwnedFd},
     io::{Errno, FdFlags, fcntl_setfd},
 };
 
@@ -18,13 +18,13 @@ use crate::{
 const TIMER_IDENT: isize = 0;
 const CHANGES_PER_CALL: usize = if cfg!(test) { 4 } else { 64 };
 
-pub struct KqueueSelector {
+pub(crate) struct KqueueSelector {
     kq: OwnedFd,
     timer: RefCell<KernelTimer>,
 }
 
 impl KqueueSelector {
-    pub fn new() -> rustix::io::Result<Self> {
+    pub(crate) fn new() -> rustix::io::Result<Self> {
         syscall_start!("kqueue");
         let kq = kqueue();
         syscall_end!(kq);
@@ -214,12 +214,6 @@ impl Drop for KqueueSelector {
 impl AsFd for KqueueSelector {
     fn as_fd(&self) -> BorrowedFd<'_> {
         self.kq.as_fd()
-    }
-}
-
-impl AsRawFd for KqueueSelector {
-    fn as_raw_fd(&self) -> RawFd {
-        self.kq.as_raw_fd()
     }
 }
 

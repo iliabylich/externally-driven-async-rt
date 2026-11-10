@@ -2,6 +2,7 @@ use core::{future::Future, pin::Pin, task::Poll};
 
 use crate::{state::State, storage::LoopStorageGuard, tasks::TaskReservation};
 
+/// A future to obtain a [`TaskReservation`].
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 pub struct ReserveTask<
     'a,
@@ -136,6 +137,30 @@ impl<
         if self.waiting {
             self.storage.tasks().clear_slot_waiter();
         }
+    }
+}
+
+impl<
+    'a,
+    S: State,
+    const MAX_TASKS_COUNT: usize,
+    const MAX_TASK_SIZE: usize,
+    const MAX_ROOT_TASK_SIZE: usize,
+    const MAX_TIMERS_COUNT: usize,
+    const MAX_IO_COUNT: usize,
+> core::fmt::Debug
+    for ReserveTask<
+        'a,
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    >
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ReserveTask")
     }
 }
 

@@ -5,7 +5,7 @@ use rustix::{
         Timespec,
         epoll::{self, CreateFlags, Event, EventData, EventFlags},
     },
-    fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd},
+    fd::{AsFd, BorrowedFd, OwnedFd},
     io::Errno,
     time::{
         Itimerspec, TimerfdClockId, TimerfdFlags, TimerfdTimerFlags, timerfd_create,
@@ -31,14 +31,14 @@ const NO_EVENT: Event = Event {
     data: EventData::new_u64(0),
 };
 
-pub struct EpollSelector {
+pub(crate) struct EpollSelector {
     epoll: OwnedFd,
     timer_fd: OwnedFd,
     timer: RefCell<KernelTimer>,
 }
 
 impl EpollSelector {
-    pub fn new() -> rustix::io::Result<Self> {
+    pub(crate) fn new() -> rustix::io::Result<Self> {
         syscall_start!("epoll_create1", CreateFlags::CLOEXEC);
         let epoll = epoll::create(CreateFlags::CLOEXEC);
         syscall_end!(epoll);
@@ -242,11 +242,5 @@ impl Drop for EpollSelector {
 impl AsFd for EpollSelector {
     fn as_fd(&self) -> BorrowedFd<'_> {
         self.epoll.as_fd()
-    }
-}
-
-impl AsRawFd for EpollSelector {
-    fn as_raw_fd(&self) -> RawFd {
-        self.epoll.as_raw_fd()
     }
 }

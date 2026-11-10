@@ -2,6 +2,7 @@ use core::{future::Future, pin::Pin, task::Poll};
 
 use crate::tasks::{JoinStatus, TaskId, TasksGuard};
 
+/// A join handle of the spawned task, resolves once the task is finished.
 pub struct JoinHandle<
     'a,
     const MAX_TASKS_COUNT: usize,
@@ -33,6 +34,14 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
             JoinStatus::Running => Poll::Pending,
             JoinStatus::Finished => Poll::Ready(()),
         }
+    }
+}
+
+impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize>
+    core::fmt::Debug for JoinHandle<'_, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("JoinHandle")
     }
 }
 

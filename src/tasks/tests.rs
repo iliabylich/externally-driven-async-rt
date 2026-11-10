@@ -198,12 +198,9 @@ fn root_region_holds_a_root_bigger_than_a_slab_block() {
     impl Future for BigRoot<'_> {
         type Output = ();
 
-        fn poll(
-            self: core::pin::Pin<&mut Self>,
-            _: &mut core::task::Context<'_>,
-        ) -> core::task::Poll<()> {
+        fn poll(self: core::pin::Pin<&mut Self>, _: &mut core::task::Context<'_>) -> Poll<()> {
             assert!(self.data.iter().all(|byte| *byte == 3));
-            core::task::Poll::Pending
+            Poll::Pending
         }
     }
 
