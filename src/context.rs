@@ -13,67 +13,34 @@ use crate::{
 pub struct Context<
     'a,
     S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
 > {
-    storage: LoopStorageGuard<
-        'a,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >,
+    storage: LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
 }
 
 impl<
     'a,
     S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
->
-    Context<
-        'a,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+> Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     pub(crate) fn new(
-        storage: LoopStorageGuard<
-            'a,
-            S,
-            MAX_TASKS_COUNT,
-            MAX_TASK_SIZE,
-            MAX_ROOT_TASK_SIZE,
-            MAX_TIMERS_COUNT,
-            MAX_IO_COUNT,
-        >,
+        storage: LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     ) -> Self {
         Self { storage }
     }
 
     pub(crate) fn storage(
         &self,
-    ) -> &LoopStorageGuard<
-        'a,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    > {
+    ) -> &LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
         &self.storage
     }
 
@@ -93,15 +60,12 @@ impl<
     ///
     /// Panics if:
     ///
-    /// 1. there are already `MAX_TASKS_COUNT` tasks
-    /// 2. if the future is bigger than `MAX_TASK_SIZE` bytes
+    /// 1. all `TASKS` task slots are taken
+    /// 2. if the future is bigger than `TASK_SIZE` bytes
     /// 3. if it is aligned to more than 16 bytes
     ///
     /// Use [`reserve_task`](Self::reserve_task) to wait for a free slot instead.
-    pub fn spawn<F, Fut>(
-        &self,
-        f: F,
-    ) -> JoinHandle<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+    pub fn spawn<F, Fut>(&self, f: F) -> JoinHandle<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
     where
         F: FnOnce(Self) -> Fut,
         Fut: Future<Output = ()> + 'a,
@@ -118,28 +82,12 @@ impl<
     /// The future stays pending until some other task finishes and frees a slot.
     pub fn reserve_task(
         &self,
-    ) -> ReserveTask<
-        'a,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    > {
+    ) -> ReserveTask<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
         ReserveTask::new(self.storage)
     }
 
     pub(crate) fn spawn_root<F, Fut>(
-        storage: LoopStorageGuard<
-            'a,
-            S,
-            MAX_TASKS_COUNT,
-            MAX_TASK_SIZE,
-            MAX_ROOT_TASK_SIZE,
-            MAX_TIMERS_COUNT,
-            MAX_IO_COUNT,
-        >,
+        storage: LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         f: F,
     ) where
         F: FnOnce(Self) -> Fut,
@@ -149,37 +97,24 @@ impl<
     }
 
     /// Sleeps for `duration`.
-    pub fn sleep(&self, duration: Duration) -> Sleep<'_, MAX_TIMERS_COUNT> {
+    pub fn sleep(&self, duration: Duration) -> Sleep<'_, TIMERS> {
         Sleep::new(self.storage.timers(), Instant::now() + duration)
     }
 
     /// Runs `future` with a timeout of `duration`, resolves to `None` in case of a timeout.
-    pub fn timeout<F: Future>(
-        &self,
-        duration: Duration,
-        future: F,
-    ) -> Timeout<'_, F, MAX_TIMERS_COUNT> {
+    pub fn timeout<F: Future>(&self, duration: Duration, future: F) -> Timeout<'_, F, TIMERS> {
         Timeout::new(future, self.sleep(duration))
     }
 }
 
 impl<
     S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
-> Clone
-    for Context<
-        '_,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+> Clone for Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn clone(&self) -> Self {
         *self
@@ -188,41 +123,23 @@ impl<
 
 impl<
     S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
-> Copy
-    for Context<
-        '_,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+> Copy for Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
 }
 
 impl<
     S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
-> core::fmt::Debug
-    for Context<
-        '_,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+> core::fmt::Debug for Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("Context")

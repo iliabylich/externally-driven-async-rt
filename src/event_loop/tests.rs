@@ -9,9 +9,9 @@ use rustix::{fd::AsRawFd, io::Errno};
 use crate::{
     Error, EventLoop, LoopStorage, Selector, State,
     testing::{
-        DispatchOnDrop, EventLoopTestingExt, Log, TEST_MAX_IO_COUNT, TEST_MAX_TASK_SIZE,
-        TEST_MAX_TASKS_COUNT, TEST_MAX_TIMERS_COUNT, TestContext, TestLoop, TestStorage,
-        counting_waker, is_readable, socketpair, wait_readable,
+        DispatchOnDrop, EventLoopTestingExt, Log, TEST_FDS, TEST_TASK_SIZE, TEST_TASKS,
+        TEST_TIMERS, TestContext, TestLoop, TestStorage, counting_waker, is_readable, socketpair,
+        wait_readable,
     },
 };
 
@@ -253,17 +253,17 @@ fn panic_in_apply_propagates() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn root_future_bigger_than_task_size_is_fine() {
-    let data = [7u8; 3 * TEST_MAX_TASK_SIZE];
+    let data = [7u8; 3 * TEST_TASK_SIZE];
     let mut selector = Selector::new().unwrap();
     let mut event_loop = EventLoop::new(
         {
             static STORAGE: LoopStorage<
                 Log,
-                TEST_MAX_TASKS_COUNT,
-                TEST_MAX_TASK_SIZE,
-                { 8 * TEST_MAX_TASK_SIZE },
-                TEST_MAX_TIMERS_COUNT,
-                TEST_MAX_IO_COUNT,
+                TEST_TASKS,
+                TEST_TASK_SIZE,
+                { 8 * TEST_TASK_SIZE },
+                TEST_TIMERS,
+                TEST_FDS,
             > = LoopStorage::new();
             &STORAGE
         },

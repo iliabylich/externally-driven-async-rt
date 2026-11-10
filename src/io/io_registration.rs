@@ -12,30 +12,22 @@ use crate::{
     storage::LoopStorageGuard,
 };
 
-pub(crate) struct IoRegistration<'a, const MAX_IO_COUNT: usize> {
-    io_waiters: &'a IoWaiters<MAX_IO_COUNT>,
+pub(crate) struct IoRegistration<'a, const FDS: usize> {
+    io_waiters: &'a IoWaiters<FDS>,
     selector: &'a Selector,
     index: IoIndex,
     direction: Direction,
 }
 
-impl<'a, const MAX_IO_COUNT: usize> IoRegistration<'a, MAX_IO_COUNT> {
+impl<'a, const FDS: usize> IoRegistration<'a, FDS> {
     pub(crate) fn new<
         S: State,
-        const MAX_TASKS_COUNT: usize,
-        const MAX_TASK_SIZE: usize,
-        const MAX_ROOT_TASK_SIZE: usize,
-        const MAX_TIMERS_COUNT: usize,
+        const TASKS: usize,
+        const TASK_SIZE: usize,
+        const ROOT_TASK_SIZE: usize,
+        const TIMERS: usize,
     >(
-        storage: &'a LoopStorageGuard<
-            '_,
-            S,
-            MAX_TASKS_COUNT,
-            MAX_TASK_SIZE,
-            MAX_ROOT_TASK_SIZE,
-            MAX_TIMERS_COUNT,
-            MAX_IO_COUNT,
-        >,
+        storage: &'a LoopStorageGuard<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         fd: BorrowedFd<'a>,
         cached: &Cell<Option<IoIndex>>,
         direction: Direction,
@@ -50,7 +42,7 @@ impl<'a, const MAX_IO_COUNT: usize> IoRegistration<'a, MAX_IO_COUNT> {
         }
     }
 
-    pub(crate) fn wait(&mut self) -> Wait<'_, 'a, MAX_IO_COUNT> {
+    pub(crate) fn wait(&mut self) -> Wait<'_, 'a, FDS> {
         Wait::new(self)
     }
 
@@ -72,7 +64,7 @@ impl<'a, const MAX_IO_COUNT: usize> IoRegistration<'a, MAX_IO_COUNT> {
     }
 }
 
-impl<const MAX_IO_COUNT: usize> Drop for IoRegistration<'_, MAX_IO_COUNT> {
+impl<const FDS: usize> Drop for IoRegistration<'_, FDS> {
     fn drop(&mut self) {
         if let Some(change) = self.io_waiters.release(self.index, self.direction) {
             let _ = self.selector.apply_now(change);

@@ -15,22 +15,14 @@ impl<'s> BorrowedWriteHalf<'s> {
         'a,
         'ctx,
         S: State,
-        const MAX_TASKS_COUNT: usize,
-        const MAX_TASK_SIZE: usize,
-        const MAX_ROOT_TASK_SIZE: usize,
-        const MAX_TIMERS_COUNT: usize,
-        const MAX_IO_COUNT: usize,
+        const TASKS: usize,
+        const TASK_SIZE: usize,
+        const ROOT_TASK_SIZE: usize,
+        const TIMERS: usize,
+        const FDS: usize,
     >(
         &'a mut self,
-        ctx: &'a Context<
-            'ctx,
-            S,
-            MAX_TASKS_COUNT,
-            MAX_TASK_SIZE,
-            MAX_ROOT_TASK_SIZE,
-            MAX_TIMERS_COUNT,
-            MAX_IO_COUNT,
-        >,
+        ctx: &'a Context<'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.socket.write(ctx, buf)

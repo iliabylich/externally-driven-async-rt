@@ -26,22 +26,14 @@ impl TcpListener {
     /// Accepts incoming connection.
     pub async fn accept<
         S: State,
-        const MAX_TASKS_COUNT: usize,
-        const MAX_TASK_SIZE: usize,
-        const MAX_ROOT_TASK_SIZE: usize,
-        const MAX_TIMERS_COUNT: usize,
-        const MAX_IO_COUNT: usize,
+        const TASKS: usize,
+        const TASK_SIZE: usize,
+        const ROOT_TASK_SIZE: usize,
+        const TIMERS: usize,
+        const FDS: usize,
     >(
         &mut self,
-        ctx: &Context<
-            '_,
-            S,
-            MAX_TASKS_COUNT,
-            MAX_TASK_SIZE,
-            MAX_ROOT_TASK_SIZE,
-            MAX_TIMERS_COUNT,
-            MAX_IO_COUNT,
-        >,
+        ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     ) -> rustix::io::Result<(TcpStream, SocketAddr)> {
         let (socket, addr) = self.socket.accept(ctx).await?;
         Ok((TcpStream::new(socket), addr))

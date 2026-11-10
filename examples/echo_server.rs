@@ -12,39 +12,16 @@ use rustix::{
     io::Errno,
 };
 
-const MAX_TASKS_COUNT: usize = 5;
-const MAX_TASK_SIZE: usize = 1024;
-const MAX_ROOT_TASK_SIZE: usize = 4096;
-const MAX_TIMERS_COUNT: usize = 4;
-const MAX_IO_COUNT: usize = 5;
+const TASKS: usize = 5;
+const TASK_SIZE: usize = 1024;
+const ROOT_TASK_SIZE: usize = 4096;
+const TIMERS: usize = 4;
+const FDS: usize = 5;
 
-type ServerLoop<'a> = EventLoop<
-    'a,
-    Server,
-    MAX_TASKS_COUNT,
-    MAX_TASK_SIZE,
-    MAX_ROOT_TASK_SIZE,
-    MAX_TIMERS_COUNT,
-    MAX_IO_COUNT,
->;
-type ServerContext<'a> = Context<
-    'a,
-    Server,
-    MAX_TASKS_COUNT,
-    MAX_TASK_SIZE,
-    MAX_ROOT_TASK_SIZE,
-    MAX_TIMERS_COUNT,
-    MAX_IO_COUNT,
->;
+type ServerLoop<'a> = EventLoop<'a, Server, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
+type ServerContext<'a> = Context<'a, Server, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
 
-type ServerStorage = LoopStorage<
-    Server,
-    MAX_TASKS_COUNT,
-    MAX_TASK_SIZE,
-    MAX_ROOT_TASK_SIZE,
-    MAX_TIMERS_COUNT,
-    MAX_IO_COUNT,
->;
+type ServerStorage = LoopStorage<Server, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
 
 #[derive(Default)]
 struct Server {

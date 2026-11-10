@@ -4,20 +4,18 @@ use crate::tasks::{JoinStatus, Root, RootStatus, Task, TaskEntry, TaskId, Tasks}
 
 pub(crate) struct TasksGuard<
     'a,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
 > {
-    tasks: &'static Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
+    tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
     futures: PhantomData<(Cell<&'a ()>, *const ())>,
 }
 
-impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize>
-    TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
+    TasksGuard<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
-    pub(crate) fn claim(
-        tasks: &'static Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
-    ) -> Self {
+    pub(crate) fn claim(tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>) -> Self {
         tasks.queue.claim();
         Self {
             tasks,
@@ -63,7 +61,7 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
         Fut: Future<Output = ()> + 'a,
     {
         let Some(id) = self.reserve() else {
-            panic!("more than {MAX_TASKS_COUNT} concurrent tasks");
+            panic!("more than {TASKS} concurrent tasks");
         };
         self.write(id, future);
         id
@@ -103,8 +101,8 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
         Fut: Future<Output = ()> + 'a,
     {
         assert!(
-            size_of::<Fut>() <= MAX_TASK_SIZE,
-            "a task future of {} bytes doesn't fit MAX_TASK_SIZE ({MAX_TASK_SIZE} bytes)",
+            size_of::<Fut>() <= TASK_SIZE,
+            "a task future of {} bytes doesn't fit TASK_SIZE ({TASK_SIZE} bytes)",
             size_of::<Fut>(),
         );
         assert!(
@@ -150,9 +148,9 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
             "the root is already spawned"
         );
         assert!(
-            size_of::<Fut>() <= MAX_ROOT_TASK_SIZE,
-            "the root future of {} bytes doesn't fit MAX_ROOT_TASK_SIZE \
-             ({MAX_ROOT_TASK_SIZE} bytes)",
+            size_of::<Fut>() <= ROOT_TASK_SIZE,
+            "the root future of {} bytes doesn't fit ROOT_TASK_SIZE \
+             ({ROOT_TASK_SIZE} bytes)",
             size_of::<Fut>(),
         );
         assert!(
@@ -224,15 +222,15 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
     }
 }
 
-impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize>
-    Clone for TasksGuard<'_, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> Clone
+    for TasksGuard<'_, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize> Copy
-    for TasksGuard<'_, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> Copy
+    for TasksGuard<'_, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
 }

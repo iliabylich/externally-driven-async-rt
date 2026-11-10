@@ -18,41 +18,24 @@ use crate::{
 pub struct EventLoop<
     'a,
     S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
 > {
-    storage: LoopStorageGuard<
-        'a,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >,
+    storage: LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
 }
 
 impl<
     'a,
     S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
->
-    EventLoop<
-        'a,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+> EventLoop<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     /// Creates an event loop and polls given future once.
     ///
@@ -61,33 +44,16 @@ impl<
     /// Panics if:
     ///
     /// 1. `storage` has already been used by another event loop
-    /// 2. the future is bigger than `MAX_ROOT_TASK_SIZE` bytes
+    /// 2. the future is bigger than `ROOT_TASK_SIZE` bytes
     /// 3. the future is aligned to more than 16 bytes.
     pub fn new<F, Fut>(
-        storage: &'static LoopStorage<
-            S,
-            MAX_TASKS_COUNT,
-            MAX_TASK_SIZE,
-            MAX_ROOT_TASK_SIZE,
-            MAX_TIMERS_COUNT,
-            MAX_IO_COUNT,
-        >,
+        storage: &'static LoopStorage<S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         selector: &'a mut Selector,
         state: S,
         f: F,
     ) -> Result<Self, Error>
     where
-        F: FnOnce(
-            Context<
-                'a,
-                S,
-                MAX_TASKS_COUNT,
-                MAX_TASK_SIZE,
-                MAX_ROOT_TASK_SIZE,
-                MAX_TIMERS_COUNT,
-                MAX_IO_COUNT,
-            >,
-        ) -> Fut,
+        F: FnOnce(Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
         let storage = storage.claim(selector, state);
@@ -146,15 +112,7 @@ impl<
     #[cfg(test)]
     pub(crate) fn storage(
         &self,
-    ) -> LoopStorageGuard<
-        'a,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    > {
+    ) -> LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
         self.storage
     }
 }
@@ -162,21 +120,12 @@ impl<
 impl<
     'a,
     S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
-> Drop
-    for EventLoop<
-        'a,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+> Drop for EventLoop<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn drop(&mut self) {
         self.storage.clear();
@@ -187,21 +136,12 @@ impl<
 impl<
     'a,
     S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
-> AsFd
-    for EventLoop<
-        'a,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+> AsFd for EventLoop<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn as_fd(&self) -> BorrowedFd<'_> {
         self.storage.selector().as_fd()
@@ -211,21 +151,12 @@ impl<
 impl<
     'a,
     S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
-> AsRawFd
-    for EventLoop<
-        'a,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+> AsRawFd for EventLoop<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn as_raw_fd(&self) -> RawFd {
         self.as_fd().as_raw_fd()
@@ -235,21 +166,12 @@ impl<
 impl<
     'a,
     S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
-> core::fmt::Debug
-    for EventLoop<
-        'a,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+> core::fmt::Debug for EventLoop<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("EventLoop")

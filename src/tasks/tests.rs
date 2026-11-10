@@ -11,10 +11,9 @@ use crate::{
     testing::{FixedFuture, FlagOnDrop},
 };
 
-const MAX_TASK_SIZE: usize = 1024;
+const TASK_SIZE: usize = 1024;
 
-type TasksStorage<const MAX_TASKS_COUNT: usize> =
-    LoopStorage<(), MAX_TASKS_COUNT, MAX_TASK_SIZE, 0, 1, 1>;
+type TasksStorage<const TASKS: usize> = LoopStorage<(), TASKS, TASK_SIZE, 0, 1, 1>;
 
 #[test]
 fn dropping_a_task_drops_its_future_and_finishes_it() {
@@ -72,7 +71,7 @@ fn full_task_pool_panics() {
 #[test]
 fn a_task_spawned_while_one_is_dropped_gets_another_slot() {
     struct SpawnOnDrop<'a> {
-        storage: LoopStorageGuard<'a, (), 2, MAX_TASK_SIZE, 0, 1, 1, ()>,
+        storage: LoopStorageGuard<'a, (), 2, TASK_SIZE, 0, 1, 1, ()>,
         id: &'a Cell<Option<TaskId>>,
         spawned: &'a Cell<Option<TaskId>>,
     }
@@ -121,7 +120,7 @@ fn full_size_futures_in_neighbouring_slots_do_not_overlap() {
     };
     let tasks = storage.tasks();
     let ids = [1u8, 2].map(|byte| {
-        let data = [byte; MAX_TASK_SIZE - 16];
+        let data = [byte; TASK_SIZE - 16];
         storage.tasks().spawn(async move {
             assert!(data.iter().all(|b| *b == byte));
         })
@@ -131,7 +130,7 @@ fn full_size_futures_in_neighbouring_slots_do_not_overlap() {
 }
 
 #[test]
-#[should_panic(expected = "a task future of 8193 bytes doesn't fit MAX_TASK_SIZE")]
+#[should_panic(expected = "a task future of 8193 bytes doesn't fit TASK_SIZE")]
 fn a_too_big_future_panics() {
     let storage = {
         static STORAGE: TasksStorage<1> = TasksStorage::new();
@@ -164,7 +163,7 @@ fn futures_up_to_task_size_fit() {
 }
 
 #[test]
-#[should_panic(expected = "a task future of 101 bytes doesn't fit MAX_TASK_SIZE (100 bytes)")]
+#[should_panic(expected = "a task future of 101 bytes doesn't fit TASK_SIZE (100 bytes)")]
 fn a_future_one_byte_bigger_than_task_size_panics() {
     let storage = {
         static STORAGE: LoopStorage<(), 1, 100, 0, 1, 1> = LoopStorage::new();
@@ -206,7 +205,7 @@ fn root_region_holds_a_root_bigger_than_a_slab_block() {
 
     let dropped = Cell::new(false);
     let storage = {
-        static STORAGE: LoopStorage<(), 2, MAX_TASK_SIZE, { size_of::<BigRoot<'static>>() }, 1, 1> =
+        static STORAGE: LoopStorage<(), 2, TASK_SIZE, { size_of::<BigRoot<'static>>() }, 1, 1> =
             LoopStorage::new();
         STORAGE.claim(&(), ())
     };
@@ -229,7 +228,7 @@ fn root_region_holds_a_root_bigger_than_a_slab_block() {
 }
 
 #[test]
-#[should_panic(expected = "the root future of 1 bytes doesn't fit MAX_ROOT_TASK_SIZE (0 bytes)")]
+#[should_panic(expected = "the root future of 1 bytes doesn't fit ROOT_TASK_SIZE (0 bytes)")]
 fn a_too_big_root_panics() {
     let storage = {
         static STORAGE: TasksStorage<1> = TasksStorage::new();

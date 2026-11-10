@@ -10,53 +10,28 @@ use crate::{
 pub struct TaskReservation<
     'a,
     S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
 > {
-    storage: LoopStorageGuard<
-        'a,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >,
+    storage: LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     id: TaskId,
 }
 
 impl<
     'a,
     S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
->
-    TaskReservation<
-        'a,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+> TaskReservation<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     pub(crate) fn new(
-        storage: LoopStorageGuard<
-            'a,
-            S,
-            MAX_TASKS_COUNT,
-            MAX_TASK_SIZE,
-            MAX_ROOT_TASK_SIZE,
-            MAX_TIMERS_COUNT,
-            MAX_IO_COUNT,
-        >,
+        storage: LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         id: TaskId,
     ) -> Self {
         Self { storage, id }
@@ -68,24 +43,11 @@ impl<
     ///
     /// Panics if:
     ///
-    /// 1. the future is bigger than `MAX_TASK_SIZE` bytes
+    /// 1. the future is bigger than `TASK_SIZE` bytes
     /// 2. it is aligned to more than 16 bytes.
-    pub fn spawn<F, Fut>(
-        self,
-        f: F,
-    ) -> JoinHandle<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+    pub fn spawn<F, Fut>(self, f: F) -> JoinHandle<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
     where
-        F: FnOnce(
-            Context<
-                'a,
-                S,
-                MAX_TASKS_COUNT,
-                MAX_TASK_SIZE,
-                MAX_ROOT_TASK_SIZE,
-                MAX_TIMERS_COUNT,
-                MAX_IO_COUNT,
-            >,
-        ) -> Fut,
+        F: FnOnce(Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
         let Self { storage, id } = self;
@@ -97,21 +59,12 @@ impl<
 
 impl<
     S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
-> Drop
-    for TaskReservation<
-        '_,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+> Drop for TaskReservation<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn drop(&mut self) {
         self.storage.tasks().release(self.id);
@@ -121,21 +74,12 @@ impl<
 impl<
     'a,
     S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
-> core::fmt::Debug
-    for TaskReservation<
-        'a,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+> core::fmt::Debug for TaskReservation<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("TaskReservation")
@@ -148,7 +92,7 @@ mod tests {
 
     use crate::{
         Selector,
-        testing::{EventLoopTestingExt, Log, TEST_MAX_TASKS_COUNT, TestLoop, TestStorage},
+        testing::{EventLoopTestingExt, Log, TEST_TASKS, TestLoop, TestStorage},
     };
 
     #[test]
@@ -185,7 +129,7 @@ mod tests {
             &mut selector,
             Log::default(),
             async |ctx| {
-                for _ in 0..TEST_MAX_TASKS_COUNT - 3 {
+                for _ in 0..TEST_TASKS - 3 {
                     ctx.spawn(async |_| pending::<()>().await);
                 }
                 let task = ctx.reserve_task().await;
@@ -219,7 +163,7 @@ mod tests {
             &mut selector,
             Log::default(),
             async |ctx| {
-                for _ in 0..TEST_MAX_TASKS_COUNT - 2 {
+                for _ in 0..TEST_TASKS - 2 {
                     ctx.spawn(async |_| pending::<()>().await);
                 }
                 let _task = ctx.reserve_task().await;

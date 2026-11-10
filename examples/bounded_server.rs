@@ -14,38 +14,15 @@ const MAX_CLIENTS: usize = 3;
 const MAX_REQUEST_LEN: usize = 64;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
-const MAX_TASKS_COUNT: usize = MAX_CLIENTS + 2;
-const MAX_TASK_SIZE: usize = 1024;
-const MAX_ROOT_TASK_SIZE: usize = 1024;
-const MAX_TIMERS_COUNT: usize = MAX_CLIENTS + 2;
-const MAX_IO_COUNT: usize = MAX_CLIENTS + 1;
+const TASKS: usize = MAX_CLIENTS + 2;
+const TASK_SIZE: usize = 1024;
+const ROOT_TASK_SIZE: usize = 1024;
+const TIMERS: usize = MAX_CLIENTS + 2;
+const FDS: usize = MAX_CLIENTS + 1;
 
-type ServerLoop<'a> = EventLoop<
-    'a,
-    Server,
-    MAX_TASKS_COUNT,
-    MAX_TASK_SIZE,
-    MAX_ROOT_TASK_SIZE,
-    MAX_TIMERS_COUNT,
-    MAX_IO_COUNT,
->;
-type ServerContext<'a> = Context<
-    'a,
-    Server,
-    MAX_TASKS_COUNT,
-    MAX_TASK_SIZE,
-    MAX_ROOT_TASK_SIZE,
-    MAX_TIMERS_COUNT,
-    MAX_IO_COUNT,
->;
-type ServerStorage = LoopStorage<
-    Server,
-    MAX_TASKS_COUNT,
-    MAX_TASK_SIZE,
-    MAX_ROOT_TASK_SIZE,
-    MAX_TIMERS_COUNT,
-    MAX_IO_COUNT,
->;
+type ServerLoop<'a> = EventLoop<'a, Server, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
+type ServerContext<'a> = Context<'a, Server, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
+type ServerStorage = LoopStorage<Server, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
 
 #[derive(Default)]
 struct Server {

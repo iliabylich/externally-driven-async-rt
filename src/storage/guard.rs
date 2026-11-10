@@ -11,55 +11,31 @@ use crate::{
 pub(crate) struct LoopStorageGuard<
     'a,
     S: 'static,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
     Sel = Selector,
 > {
-    storage: &'static LoopStorage<
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >,
+    storage: &'static LoopStorage<S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     selector: &'a Sel,
-    tasks: TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
+    tasks: TasksGuard<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
 }
 
 impl<
     'a,
     S: 'static,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
     Sel,
->
-    LoopStorageGuard<
-        'a,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-        Sel,
-    >
+> LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, Sel>
 {
     pub(crate) fn claim(
-        storage: &'static LoopStorage<
-            S,
-            MAX_TASKS_COUNT,
-            MAX_TASK_SIZE,
-            MAX_ROOT_TASK_SIZE,
-            MAX_TIMERS_COUNT,
-            MAX_IO_COUNT,
-        >,
+        storage: &'static LoopStorage<S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         selector: &'a Sel,
         state: S,
     ) -> Self {
@@ -72,17 +48,15 @@ impl<
         }
     }
 
-    pub(crate) fn tasks(
-        self,
-    ) -> TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE> {
+    pub(crate) fn tasks(self) -> TasksGuard<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE> {
         self.tasks
     }
 
-    pub(crate) fn timers(self) -> &'static Timers<MAX_TIMERS_COUNT> {
+    pub(crate) fn timers(self) -> &'static Timers<TIMERS> {
         &self.storage.timers
     }
 
-    pub(crate) fn io_waiters(self) -> &'static IoWaiters<MAX_IO_COUNT> {
+    pub(crate) fn io_waiters(self) -> &'static IoWaiters<FDS> {
         &self.storage.io_waiters
     }
 
@@ -100,22 +74,12 @@ impl<
 impl<
     'a,
     S: 'static,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
->
-    LoopStorageGuard<
-        'a,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-        Selector,
-    >
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+> LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, Selector>
 {
     pub(crate) fn selector(self) -> &'a Selector {
         self.selector
@@ -158,23 +122,13 @@ impl<
 
 impl<
     S: 'static,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
     Sel,
-> Clone
-    for LoopStorageGuard<
-        '_,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-        Sel,
-    >
+> Clone for LoopStorageGuard<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, Sel>
 {
     fn clone(&self) -> Self {
         *self
@@ -183,22 +137,12 @@ impl<
 
 impl<
     S: 'static,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
     Sel,
-> Copy
-    for LoopStorageGuard<
-        '_,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-        Sel,
-    >
+> Copy for LoopStorageGuard<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, Sel>
 {
 }

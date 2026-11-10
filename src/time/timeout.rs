@@ -4,18 +4,18 @@ use crate::time::Sleep;
 
 /// A timeout future.
 #[must_use = "futures do nothing unless you `.await` or poll them"]
-pub struct Timeout<'ctx, F, const MAX_TIMERS_COUNT: usize> {
+pub struct Timeout<'ctx, F, const TIMERS: usize> {
     future: F,
-    sleep: Sleep<'ctx, MAX_TIMERS_COUNT>,
+    sleep: Sleep<'ctx, TIMERS>,
 }
 
-impl<'ctx, F, const MAX_TIMERS_COUNT: usize> Timeout<'ctx, F, MAX_TIMERS_COUNT> {
-    pub(crate) fn new(future: F, sleep: Sleep<'ctx, MAX_TIMERS_COUNT>) -> Self {
+impl<'ctx, F, const TIMERS: usize> Timeout<'ctx, F, TIMERS> {
+    pub(crate) fn new(future: F, sleep: Sleep<'ctx, TIMERS>) -> Self {
         Self { future, sleep }
     }
 }
 
-impl<F: Future, const MAX_TIMERS_COUNT: usize> Future for Timeout<'_, F, MAX_TIMERS_COUNT> {
+impl<F: Future, const TIMERS: usize> Future for Timeout<'_, F, TIMERS> {
     type Output = Option<F::Output>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<Self::Output> {
@@ -33,7 +33,7 @@ impl<F: Future, const MAX_TIMERS_COUNT: usize> Future for Timeout<'_, F, MAX_TIM
     }
 }
 
-impl<F, const MAX_TIMERS_COUNT: usize> core::fmt::Debug for Timeout<'_, F, MAX_TIMERS_COUNT> {
+impl<F, const TIMERS: usize> core::fmt::Debug for Timeout<'_, F, TIMERS> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("Timeout")
     }

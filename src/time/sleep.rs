@@ -4,14 +4,14 @@ use crate::time::{Instant, TimerIndex, Timers};
 
 /// A sleep future.
 #[must_use = "futures do nothing unless you `.await` or poll them"]
-pub struct Sleep<'ctx, const MAX_TIMERS_COUNT: usize> {
-    timers: &'ctx Timers<MAX_TIMERS_COUNT>,
+pub struct Sleep<'ctx, const TIMERS: usize> {
+    timers: &'ctx Timers<TIMERS>,
     deadline: Instant,
     timer: Option<TimerIndex>,
 }
 
-impl<'ctx, const MAX_TIMERS_COUNT: usize> Sleep<'ctx, MAX_TIMERS_COUNT> {
-    pub(crate) fn new(timers: &'ctx Timers<MAX_TIMERS_COUNT>, deadline: Instant) -> Self {
+impl<'ctx, const TIMERS: usize> Sleep<'ctx, TIMERS> {
+    pub(crate) fn new(timers: &'ctx Timers<TIMERS>, deadline: Instant) -> Self {
         Self {
             timers,
             deadline,
@@ -20,7 +20,7 @@ impl<'ctx, const MAX_TIMERS_COUNT: usize> Sleep<'ctx, MAX_TIMERS_COUNT> {
     }
 }
 
-impl<const MAX_TIMERS_COUNT: usize> Future for Sleep<'_, MAX_TIMERS_COUNT> {
+impl<const TIMERS: usize> Future for Sleep<'_, TIMERS> {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {
@@ -38,7 +38,7 @@ impl<const MAX_TIMERS_COUNT: usize> Future for Sleep<'_, MAX_TIMERS_COUNT> {
     }
 }
 
-impl<const MAX_TIMERS_COUNT: usize> Drop for Sleep<'_, MAX_TIMERS_COUNT> {
+impl<const TIMERS: usize> Drop for Sleep<'_, TIMERS> {
     fn drop(&mut self) {
         if let Some(timer) = self.timer {
             self.timers.release(timer);
@@ -46,7 +46,7 @@ impl<const MAX_TIMERS_COUNT: usize> Drop for Sleep<'_, MAX_TIMERS_COUNT> {
     }
 }
 
-impl<const MAX_TIMERS_COUNT: usize> core::fmt::Debug for Sleep<'_, MAX_TIMERS_COUNT> {
+impl<const TIMERS: usize> core::fmt::Debug for Sleep<'_, TIMERS> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("Sleep")
     }

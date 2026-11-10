@@ -21,27 +21,19 @@ pub(crate) struct Retry<
     'a,
     'ctx,
     S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
     F,
 > {
-    ctx: &'a Context<
-        'ctx,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-    >,
+    ctx: &'a Context<'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     fd: &'a OwnedFd,
     cached: &'a Cell<Option<IoIndex>>,
     direction: Direction,
     op: F,
-    registration: Option<IoRegistration<'a, MAX_IO_COUNT>>,
+    registration: Option<IoRegistration<'a, FDS>>,
     waiting: bool,
 }
 
@@ -49,35 +41,16 @@ impl<
     'a,
     'ctx,
     S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
     F,
->
-    Retry<
-        'a,
-        'ctx,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-        F,
-    >
+> Retry<'a, 'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, F>
 {
     pub(crate) fn new(
-        ctx: &'a Context<
-            'ctx,
-            S,
-            MAX_TASKS_COUNT,
-            MAX_TASK_SIZE,
-            MAX_ROOT_TASK_SIZE,
-            MAX_TIMERS_COUNT,
-            MAX_IO_COUNT,
-        >,
+        ctx: &'a Context<'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         fd: &'a OwnedFd,
         cached: &'a Cell<Option<IoIndex>>,
         direction: Direction,
@@ -99,25 +72,14 @@ impl<
     'a,
     'ctx,
     S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
     T,
     F: FnMut(&OwnedFd) -> rustix::io::Result<T> + Unpin,
-> Future
-    for Retry<
-        'a,
-        'ctx,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-        F,
-    >
+> Future for Retry<'a, 'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, F>
 {
     type Output = rustix::io::Result<T>;
 
@@ -150,24 +112,13 @@ impl<
 
 impl<
     S: State,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-    const MAX_TIMERS_COUNT: usize,
-    const MAX_IO_COUNT: usize,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
     F,
-> Drop
-    for Retry<
-        '_,
-        '_,
-        S,
-        MAX_TASKS_COUNT,
-        MAX_TASK_SIZE,
-        MAX_ROOT_TASK_SIZE,
-        MAX_TIMERS_COUNT,
-        MAX_IO_COUNT,
-        F,
-    >
+> Drop for Retry<'_, '_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, F>
 {
     fn drop(&mut self) {
         if let Some(registration) = &self.registration {

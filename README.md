@@ -47,20 +47,13 @@ use core::time::Duration;
 use externally_driven_async_rt::{EventLoop, LoopStorage, Selector};
 use rustix::event::{PollFd, PollFlags, poll};
 
-const MAX_TASKS_COUNT: usize = 1;
-const MAX_TASK_SIZE: usize = 64;
-const MAX_ROOT_TASK_SIZE: usize = 256;
-const MAX_TIMERS_COUNT: usize = 1;
-const MAX_IO_COUNT: usize = 1;
+const TASKS: usize = 1;
+const TASK_SIZE: usize = 64;
+const ROOT_TASK_SIZE: usize = 256;
+const TIMERS: usize = 1;
+const FDS: usize = 1;
 
-type Storage = LoopStorage<
-    (),
-    MAX_TASKS_COUNT,
-    MAX_TASK_SIZE,
-    MAX_ROOT_TASK_SIZE,
-    MAX_TIMERS_COUNT,
-    MAX_IO_COUNT,
->;
+type Storage = LoopStorage<(), TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     static STORAGE: Storage = Storage::new();

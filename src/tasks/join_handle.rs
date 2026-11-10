@@ -3,29 +3,21 @@ use core::{future::Future, pin::Pin, task::Poll};
 use crate::tasks::{JoinStatus, TaskId, TasksGuard};
 
 /// A join handle of the spawned task, resolves once the task is finished.
-pub struct JoinHandle<
-    'a,
-    const MAX_TASKS_COUNT: usize,
-    const MAX_TASK_SIZE: usize,
-    const MAX_ROOT_TASK_SIZE: usize,
-> {
-    tasks: TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
+pub struct JoinHandle<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> {
+    tasks: TasksGuard<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
     id: TaskId,
 }
 
-impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize>
-    JoinHandle<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
+    JoinHandle<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
-    pub(crate) fn new(
-        tasks: TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
-        id: TaskId,
-    ) -> Self {
+    pub(crate) fn new(tasks: TasksGuard<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>, id: TaskId) -> Self {
         Self { tasks, id }
     }
 }
 
-impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize>
-    Future for JoinHandle<'_, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> Future
+    for JoinHandle<'_, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
     type Output = ();
 
@@ -37,8 +29,8 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
     }
 }
 
-impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize>
-    core::fmt::Debug for JoinHandle<'_, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
+impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> core::fmt::Debug
+    for JoinHandle<'_, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("JoinHandle")

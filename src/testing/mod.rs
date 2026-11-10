@@ -22,36 +22,16 @@ pub(crate) use self::{
     wakers::counting_waker,
 };
 
-pub(crate) const TEST_MAX_TASKS_COUNT: usize = 16;
-pub(crate) const TEST_MAX_TASK_SIZE: usize = 1024;
-const TEST_MAX_ROOT_TASK_SIZE: usize = 2048;
-pub(crate) const TEST_MAX_TIMERS_COUNT: usize = 16;
-pub(crate) const TEST_MAX_IO_COUNT: usize = 8;
+pub(crate) const TEST_TASKS: usize = 16;
+pub(crate) const TEST_TASK_SIZE: usize = 1024;
+const TEST_ROOT_TASK_SIZE: usize = 2048;
+pub(crate) const TEST_TIMERS: usize = 16;
+pub(crate) const TEST_FDS: usize = 8;
 
-pub(crate) type TestStorage<S = Log> = LoopStorage<
-    S,
-    TEST_MAX_TASKS_COUNT,
-    TEST_MAX_TASK_SIZE,
-    TEST_MAX_ROOT_TASK_SIZE,
-    TEST_MAX_TIMERS_COUNT,
-    TEST_MAX_IO_COUNT,
->;
+pub(crate) type TestStorage<S = Log> =
+    LoopStorage<S, TEST_TASKS, TEST_TASK_SIZE, TEST_ROOT_TASK_SIZE, TEST_TIMERS, TEST_FDS>;
 
-pub(crate) type TestLoop<'a, S> = EventLoop<
-    'a,
-    S,
-    TEST_MAX_TASKS_COUNT,
-    TEST_MAX_TASK_SIZE,
-    TEST_MAX_ROOT_TASK_SIZE,
-    TEST_MAX_TIMERS_COUNT,
-    TEST_MAX_IO_COUNT,
->;
-pub(crate) type TestContext<'a, S = Log> = Context<
-    'a,
-    S,
-    TEST_MAX_TASKS_COUNT,
-    TEST_MAX_TASK_SIZE,
-    TEST_MAX_ROOT_TASK_SIZE,
-    TEST_MAX_TIMERS_COUNT,
-    TEST_MAX_IO_COUNT,
->;
+pub(crate) type TestLoop<'a, S> =
+    EventLoop<'a, S, TEST_TASKS, TEST_TASK_SIZE, TEST_ROOT_TASK_SIZE, TEST_TIMERS, TEST_FDS>;
+pub(crate) type TestContext<'a, S = Log> =
+    Context<'a, S, TEST_TASKS, TEST_TASK_SIZE, TEST_ROOT_TASK_SIZE, TEST_TIMERS, TEST_FDS>;

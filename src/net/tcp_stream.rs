@@ -21,21 +21,13 @@ impl TcpStream {
     /// Connects to a given address.
     pub async fn connect<
         S: State,
-        const MAX_TASKS_COUNT: usize,
-        const MAX_TASK_SIZE: usize,
-        const MAX_ROOT_TASK_SIZE: usize,
-        const MAX_TIMERS_COUNT: usize,
-        const MAX_IO_COUNT: usize,
+        const TASKS: usize,
+        const TASK_SIZE: usize,
+        const ROOT_TASK_SIZE: usize,
+        const TIMERS: usize,
+        const FDS: usize,
     >(
-        ctx: &Context<
-            '_,
-            S,
-            MAX_TASKS_COUNT,
-            MAX_TASK_SIZE,
-            MAX_ROOT_TASK_SIZE,
-            MAX_TIMERS_COUNT,
-            MAX_IO_COUNT,
-        >,
+        ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         addr: SocketAddr,
     ) -> rustix::io::Result<Self> {
         let socket = Socket::connect_stream(ctx, &addr).await?;
@@ -47,22 +39,14 @@ impl TcpStream {
         'a,
         'ctx,
         S: State,
-        const MAX_TASKS_COUNT: usize,
-        const MAX_TASK_SIZE: usize,
-        const MAX_ROOT_TASK_SIZE: usize,
-        const MAX_TIMERS_COUNT: usize,
-        const MAX_IO_COUNT: usize,
+        const TASKS: usize,
+        const TASK_SIZE: usize,
+        const ROOT_TASK_SIZE: usize,
+        const TIMERS: usize,
+        const FDS: usize,
     >(
         &'a mut self,
-        ctx: &'a Context<
-            'ctx,
-            S,
-            MAX_TASKS_COUNT,
-            MAX_TASK_SIZE,
-            MAX_ROOT_TASK_SIZE,
-            MAX_TIMERS_COUNT,
-            MAX_IO_COUNT,
-        >,
+        ctx: &'a Context<'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.socket.read(ctx, buf)
@@ -73,22 +57,14 @@ impl TcpStream {
         'a,
         'ctx,
         S: State,
-        const MAX_TASKS_COUNT: usize,
-        const MAX_TASK_SIZE: usize,
-        const MAX_ROOT_TASK_SIZE: usize,
-        const MAX_TIMERS_COUNT: usize,
-        const MAX_IO_COUNT: usize,
+        const TASKS: usize,
+        const TASK_SIZE: usize,
+        const ROOT_TASK_SIZE: usize,
+        const TIMERS: usize,
+        const FDS: usize,
     >(
         &'a mut self,
-        ctx: &'a Context<
-            'ctx,
-            S,
-            MAX_TASKS_COUNT,
-            MAX_TASK_SIZE,
-            MAX_ROOT_TASK_SIZE,
-            MAX_TIMERS_COUNT,
-            MAX_IO_COUNT,
-        >,
+        ctx: &'a Context<'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.socket.write(ctx, buf)
