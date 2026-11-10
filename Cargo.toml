@@ -2,6 +2,10 @@
 name = "externally-driven-async-rt"
 version = "0.1.0"
 edition = "2024"
+description = "Async runtime that is meant to be embedded"
+license = "MIT"
+repository = "https://github.com/iliabylich/externally-driven-async-rt"
+authors = ["Ilya Bylich <ibylich@gmail.com>"]
 
 [features]
 strace-like = []
