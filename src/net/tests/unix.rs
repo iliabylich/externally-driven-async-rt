@@ -270,8 +270,8 @@ fn stream_halves_echo_with_a_raw_peer() {
         &mut selector,
         Log::default(),
         async move |ctx| {
-            let stream = UnixStream::connect(&ctx, &server_addr).await.unwrap();
-            let (mut read, mut write) = stream.into_split().unwrap();
+            let mut stream = UnixStream::connect(&ctx, &server_addr).await.unwrap();
+            let (mut read, mut write) = stream.split();
             write.write(&ctx, b"ping").await.unwrap();
             let mut buf = [0; 4];
             let mut len = 0;

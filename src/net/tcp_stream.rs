@@ -4,7 +4,7 @@ use rustix::net::Shutdown;
 
 use crate::{
     context::Context,
-    net::{ReadHalf, WriteHalf, socket::Socket},
+    net::{BorrowedReadHalf, BorrowedWriteHalf, socket::Socket},
     state::State,
 };
 
@@ -102,8 +102,10 @@ impl TcpStream {
         self.socket.peer_addr()
     }
 
-    pub fn into_split(self) -> rustix::io::Result<(ReadHalf, WriteHalf)> {
-        let write = self.socket.try_clone()?;
-        Ok((ReadHalf::new(self.socket), WriteHalf::new(write)))
+    pub fn split(&mut self) -> (BorrowedReadHalf<'_>, BorrowedWriteHalf<'_>) {
+        (
+            BorrowedReadHalf::new(&self.socket),
+            BorrowedWriteHalf::new(&self.socket),
+        )
     }
 }

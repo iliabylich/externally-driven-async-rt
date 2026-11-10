@@ -1,6 +1,8 @@
+use core::cell::Cell;
+
 use rustix::{
     fd::{AsFd, OwnedFd},
-    io::{Errno, FdFlags, fcntl_dupfd_cloexec, fcntl_setfd, ioctl_fionbio},
+    io::{Errno, FdFlags, fcntl_setfd, ioctl_fionbio},
     net::{
         AddressFamily, RecvFlags, SendFlags, Shutdown, SocketType,
         sockopt::{set_socket_reuseaddr, socket_error},
@@ -9,7 +11,7 @@ use rustix::{
 
 use crate::{
     context::Context,
-    io::IoRegistration,
+    io::{IoIndex, IoRegistration},
     net::{address::Address, retry::Retry},
     selector::Direction,
     state::State,
@@ -22,14 +24,14 @@ const STREAM_SEND_FLAGS: SendFlags = SendFlags::empty();
 #[cfg(target_os = "linux")]
 const STREAM_SEND_FLAGS: SendFlags = SendFlags::NOSIGNAL;
 
-pub(super) struct Socket(OwnedFd);
+pub(super) struct Socket(OwnedFd, Cell<Option<IoIndex>>);
 
 impl Socket {
     pub(super) fn new(family: AddressFamily, ty: SocketType) -> rustix::io::Result<Self> {
         syscall_start!("socket", family, ty, 0);
         let fd = rustix::net::socket(family, ty, None);
         syscall_end!(fd);
-        let socket = Self(fd?);
+        let socket = Self(fd?, Cell::new(None));
         socket.configure(ty)?;
         Ok(socket)
     }
@@ -91,7 +93,7 @@ impl Socket {
             Err(Errno::INPROGRESS | Errno::INTR) => {}
             Err(errno) => return Err(errno),
         }
-        IoRegistration::new(ctx.storage(), socket.0.as_fd(), Direction::Write)
+        IoRegistration::new(ctx.storage(), socket.0.as_fd(), &socket.1, Direction::Write)
             .wait()
             .await;
         syscall_start!("getsockopt", socket.0, "SOL_SOCKET", "SO_ERROR");
@@ -129,7 +131,7 @@ impl Socket {
                 result
             })
             .await?;
-        let socket = Self(fd);
+        let socket = Self(fd, Cell::new(None));
         socket.configure(SocketType::STREAM)?;
         Ok((socket, A::from_any(addr)?))
     }
@@ -358,13 +360,6 @@ impl Socket {
         result
     }
 
-    pub(super) fn try_clone(&self) -> rustix::io::Result<Self> {
-        syscall_start!("fcntl", self.0, "F_DUPFD_CLOEXEC", 0);
-        let fd = fcntl_dupfd_cloexec(&self.0, 0);
-        syscall_end!(fd);
-        Ok(Self(fd?))
-    }
-
     fn configure(
         &self,
         #[cfg_attr(target_os = "linux", expect(unused_variables))] ty: SocketType,
@@ -422,7 +417,7 @@ impl Socket {
         MAX_IO_COUNT,
         F,
     > {
-        Retry::new(ctx, &self.0, direction, op)
+        Retry::new(ctx, &self.0, &self.1, direction, op)
     }
 }
 

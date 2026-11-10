@@ -1,4 +1,4 @@
-use core::time::Duration;
+use core::{cell::Cell, time::Duration};
 
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
@@ -34,7 +34,8 @@ pub(crate) fn sleep_blocking(duration: Duration) {
 }
 
 pub(crate) async fn wait_readable(ctx: &TestContext<'_>, fd: &OwnedFd) {
-    let mut registration = IoRegistration::new(ctx.storage(), fd.as_fd(), Direction::Read);
+    let mut registration =
+        IoRegistration::new(ctx.storage(), fd.as_fd(), &Cell::new(None), Direction::Read);
     while !is_readable(fd, 0) {
         registration.wait().await;
     }

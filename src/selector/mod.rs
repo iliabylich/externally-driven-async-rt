@@ -1,7 +1,6 @@
 mod direction;
 #[cfg(target_os = "linux")]
 mod epoll;
-mod io_action;
 mod io_change;
 mod kernel_timer;
 #[cfg(target_os = "macos")]
@@ -18,8 +17,7 @@ pub type Selector = epoll::EpollSelector;
 compile_error!("externally-driven-async-rt supports only macOS and Linux");
 
 pub(crate) use self::{
-    direction::Direction,
-    io_action::IoAction,
+    direction::{Direction, Directions},
     io_change::IoChange,
     kernel_timer::KernelTimer,
     selector_event::{EVENTS_PER_CALL, SelectorEvent},

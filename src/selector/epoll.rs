@@ -15,8 +15,7 @@ use rustix::{
 
 use crate::{
     selector::{
-        Direction, EVENTS_PER_CALL, IoAction, IoChange, KernelTimer, SelectorEvent, TimerChange,
-        Token,
+        Directions, EVENTS_PER_CALL, IoChange, KernelTimer, SelectorEvent, TimerChange, Token,
     },
     strace::{syscall, syscall_end, syscall_start},
     time::Instant,
@@ -126,7 +125,25 @@ impl EpollSelector {
     fn consume(&self, event: Event) -> rustix::io::Result<Option<SelectorEvent>> {
         match event.data.u64() {
             TIMER_DATA => self.consume_timer(),
-            token => Ok(Some(SelectorEvent::Io(Token(token)))),
+            token => {
+                let ready = Self::ready(event.flags);
+                Ok((ready != Directions::Empty).then_some(SelectorEvent::Io {
+                    token: Token(token),
+                    ready,
+                }))
+            }
+        }
+    }
+
+    fn ready(flags: EventFlags) -> Directions {
+        let readable = flags
+            .intersects(EventFlags::IN | EventFlags::RDHUP | EventFlags::HUP | EventFlags::ERR);
+        let writable = flags.intersects(EventFlags::OUT | EventFlags::HUP | EventFlags::ERR);
+        match (readable, writable) {
+            (true, true) => Directions::Both,
+            (true, false) => Directions::Read,
+            (false, true) => Directions::Write,
+            (false, false) => Directions::Empty,
         }
     }
 
@@ -149,47 +166,44 @@ impl EpollSelector {
         // SAFETY: the callers (`flush`, `apply_now`) only pass fds that stay open for the
         // duration of this call.
         let fd = unsafe { BorrowedFd::borrow_raw(change.fd) };
-        match change.action {
-            IoAction::Arm => {
-                let interest = match change.direction {
-                    Direction::Read => EventFlags::IN,
-                    Direction::Write => EventFlags::OUT,
-                };
-                let data = EventData::new_u64(change.token.0);
-                let flags = interest | EventFlags::ONESHOT;
-                syscall_start!(
-                    "epoll_ctl",
-                    self.epoll,
-                    "EPOLL_CTL_MOD",
-                    fd,
-                    Event { flags, data }
-                );
-                let modified = epoll::modify(&self.epoll, fd, data, flags);
-                syscall_end!(modified);
-                if modified != Err(Errno::NOENT) {
-                    return modified;
-                }
-                syscall_start!(
-                    "epoll_ctl",
-                    self.epoll,
-                    "EPOLL_CTL_ADD",
-                    fd,
-                    Event { flags, data }
-                );
-                let added = epoll::add(&self.epoll, fd, data, flags);
-                syscall_end!(added);
-                added
-            }
-            IoAction::Disarm => {
+        let interest = match change.interest {
+            Directions::Empty => {
                 syscall_start!("epoll_ctl", self.epoll, "EPOLL_CTL_DEL", fd);
                 let deleted = epoll::delete(&self.epoll, fd);
                 syscall_end!(deleted);
-                match deleted {
+                return match deleted {
                     Err(Errno::NOENT) => Ok(()),
                     result => result,
-                }
+                };
             }
+            Directions::Read => EventFlags::IN,
+            Directions::Write => EventFlags::OUT,
+            Directions::Both => EventFlags::IN | EventFlags::OUT,
+        };
+        let data = EventData::new_u64(change.token.0);
+        let flags = interest | EventFlags::ONESHOT;
+        syscall_start!(
+            "epoll_ctl",
+            self.epoll,
+            "EPOLL_CTL_MOD",
+            fd,
+            Event { flags, data }
+        );
+        let modified = epoll::modify(&self.epoll, fd, data, flags);
+        syscall_end!(modified);
+        if modified != Err(Errno::NOENT) {
+            return modified;
         }
+        syscall_start!(
+            "epoll_ctl",
+            self.epoll,
+            "EPOLL_CTL_ADD",
+            fd,
+            Event { flags, data }
+        );
+        let added = epoll::add(&self.epoll, fd, data, flags);
+        syscall_end!(added);
+        added
     }
 
     fn apply_timer(&self, change: TimerChange) -> rustix::io::Result<()> {

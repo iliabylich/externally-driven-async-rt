@@ -1,4 +1,4 @@
-use core::{cell::RefCell, mem::MaybeUninit, time::Duration};
+use core::{cell::RefCell, ffi::c_void, mem::MaybeUninit, time::Duration};
 
 use rustix::{
     event::kqueue::{Event, EventFilter, EventFlags, kevent, kqueue},
@@ -8,7 +8,7 @@ use rustix::{
 
 use crate::{
     selector::{
-        Direction, EVENTS_PER_CALL, IoAction, IoChange, KernelTimer, SelectorEvent, TimerChange,
+        Direction, Directions, EVENTS_PER_CALL, IoChange, KernelTimer, SelectorEvent, TimerChange,
         Token,
     },
     strace::{syscall, syscall_end, syscall_start},
@@ -40,7 +40,7 @@ impl KqueueSelector {
     }
 
     pub(crate) fn apply_now(&self, change: IoChange) -> rustix::io::Result<()> {
-        self.submit([Self::io_kevent(change)])
+        self.submit(Self::io_kevents(change))
     }
 
     pub(crate) fn arm_timer(&self, deadline: Instant) {
@@ -58,7 +58,7 @@ impl KqueueSelector {
         let timer_change = self.timer.borrow_mut().flush(Instant::now());
         let changes = io_changes
             .into_iter()
-            .map(Self::io_kevent)
+            .flat_map(Self::io_kevents)
             .chain(timer_change.map(Self::timer_kevent));
         self.submit(changes)
     }
@@ -145,7 +145,14 @@ impl KqueueSelector {
     fn consume(&self, event: &Event) -> SelectorEvent {
         let token = Token(event.udata().addr() as u64);
         match event.filter() {
-            EventFilter::Read(_) | EventFilter::Write(_) => SelectorEvent::Io(token),
+            EventFilter::Read(_) => SelectorEvent::Io {
+                token,
+                ready: Directions::Read,
+            },
+            EventFilter::Write(_) => SelectorEvent::Io {
+                token,
+                ready: Directions::Write,
+            },
             EventFilter::Timer { .. } => {
                 self.timer.borrow_mut().fired();
                 SelectorEvent::Timer
@@ -172,16 +179,28 @@ impl KqueueSelector {
         )
     }
 
-    fn io_kevent(change: IoChange) -> Event {
-        let filter = match change.direction {
-            Direction::Read => EventFilter::Read(change.fd),
-            Direction::Write => EventFilter::Write(change.fd),
-        };
-        let flags = match change.action {
-            IoAction::Arm => EventFlags::ADD | EventFlags::ONESHOT,
-            IoAction::Disarm => EventFlags::DELETE,
-        };
+    fn io_kevents(change: IoChange) -> [Event; 2] {
         let udata = core::ptr::without_provenance_mut(change.token.0 as usize);
+        [
+            Self::io_kevent(
+                EventFilter::Read(change.fd),
+                change.interest.contains(Direction::Read),
+                udata,
+            ),
+            Self::io_kevent(
+                EventFilter::Write(change.fd),
+                change.interest.contains(Direction::Write),
+                udata,
+            ),
+        ]
+    }
+
+    fn io_kevent(filter: EventFilter, armed: bool, udata: *mut c_void) -> Event {
+        let flags = if armed {
+            EventFlags::ADD | EventFlags::ONESHOT
+        } else {
+            EventFlags::DELETE
+        };
         Event::new(filter, flags | EventFlags::RECEIPT, udata)
     }
 }

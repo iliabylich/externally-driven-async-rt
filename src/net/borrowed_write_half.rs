@@ -1,13 +1,11 @@
-use rustix::net::Shutdown;
-
 use crate::{context::Context, net::socket::Socket, state::State};
 
-pub struct WriteHalf {
-    socket: Socket,
+pub struct BorrowedWriteHalf<'s> {
+    socket: &'s Socket,
 }
 
-impl WriteHalf {
-    pub(super) fn new(socket: Socket) -> Self {
+impl<'s> BorrowedWriteHalf<'s> {
+    pub(super) fn new(socket: &'s Socket) -> Self {
         Self { socket }
     }
 
@@ -34,15 +32,5 @@ impl WriteHalf {
         buf: &'a [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.socket.write(ctx, buf)
-    }
-
-    pub fn shutdown(&self) -> rustix::io::Result<()> {
-        self.socket.shutdown(Shutdown::Write)
-    }
-}
-
-impl Drop for WriteHalf {
-    fn drop(&mut self) {
-        let _ = self.shutdown();
     }
 }

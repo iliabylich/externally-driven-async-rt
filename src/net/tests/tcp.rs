@@ -1,4 +1,9 @@
-use core::{future::pending, net::SocketAddr};
+use core::{
+    future::{pending, poll_fn},
+    net::SocketAddr,
+    pin::pin,
+    task::Poll,
+};
 
 use rustix::{
     fd::OwnedFd,
@@ -137,7 +142,7 @@ fn connect_to_a_closed_port_fails() {
 
 #[test]
 #[cfg_attr(miri, ignore)]
-fn halves_are_used_from_two_tasks() {
+fn borrowed_halves_read_and_write_concurrently_in_one_task() {
     const LEN: usize = 1 << 20;
     const CHUNK: usize = 512;
     let mut listener = TcpListener::bind(LOCALHOST).unwrap();
@@ -165,31 +170,47 @@ fn halves_are_used_from_two_tasks() {
                     }
                 }
             });
-            let stream = TcpStream::connect(&ctx, addr).await.unwrap();
-            let (mut read, mut write) = stream.into_split().unwrap();
-            let reader = ctx.spawn(async move |ctx| {
+            let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
+            let (mut read, mut write) = stream.split();
+            let mut reading = pin!(async {
                 let mut buf = [0; CHUNK];
                 let mut received = 0;
-                loop {
+                while received < LEN {
                     let len = read.read(&ctx, &mut buf).await.unwrap();
-                    if len == 0 {
-                        break;
-                    }
+                    assert_ne!(len, 0);
                     for (i, byte) in buf[..len].iter().enumerate() {
                         assert_eq!(*byte, (received + i) as u8);
                     }
                     received += len;
                 }
-                ctx.dispatch(received as u32);
+                received
             });
-            let mut sent = 0;
-            while sent < LEN {
-                let chunk: [u8; CHUNK] = core::array::from_fn(|i| (sent + i) as u8);
-                let len = CHUNK.min(LEN - sent);
-                sent += write.write(&ctx, &chunk[..len]).await.unwrap();
-            }
-            drop(write);
-            reader.await;
+            let mut writing = pin!(async {
+                let mut sent = 0;
+                while sent < LEN {
+                    let chunk: [u8; CHUNK] = core::array::from_fn(|i| (sent + i) as u8);
+                    let len = CHUNK.min(LEN - sent);
+                    sent += write.write(&ctx, &chunk[..len]).await.unwrap();
+                }
+            });
+            let (mut received, mut written) = (None, false);
+            poll_fn(|cx| {
+                if received.is_none()
+                    && let Poll::Ready(len) = reading.as_mut().poll(cx)
+                {
+                    received = Some(len);
+                }
+                if !written && writing.as_mut().poll(cx).is_ready() {
+                    written = true;
+                }
+                if received.is_some() && written {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            })
+            .await;
+            ctx.dispatch(received.unwrap() as u32);
             pending::<()>().await;
         },
     )

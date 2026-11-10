@@ -1,4 +1,5 @@
 use core::{
+    cell::Cell,
     future::Future,
     pin::Pin,
     task::{Context as TaskContext, Poll},
@@ -9,7 +10,12 @@ use rustix::{
     io::Errno,
 };
 
-use crate::{context::Context, io::IoRegistration, selector::Direction, state::State};
+use crate::{
+    context::Context,
+    io::{IoIndex, IoRegistration},
+    selector::Direction,
+    state::State,
+};
 
 pub(super) struct Retry<
     'a,
@@ -32,6 +38,7 @@ pub(super) struct Retry<
         MAX_IO_COUNT,
     >,
     fd: &'a OwnedFd,
+    cached: &'a Cell<Option<IoIndex>>,
     direction: Direction,
     op: F,
     registration: Option<IoRegistration<'a, MAX_IO_COUNT>>,
@@ -72,12 +79,14 @@ impl<
             MAX_IO_COUNT,
         >,
         fd: &'a OwnedFd,
+        cached: &'a Cell<Option<IoIndex>>,
         direction: Direction,
         op: F,
     ) -> Self {
         Self {
             ctx,
             fd,
+            cached,
             direction,
             op,
             registration: None,
@@ -115,7 +124,12 @@ impl<
     fn poll(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         let registration = this.registration.get_or_insert_with(|| {
-            IoRegistration::new(this.ctx.storage(), this.fd.as_fd(), this.direction)
+            IoRegistration::new(
+                this.ctx.storage(),
+                this.fd.as_fd(),
+                this.cached,
+                this.direction,
+            )
         });
         loop {
             if this.waiting && registration.poll_wait(&mut this.waiting, cx).is_pending() {

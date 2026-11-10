@@ -100,10 +100,8 @@ impl<
             let full = self.selector().poll_nonblocking(&mut events)?;
             for event in events.iter().map_while(|event| *event) {
                 match event {
-                    SelectorEvent::Io(token) => {
-                        if let Some(waker) = self.io_waiters().take_waker(token) {
-                            waker.wake();
-                        }
+                    SelectorEvent::Io { token, ready } => {
+                        self.io_waiters().wake_ready(token, ready);
                     }
                     SelectorEvent::Timer => {
                         let now = Instant::now();

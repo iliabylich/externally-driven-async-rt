@@ -1,11 +1,11 @@
 use crate::{context::Context, net::socket::Socket, state::State};
 
-pub struct ReadHalf {
-    socket: Socket,
+pub struct BorrowedReadHalf<'s> {
+    socket: &'s Socket,
 }
 
-impl ReadHalf {
-    pub(super) fn new(socket: Socket) -> Self {
+impl<'s> BorrowedReadHalf<'s> {
+    pub(super) fn new(socket: &'s Socket) -> Self {
         Self { socket }
     }
 
