@@ -80,9 +80,9 @@ impl<
         Fut: Future<Output = ()> + 'a,
     {
         let Self { storage, id } = self;
-        storage.tasks.spawn_reserved(id, f(Context::new(storage)));
+        storage.tasks().spawn_reserved(id, f(Context::new(storage)));
         core::mem::forget(self);
-        JoinHandle::new(storage.tasks, id)
+        JoinHandle::new(storage.tasks(), id)
     }
 }
 
@@ -105,7 +105,7 @@ impl<
     >
 {
     fn drop(&mut self) {
-        self.storage.tasks.release(self.id);
+        self.storage.tasks().release(self.id);
     }
 }
 

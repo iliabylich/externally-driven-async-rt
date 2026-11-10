@@ -143,7 +143,7 @@ impl KqueueSelector {
     }
 
     fn consume(&self, event: &Event) -> SelectorEvent {
-        let token = Token(event.udata().addr() as u64);
+        let token = Token::from_bits(event.udata().addr() as u64);
         match event.filter() {
             EventFilter::Read(_) => SelectorEvent::Io {
                 token,
@@ -180,16 +180,16 @@ impl KqueueSelector {
     }
 
     fn io_kevents(change: IoChange) -> [Event; 2] {
-        let udata = core::ptr::without_provenance_mut(change.token.0 as usize);
+        let udata = core::ptr::without_provenance_mut(change.token().to_bits() as usize);
         [
             Self::io_kevent(
-                EventFilter::Read(change.fd),
-                change.interest.contains(Direction::Read),
+                EventFilter::Read(change.fd()),
+                change.interest().contains(Direction::Read),
                 udata,
             ),
             Self::io_kevent(
-                EventFilter::Write(change.fd),
-                change.interest.contains(Direction::Write),
+                EventFilter::Write(change.fd()),
+                change.interest().contains(Direction::Write),
                 udata,
             ),
         ]

@@ -23,7 +23,7 @@ pub struct EventLoop<
     const MAX_TIMERS_COUNT: usize,
     const MAX_IO_COUNT: usize,
 > {
-    pub(crate) storage: LoopStorageGuard<
+    storage: LoopStorageGuard<
         'a,
         S,
         MAX_TASKS_COUNT,
@@ -83,7 +83,7 @@ impl<
         let storage = storage.claim(selector, state);
         let event_loop = Self { storage };
         Context::spawn_root(storage, f);
-        match storage.tasks.run_ready() {
+        match storage.tasks().run_ready() {
             RootStatus::Running => {}
             RootStatus::Finished => return Err(Error::RootFinished),
         }
@@ -93,15 +93,15 @@ impl<
 
     pub fn drain_events_without_blocking(&mut self) -> Result<(), Error> {
         let storage = self.storage;
-        if let Root::Finished = storage.tasks.root() {
+        if let Root::Finished = storage.tasks().root() {
             return Err(Error::RootFinished);
         }
         let status = loop {
             storage.process_selector_events().map_err(Error::Io)?;
-            if !storage.tasks.has_ready() {
+            if !storage.tasks().has_ready() {
                 break RootStatus::Running;
             }
-            if storage.tasks.run_ready() == RootStatus::Finished {
+            if storage.tasks().run_ready() == RootStatus::Finished {
                 break RootStatus::Finished;
             }
         };
@@ -118,13 +118,28 @@ impl<
 
     fn finish_drain(&self, status: RootStatus) -> Result<(), Error> {
         if status == RootStatus::Finished {
-            self.storage.tasks.drop_all();
+            self.storage.tasks().drop_all();
         }
         self.storage.flush().map_err(Error::Io)?;
         match status {
             RootStatus::Running => Ok(()),
             RootStatus::Finished => Err(Error::RootFinished),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn storage(
+        &self,
+    ) -> LoopStorageGuard<
+        'a,
+        S,
+        MAX_TASKS_COUNT,
+        MAX_TASK_SIZE,
+        MAX_ROOT_TASK_SIZE,
+        MAX_TIMERS_COUNT,
+        MAX_IO_COUNT,
+    > {
+        self.storage
     }
 }
 

@@ -1,7 +1,7 @@
 mod link;
 
 use core::{
-    sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering::Relaxed},
+    sync::atomic::{AtomicU32, AtomicUsize, Ordering::Relaxed},
     task::{RawWaker, RawWakerVTable, Waker},
 };
 
@@ -32,18 +32,10 @@ impl<const N: usize> WakeQueue<N> {
                 "wake queue capacity must be less than u32::MAX"
             );
         }
-        let mut links = [const {
-            Link {
-                queue: AtomicPtr::new(core::ptr::null_mut()),
-                slot: 0,
-                queued: AtomicBool::new(false),
-                next: AtomicU32::new(NONE),
-                generation: AtomicU64::new(UNTRACKED),
-            }
-        }; N];
+        let mut links = [const { Link::new(0) }; N];
         let mut slot = 0;
         while slot < N {
-            links[slot].slot = slot as u32;
+            links[slot] = Link::new(slot as u32);
             slot += 1;
         }
         Self {
@@ -66,8 +58,7 @@ impl<const N: usize> WakeQueue<N> {
 
     pub(crate) fn waker(&'static self, slot: u32) -> Waker {
         let link = &self.links[slot as usize];
-        link.queue
-            .store(core::ptr::from_ref(self).cast_mut().cast(), Relaxed);
+        link.set_queue(core::ptr::from_ref(self).cast_mut().cast());
         // SAFETY: the vtable functions below uphold the `RawWaker` contract for a pointer to a
         // link of a queue that is never freed, whose `queue` was just set.
         unsafe {
@@ -79,34 +70,30 @@ impl<const N: usize> WakeQueue<N> {
     }
 
     fn generation(&self, slot: u32) -> Option<u32> {
-        let generation = self.links[slot as usize].generation.load(Relaxed);
+        let generation = self.links[slot as usize].generation();
         (generation != UNTRACKED).then_some(generation as u32)
     }
 
     pub(crate) fn track(&self, id: TaskId) {
         let generation = u64::from(id.generation());
-        self.links[id.slot() as usize]
-            .generation
-            .store(generation, Relaxed);
+        self.links[id.slot() as usize].set_generation(generation);
     }
 
     pub(crate) fn untrack(&self, id: TaskId) {
         if self.generation(id.slot()) == Some(id.generation()) {
-            self.links[id.slot() as usize]
-                .generation
-                .store(UNTRACKED, Relaxed);
+            self.links[id.slot() as usize].set_generation(UNTRACKED);
         }
     }
 
     pub(crate) fn push(&self, slot: u32) {
         let link = &self.links[slot as usize];
-        if self.generation(slot).is_none() || link.queued.load(Relaxed) {
+        if self.generation(slot).is_none() || link.is_queued() {
             return;
         }
-        link.queued.store(true, Relaxed);
-        link.next.store(NONE, Relaxed);
+        link.set_queued(true);
+        link.set_next(NONE);
         match decode(self.tail.load(Relaxed)) {
-            Some(tail) => self.links[tail as usize].next.store(slot, Relaxed),
+            Some(tail) => self.links[tail as usize].set_next(slot),
             None => self.head.store(slot, Relaxed),
         }
         self.tail.store(slot, Relaxed);
@@ -124,13 +111,13 @@ impl<const N: usize> WakeQueue<N> {
     fn pop_slot(&self) -> Option<u32> {
         let slot = decode(self.head.load(Relaxed))?;
         let link = &self.links[slot as usize];
-        let next = link.next.load(Relaxed);
+        let next = link.next();
         self.head.store(next, Relaxed);
         if decode(next).is_none() {
             self.tail.store(NONE, Relaxed);
         }
-        link.queued.store(false, Relaxed);
-        link.next.store(NONE, Relaxed);
+        link.set_queued(false);
+        link.set_next(NONE);
         Some(slot)
     }
 
@@ -158,15 +145,16 @@ unsafe fn wake<const N: usize>(ptr: *const ()) {
     // SAFETY: `ptr` comes from `WakeQueue::waker`: it points to a link of a queue that is never
     // freed.
     let link = unsafe { &*ptr.cast::<Link>() };
-    // SAFETY: `WakeQueue::waker` stored its `&'static self` here before creating the waker, and
-    // whatever moved the waker to this thread made that store visible.
-    let queue = unsafe { &*link.queue.load(Relaxed).cast_const().cast::<WakeQueue<N>>() };
+    // SAFETY: `WakeQueue::waker`, the only caller of `Link::set_queue`, stored its `&'static self`
+    // here before creating the waker, and whatever moved the waker to this thread made that store
+    // visible.
+    let queue = unsafe { &*link.queue().cast_const().cast::<WakeQueue<N>>() };
     assert_eq!(
         queue.owner.load(Relaxed),
         ThreadId::current().to_raw(),
         "a Waker must only be woken on the thread of its EventLoop"
     );
-    queue.push(link.slot);
+    queue.push(link.slot());
 }
 
 fn drop_waker(_: *const ()) {}

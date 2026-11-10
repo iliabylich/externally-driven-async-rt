@@ -24,7 +24,7 @@ pub(crate) use self::{
 
 pub(crate) const TEST_MAX_TASKS_COUNT: usize = 16;
 pub(crate) const TEST_MAX_TASK_SIZE: usize = 1024;
-pub(crate) const TEST_MAX_ROOT_TASK_SIZE: usize = 2048;
+const TEST_MAX_ROOT_TASK_SIZE: usize = 2048;
 pub(crate) const TEST_MAX_TIMERS_COUNT: usize = 16;
 pub(crate) const TEST_MAX_IO_COUNT: usize = 8;
 

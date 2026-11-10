@@ -73,7 +73,7 @@ fn drain_receive_buffer(fd: &OwnedFd) {
 }
 
 fn registrations(event_loop: &TestLoop<Log>) -> usize {
-    event_loop.storage.io_waiters().count()
+    event_loop.storage().io_waiters().count()
 }
 
 #[test]

@@ -5,7 +5,7 @@ use rustix::{
     net::{AddressFamily, SocketAddrAny, SocketAddrUnix, addr::SocketAddrArg},
 };
 
-pub(super) trait Address: SocketAddrArg + Sized {
+pub(crate) trait Address: SocketAddrArg + Sized {
     fn family(&self) -> AddressFamily;
 
     fn from_any(addr: Option<SocketAddrAny>) -> rustix::io::Result<Self>;

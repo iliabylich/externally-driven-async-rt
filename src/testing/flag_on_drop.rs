@@ -5,7 +5,13 @@ use core::{
     task::{Context, Poll},
 };
 
-pub(crate) struct FlagOnDrop<'a>(pub(crate) &'a Cell<bool>);
+pub(crate) struct FlagOnDrop<'a>(&'a Cell<bool>);
+
+impl<'a> FlagOnDrop<'a> {
+    pub(crate) fn new(flag: &'a Cell<bool>) -> Self {
+        Self(flag)
+    }
+}
 
 impl Drop for FlagOnDrop<'_> {
     fn drop(&mut self) {

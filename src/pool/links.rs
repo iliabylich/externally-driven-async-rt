@@ -1,5 +1,5 @@
 #[derive(Clone, Copy)]
-pub(super) enum Links {
+pub(crate) enum Links {
     Occupied {
         prev: Option<u32>,
         next: Option<u32>,

@@ -5,7 +5,7 @@ pub struct BorrowedReadHalf<'s> {
 }
 
 impl<'s> BorrowedReadHalf<'s> {
-    pub(super) fn new(socket: &'s Socket) -> Self {
+    pub(crate) fn new(socket: &'s Socket) -> Self {
         Self { socket }
     }
 

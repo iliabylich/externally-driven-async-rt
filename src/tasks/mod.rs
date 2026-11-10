@@ -11,11 +11,7 @@ mod task_slot;
 mod tasks_guard;
 mod wake_queue;
 
-use core::{
-    cell::{Cell, UnsafeCell},
-    marker::PhantomData,
-    mem::MaybeUninit,
-};
+use core::cell::Cell;
 
 use self::{aligned16::Aligned16, task_slot::TaskSlot};
 pub use self::{
@@ -50,17 +46,10 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
 {
     pub(crate) const fn new() -> Self {
         Self {
-            pool: ObjectPool::new(
-                [const {
-                    TaskEntry {
-                        task: Cell::new(TaskSlot::Empty),
-                        join_waiter: WakerSlot::new(),
-                    }
-                }; MAX_TASKS_COUNT],
-            ),
+            pool: ObjectPool::new([const { TaskEntry::new() }; MAX_TASKS_COUNT]),
             queue: WakeQueue::new(),
-            slab: [const { Aligned16(UnsafeCell::new(MaybeUninit::uninit())) }; MAX_TASKS_COUNT],
-            root_region: Aligned16(UnsafeCell::new(MaybeUninit::uninit())),
+            slab: [const { Aligned16::new() }; MAX_TASKS_COUNT],
+            root_region: Aligned16::new(),
             root: Cell::new(Root::Unset),
             slot_waiter: WakerSlot::new(),
         }
@@ -70,10 +59,7 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
         &'static self,
     ) -> TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE> {
         self.queue.claim();
-        TasksGuard {
-            tasks: self,
-            futures: PhantomData,
-        }
+        TasksGuard::new(self)
     }
 }
 

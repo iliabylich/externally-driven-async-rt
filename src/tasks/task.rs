@@ -93,7 +93,7 @@ mod tests {
     fn dropping_drops_the_future_in_place() {
         let dropped = Cell::new(false);
         let mut memory = MaybeUninit::uninit();
-        let task = write_task(&mut memory, FlagOnDrop(&dropped));
+        let task = write_task(&mut memory, FlagOnDrop::new(&dropped));
         drop(task);
         assert!(dropped.get());
     }

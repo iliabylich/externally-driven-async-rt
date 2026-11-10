@@ -13,7 +13,7 @@ pub struct TcpStream {
 }
 
 impl TcpStream {
-    pub(super) fn new(socket: Socket) -> Self {
+    pub(crate) fn new(socket: Socket) -> Self {
         Self { socket }
     }
 

@@ -91,8 +91,8 @@ impl<
         F: FnOnce(Self) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
-        let id = self.storage.tasks.spawn(f(*self));
-        JoinHandle::new(self.storage.tasks, id)
+        let id = self.storage.tasks().spawn(f(*self));
+        JoinHandle::new(self.storage.tasks(), id)
     }
 
     pub fn reserve_task(
@@ -124,7 +124,7 @@ impl<
         F: FnOnce(Self) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
-        storage.tasks.spawn_root(f(Self::new(storage)));
+        storage.tasks().spawn_root(f(Self::new(storage)));
     }
 
     pub fn sleep(&self, duration: Duration) -> Sleep<'_, MAX_TIMERS_COUNT> {

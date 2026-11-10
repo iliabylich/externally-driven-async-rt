@@ -11,7 +11,7 @@ pub struct UnixStream {
 }
 
 impl UnixStream {
-    pub(super) fn new(socket: Socket) -> Self {
+    pub(crate) fn new(socket: Socket) -> Self {
         Self { socket }
     }
 

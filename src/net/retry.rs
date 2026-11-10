@@ -17,7 +17,7 @@ use crate::{
     state::State,
 };
 
-pub(super) struct Retry<
+pub(crate) struct Retry<
     'a,
     'ctx,
     S: State,
@@ -68,7 +68,7 @@ impl<
         F,
     >
 {
-    pub(super) fn new(
+    pub(crate) fn new(
         ctx: &'a Context<
             'ctx,
             S,

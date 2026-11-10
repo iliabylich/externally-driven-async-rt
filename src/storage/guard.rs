@@ -18,7 +18,7 @@ pub(crate) struct LoopStorageGuard<
     const MAX_IO_COUNT: usize,
     Sel = Selector,
 > {
-    pub(super) storage: &'static LoopStorage<
+    storage: &'static LoopStorage<
         S,
         MAX_TASKS_COUNT,
         MAX_TASK_SIZE,
@@ -26,8 +26,8 @@ pub(crate) struct LoopStorageGuard<
         MAX_TIMERS_COUNT,
         MAX_IO_COUNT,
     >,
-    pub(super) selector: &'a Sel,
-    pub(crate) tasks: TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
+    selector: &'a Sel,
+    tasks: TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
 }
 
 impl<
@@ -51,6 +51,31 @@ impl<
         Sel,
     >
 {
+    pub(super) fn new(
+        storage: &'static LoopStorage<
+            S,
+            MAX_TASKS_COUNT,
+            MAX_TASK_SIZE,
+            MAX_ROOT_TASK_SIZE,
+            MAX_TIMERS_COUNT,
+            MAX_IO_COUNT,
+        >,
+        selector: &'a Sel,
+        tasks: TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
+    ) -> Self {
+        Self {
+            storage,
+            selector,
+            tasks,
+        }
+    }
+
+    pub(crate) fn tasks(
+        self,
+    ) -> TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE> {
+        self.tasks
+    }
+
     pub(crate) fn timers(self) -> &'static Timers<MAX_TIMERS_COUNT> {
         &self.storage.timers
     }

@@ -1,4 +1,4 @@
-use core::{cell::Cell, future::Future, marker::PhantomData, ptr::NonNull, task::Waker};
+use core::{cell::Cell, future::Future, marker::PhantomData, task::Waker};
 
 use crate::tasks::{JoinStatus, Root, RootStatus, Task, TaskEntry, TaskId, TaskSlot, Tasks};
 
@@ -8,13 +8,22 @@ pub(crate) struct TasksGuard<
     const MAX_TASK_SIZE: usize,
     const MAX_ROOT_TASK_SIZE: usize,
 > {
-    pub(super) tasks: &'static Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
-    pub(super) futures: PhantomData<(Cell<&'a ()>, *const ())>,
+    tasks: &'static Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
+    futures: PhantomData<(Cell<&'a ()>, *const ())>,
 }
 
 impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize>
     TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
 {
+    pub(super) fn new(
+        tasks: &'static Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
+    ) -> Self {
+        Self {
+            tasks,
+            futures: PhantomData,
+        }
+    }
+
     pub(crate) fn root(self) -> Root {
         self.tasks.root.get()
     }
@@ -32,7 +41,7 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
     pub(crate) fn set_join_waiter(self, id: TaskId, waker: &Waker) -> JoinStatus {
         match self.tasks.pool.get(id) {
             Some(entry) if entry.has_task() => {
-                entry.join_waiter.store(waker);
+                entry.set_join_waiter(waker);
                 JoinStatus::Running
             }
             _ => JoinStatus::Finished,
@@ -108,14 +117,15 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
             .get(id)
             .expect("a task is written into a reserved slot");
         assert!(!entry.has_task(), "a reserved slot holds no task yet");
-        let memory = NonNull::from(&tasks.slab[id.slot() as usize].0).cast();
+        let memory = tasks.slab[id.slot() as usize].as_ptr();
         // SAFETY: `Fut` fits the slab's blocks (checked above). The slot's block is unused: the
         // slot is reserved and holds no task (checked above), and a slot is only freed after its
         // future was dropped. The slot stays reserved until this future is dropped. `Tasks` keeps
         // its futures in fields private to the `tasks` module, where only `TasksGuard` touches
-        // them, and `Tasks::claim` creates a guard once per `Tasks` (copies share its invariant
-        // `'a`), so every future in it was written through a guard with this same `'a` (which
-        // `Fut` outlives), and is polled and dropped only through one, before `'a` ends.
+        // them, and only `Tasks::claim` calls `TasksGuard::new`, once per `Tasks` (copies share
+        // its invariant `'a`), so every future in it was written through a guard with this same
+        // `'a` (which `Fut` outlives), and is polled and dropped only through one, before `'a`
+        // ends.
         let future = unsafe { Task::write(memory, future) };
         self.occupy(id, entry, future);
     }
@@ -155,21 +165,21 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
         // SAFETY: `Fut` fits the root region (asserted above), and the region is unused: the root
         // is still `Unset` (asserted above), and leaves that state below, so this is the only
         // call that gets here. `Fut` outlives its use as in `insert`.
-        let future = unsafe { Task::write(NonNull::from(&tasks.root_region.0).cast(), future) };
+        let future = unsafe { Task::write(tasks.root_region.as_ptr(), future) };
         self.occupy(id, entry, future);
         tasks.queue.push(id.slot());
         tasks.root.set(Root::Running(id));
     }
 
     fn occupy(self, id: TaskId, entry: &TaskEntry, future: Task) {
-        entry.task.set(TaskSlot::Idle(future));
-        entry.join_waiter.take();
+        entry.set_task(TaskSlot::Idle(future));
+        entry.take_join_waiter();
         self.tasks.queue.track(id);
     }
 
     fn free(self, id: TaskId, entry: &TaskEntry, task: Task) -> Option<Waker> {
-        entry.task.set(TaskSlot::Empty);
-        let join_waiter = entry.join_waiter.take();
+        entry.set_task(TaskSlot::Empty);
+        let join_waiter = entry.take_join_waiter();
         self.tasks.queue.untrack(id);
         drop(task);
         self.release(id);
@@ -186,7 +196,7 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
                 .pool
                 .get(id)
                 .expect("the queue only yields tracked tasks");
-            let mut task = match entry.task.replace(TaskSlot::Polling) {
+            let mut task = match entry.replace_task(TaskSlot::Polling) {
                 TaskSlot::Idle(task) => task,
                 TaskSlot::Polling => panic!("a task can't be polled re-entrantly"),
                 TaskSlot::Empty => unreachable!("an allocated task always has a future"),
@@ -194,7 +204,7 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
             let waker = tasks.queue.waker(id.slot());
             let mut cx = core::task::Context::from_waker(&waker);
             if task.poll(&mut cx).is_pending() {
-                entry.task.set(TaskSlot::Idle(task));
+                entry.set_task(TaskSlot::Idle(task));
                 continue;
             }
             if let Some(join_waiter) = self.free(id, entry, task) {
@@ -211,7 +221,7 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
 
     pub(crate) fn drop_all(self) {
         while let Some((id, entry)) = self.tasks.pool.iter().find(|(_, entry)| entry.is_idle()) {
-            let TaskSlot::Idle(task) = entry.task.take() else {
+            let TaskSlot::Idle(task) = entry.replace_task(TaskSlot::Empty) else {
                 unreachable!("`is_idle` checked the slot");
             };
             self.free(id, entry, task);

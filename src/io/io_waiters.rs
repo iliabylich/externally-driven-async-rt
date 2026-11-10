@@ -6,7 +6,6 @@ use crate::{
     io::{IoIndex, IoWaiter},
     pool::ObjectPool,
     selector::{Direction, Directions, IoChange, Token},
-    waker_slot::WakerSlot,
 };
 
 pub(crate) struct IoWaiters<const N: usize> {
@@ -16,17 +15,7 @@ pub(crate) struct IoWaiters<const N: usize> {
 impl<const N: usize> IoWaiters<N> {
     pub(crate) const fn new() -> Self {
         Self {
-            pool: ObjectPool::new(
-                [const {
-                    IoWaiter {
-                        fd: Cell::new(-1),
-                        registered: Cell::new(Directions::Empty),
-                        armed: Cell::new(Directions::Empty),
-                        reader: WakerSlot::new(),
-                        writer: WakerSlot::new(),
-                    }
-                }; N],
-            ),
+            pool: ObjectPool::new([const { IoWaiter::new() }; N]),
         }
     }
 
@@ -36,43 +25,31 @@ impl<const N: usize> IoWaiters<N> {
         fd: RawFd,
         direction: Direction,
     ) -> IoIndex {
-        let index = cached
+        let (index, io) = match cached
             .get()
-            .filter(|index| self.pool.get(*index).is_some_and(|io| io.fd.get() == fd))
-            .unwrap_or_else(|| self.alloc(fd));
+            .and_then(|index| Some((index, self.pool.get(index)?)))
+            .filter(|(_, io)| io.fd() == fd)
+        {
+            Some(entry) => entry,
+            None => self.alloc(fd),
+        };
         cached.set(Some(index));
-        let io = self.pool.get(index).expect("IO is not registered");
-        let registered = io.registered.get();
-        assert!(
-            !registered.contains(direction),
-            "fd {fd} already has a {direction:?} registration"
-        );
-        io.registered.set(registered.with(direction));
+        io.register(direction);
         index
     }
 
-    fn alloc(&self, fd: RawFd) -> IoIndex {
+    fn alloc(&self, fd: RawFd) -> (IoIndex, &IoWaiter) {
         let Some((index, io)) = self.pool.alloc() else {
             panic!("more than {N} concurrently registered fds");
         };
-        io.fd.set(fd);
-        io.registered.set(Directions::Empty);
-        io.armed.set(Directions::Empty);
-        io.reader.take();
-        io.writer.take();
-        index
+        io.reset(fd);
+        (index, io)
     }
 
     pub(crate) fn release(&self, index: IoIndex, direction: Direction) -> Option<IoChange> {
         let io = self.pool.get(index)?;
-        io.waker(direction).take();
-        io.registered.set(io.registered.get().without(direction));
-        let change = io.armed.get().contains(direction).then(|| {
-            let change = io.change(index);
-            io.armed.set(change.interest);
-            change
-        });
-        if io.registered.get() == Directions::Empty {
+        let change = io.release(index, direction);
+        if !io.is_registered() {
             self.pool.free(index);
         }
         change
@@ -96,36 +73,26 @@ impl<const N: usize> IoWaiters<N> {
     }
 
     pub(crate) fn wake_ready(&self, token: Token, ready: Directions) {
-        let Some(io) = self.pool.get(IoIndex::from_bits(token.0)) else {
-            return;
-        };
-        io.armed.set(Directions::Empty);
-        for direction in [Direction::Read, Direction::Write] {
-            if ready.contains(direction)
-                && let Some(waker) = io.waker(direction).take()
-            {
-                waker.wake();
-            }
+        if let Some(io) = self.pool.get(IoIndex::from_bits(token.to_bits())) {
+            io.wake(ready);
         }
     }
 
     pub(crate) fn pending_changes(&self) -> impl Iterator<Item = IoChange> + '_ {
         self.pool
             .iter()
-            .filter(|(_, io)| io.interest() != io.armed.get())
-            .map(|(index, io)| io.change(index))
+            .filter_map(|(index, io)| io.pending_change(index))
     }
 
     pub(crate) fn mark_flushed(&self) {
         for (_, io) in self.pool.iter() {
-            io.armed.set(io.interest());
+            io.mark_flushed();
         }
     }
 
     pub(crate) fn clear(&self) {
         for (index, io) in self.pool.iter() {
-            io.reader.take();
-            io.writer.take();
+            io.clear();
             self.pool.free(index);
         }
     }
@@ -155,11 +122,7 @@ mod tests {
     }
 
     fn change(index: IoIndex, fd: i32, interest: Directions) -> IoChange {
-        IoChange {
-            token: Token(index.to_bits()),
-            fd,
-            interest,
-        }
+        IoChange::new(Token::from_bits(index.to_bits()), fd, interest)
     }
 
     #[test]
@@ -265,7 +228,7 @@ mod tests {
         io_waiters.set_waker(index, Direction::Write, Waker::noop());
         io_waiters.mark_flushed();
 
-        io_waiters.wake_ready(Token(index.to_bits()), Directions::Read);
+        io_waiters.wake_ready(Token::from_bits(index.to_bits()), Directions::Read);
         assert!(!io_waiters.has_waker(index, Direction::Read));
         assert!(io_waiters.has_waker(index, Direction::Write));
         assert_pending_changes(io_waiters, [change(index, 3, Directions::Write)]);
@@ -281,7 +244,7 @@ mod tests {
         io_waiters.set_waker(index, Direction::Read, Waker::noop());
         io_waiters.mark_flushed();
 
-        io_waiters.wake_ready(Token(stale.to_bits()), Directions::Both);
+        io_waiters.wake_ready(Token::from_bits(stale.to_bits()), Directions::Both);
         assert!(io_waiters.has_waker(index, Direction::Read));
         assert_pending_changes(io_waiters, []);
     }

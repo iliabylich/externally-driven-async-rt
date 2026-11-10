@@ -9,32 +9,20 @@ use crate::{
 };
 
 fn arm(token: u64, fd: &OwnedFd, direction: Direction) -> IoChange {
-    IoChange {
-        token: Token(token),
-        fd: fd.as_raw_fd(),
-        interest: direction.into(),
-    }
+    IoChange::new(Token::from_bits(token), fd.as_raw_fd(), direction.into())
 }
 
 fn arm_both(token: u64, fd: &OwnedFd) -> IoChange {
-    IoChange {
-        token: Token(token),
-        fd: fd.as_raw_fd(),
-        interest: Directions::Both,
-    }
+    IoChange::new(Token::from_bits(token), fd.as_raw_fd(), Directions::Both)
 }
 
 fn disarm(token: u64, fd: &OwnedFd) -> IoChange {
-    IoChange {
-        token: Token(token),
-        fd: fd.as_raw_fd(),
-        interest: Directions::Empty,
-    }
+    IoChange::new(Token::from_bits(token), fd.as_raw_fd(), Directions::Empty)
 }
 
 fn ready(token: u64, direction: Direction) -> SelectorEvent {
     SelectorEvent::Io {
-        token: Token(token),
+        token: Token::from_bits(token),
         ready: direction.into(),
     }
 }
@@ -63,7 +51,7 @@ fn ready_directions(selector: &Selector, token: u64) -> Directions {
         SelectorEvent::Io {
             token: event_token,
             ready,
-        } if event_token == Token(token) => [Direction::Read, Direction::Write]
+        } if event_token == Token::from_bits(token) => [Direction::Read, Direction::Write]
             .into_iter()
             .filter(|direction| ready.contains(*direction))
             .fold(directions, Directions::with),

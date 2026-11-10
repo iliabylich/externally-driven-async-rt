@@ -92,7 +92,7 @@ impl<
 
     fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        let tasks = this.storage.tasks;
+        let tasks = this.storage.tasks();
         match tasks.reserve() {
             Some(id) => {
                 if this.waiting {
@@ -134,7 +134,7 @@ impl<
 {
     fn drop(&mut self) {
         if self.waiting {
-            self.storage.tasks.clear_slot_waiter();
+            self.storage.tasks().clear_slot_waiter();
         }
     }
 }

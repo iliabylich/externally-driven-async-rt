@@ -23,14 +23,14 @@ fn dropping_a_task_drops_its_future_and_finishes_it() {
         static STORAGE: TasksStorage<2> = TasksStorage::new();
         STORAGE.claim(&(), ())
     };
-    let tasks = &storage.tasks;
-    let id = storage.tasks.insert(FlagOnDrop(&dropped));
+    let tasks = storage.tasks();
+    let id = storage.tasks().insert(FlagOnDrop::new(&dropped));
     assert!(tasks.contains(id));
     assert_eq!(
         tasks.set_join_waiter(id, Waker::noop()),
         JoinStatus::Running
     );
-    storage.tasks.drop_all();
+    storage.tasks().drop_all();
     assert!(dropped.get());
     assert!(!tasks.contains(id));
     assert_eq!(tasks.count(), 0);
@@ -46,10 +46,10 @@ fn finished_task_id_never_matches_a_reused_slot() {
         static STORAGE: TasksStorage<1> = TasksStorage::new();
         STORAGE.claim(&(), ())
     };
-    let tasks = &storage.tasks;
-    let first = storage.tasks.insert(async {});
-    storage.tasks.drop_all();
-    let second = storage.tasks.insert(async {});
+    let tasks = storage.tasks();
+    let first = storage.tasks().insert(async {});
+    storage.tasks().drop_all();
+    let second = storage.tasks().insert(async {});
     assert_ne!(first, second);
     assert!(!tasks.contains(first));
     assert_eq!(
@@ -65,8 +65,8 @@ fn full_task_pool_panics() {
         static STORAGE: TasksStorage<1> = TasksStorage::new();
         STORAGE.claim(&(), ())
     };
-    storage.tasks.insert(async {});
-    storage.tasks.insert(async {});
+    storage.tasks().insert(async {});
+    storage.tasks().insert(async {});
 }
 
 #[test]
@@ -81,13 +81,13 @@ fn a_task_spawned_while_one_is_dropped_gets_another_slot() {
         fn drop(&mut self) {
             let id = self.id.get().unwrap();
             let storage = self.storage;
-            let tasks = &storage.tasks;
+            let tasks = storage.tasks();
             assert!(!tasks.contains(id));
             assert_eq!(
                 tasks.set_join_waiter(id, Waker::noop()),
                 JoinStatus::Finished
             );
-            self.spawned.set(Some(storage.tasks.insert(async {})));
+            self.spawned.set(Some(storage.tasks().insert(async {})));
         }
     }
 
@@ -97,17 +97,17 @@ fn a_task_spawned_while_one_is_dropped_gets_another_slot() {
         static STORAGE: TasksStorage<2> = TasksStorage::new();
         STORAGE.claim(&(), ())
     };
-    let tasks = &storage.tasks;
+    let tasks = storage.tasks();
     let guard = SpawnOnDrop {
         storage,
         id: &id,
         spawned: &spawned,
     };
-    let dropping = storage.tasks.insert(async move {
+    let dropping = storage.tasks().insert(async move {
         let _guard = guard;
     });
     id.set(Some(dropping));
-    storage.tasks.drop_all();
+    storage.tasks().drop_all();
     let spawned = spawned.get().unwrap();
     assert_ne!(spawned.slot(), dropping.slot());
     assert!(!tasks.contains(spawned));
@@ -119,14 +119,14 @@ fn full_size_futures_in_neighbouring_slots_do_not_overlap() {
         static STORAGE: TasksStorage<2> = TasksStorage::new();
         STORAGE.claim(&(), ())
     };
-    let tasks = &storage.tasks;
+    let tasks = storage.tasks();
     let ids = [1u8, 2].map(|byte| {
         let data = [byte; MAX_TASK_SIZE - 16];
-        storage.tasks.spawn(async move {
+        storage.tasks().spawn(async move {
             assert!(data.iter().all(|b| *b == byte));
         })
     });
-    assert_eq!(storage.tasks.run_ready(), RootStatus::Running);
+    assert_eq!(storage.tasks().run_ready(), RootStatus::Running);
     assert!(ids.iter().all(|id| !tasks.contains(*id)));
 }
 
@@ -138,7 +138,7 @@ fn a_too_big_future_panics() {
         STORAGE.claim(&(), ())
     };
     let data = [0u8; 8192];
-    storage.tasks.insert(async move {
+    storage.tasks().insert(async move {
         let _data = data;
     });
 }
@@ -152,12 +152,14 @@ fn futures_up_to_task_size_fit() {
         static STORAGE: LoopStorage<(), 2, 100, 0, 1, 1> = LoopStorage::new();
         STORAGE.claim(&(), ())
     };
-    let tasks = &storage.tasks;
+    let tasks = storage.tasks();
     let ids = [
-        storage.tasks.spawn(FixedFuture([1u8; 100])),
-        storage.tasks.spawn(FixedFuture((Align16, [2u8; 80]))),
+        storage.tasks().spawn(FixedFuture::new([1u8; 100])),
+        storage
+            .tasks()
+            .spawn(FixedFuture::new((Align16, [2u8; 80]))),
     ];
-    assert_eq!(storage.tasks.run_ready(), RootStatus::Running);
+    assert_eq!(storage.tasks().run_ready(), RootStatus::Running);
     assert!(ids.iter().all(|id| !tasks.contains(*id)));
 }
 
@@ -168,7 +170,7 @@ fn a_future_one_byte_bigger_than_task_size_panics() {
         static STORAGE: LoopStorage<(), 1, 100, 0, 1, 1> = LoopStorage::new();
         STORAGE.claim(&(), ())
     };
-    storage.tasks.insert(FixedFuture([0u8; 101]));
+    storage.tasks().insert(FixedFuture::new([0u8; 101]));
 }
 
 #[test]
@@ -181,7 +183,7 @@ fn an_overaligned_future_panics() {
         STORAGE.claim(&(), ())
     };
     let aligned = Aligned;
-    storage.tasks.insert(async move {
+    storage.tasks().insert(async move {
         let _aligned = aligned;
     });
 }
@@ -211,21 +213,21 @@ fn root_region_holds_a_root_bigger_than_a_slab_block() {
             LoopStorage::new();
         STORAGE.claim(&(), ())
     };
-    let tasks = &storage.tasks;
+    let tasks = storage.tasks();
     let root = BigRoot {
         data: [3; 9000],
-        _flag: FlagOnDrop(&dropped),
+        _flag: FlagOnDrop::new(&dropped),
     };
-    storage.tasks.spawn_root(root);
+    storage.tasks().spawn_root(root);
     let Root::Running(id) = tasks.root() else {
         panic!("spawning the root makes it running");
     };
-    let sibling = storage.tasks.insert(async {});
+    let sibling = storage.tasks().insert(async {});
     assert_ne!(sibling.slot(), id.slot());
-    assert_eq!(storage.tasks.run_ready(), RootStatus::Running);
+    assert_eq!(storage.tasks().run_ready(), RootStatus::Running);
     assert!(tasks.contains(id));
     assert!(!dropped.get());
-    storage.tasks.drop_all();
+    storage.tasks().drop_all();
     assert!(dropped.get());
 }
 
@@ -236,7 +238,7 @@ fn a_too_big_root_panics() {
         static STORAGE: TasksStorage<1> = TasksStorage::new();
         STORAGE.claim(&(), ())
     };
-    storage.tasks.spawn_root(FixedFuture(0u8));
+    storage.tasks().spawn_root(FixedFuture::new(0u8));
 }
 
 #[test]
@@ -246,8 +248,8 @@ fn spawning_a_second_root_panics() {
         static STORAGE: TasksStorage<2> = TasksStorage::new();
         STORAGE.claim(&(), ())
     };
-    storage.tasks.spawn_root(core::future::pending::<()>());
-    storage.tasks.spawn_root(core::future::pending::<()>());
+    storage.tasks().spawn_root(core::future::pending::<()>());
+    storage.tasks().spawn_root(core::future::pending::<()>());
 }
 
 fn counting(polls: &Cell<u32>) -> impl Future<Output = ()> {
@@ -263,9 +265,9 @@ fn finished_task_is_removed() {
         static STORAGE: TasksStorage<1> = TasksStorage::new();
         STORAGE.claim(&(), ())
     };
-    let id = storage.tasks.spawn(async {});
-    assert_eq!(storage.tasks.run_ready(), RootStatus::Running);
-    assert!(!storage.tasks.contains(id));
+    let id = storage.tasks().spawn(async {});
+    assert_eq!(storage.tasks().run_ready(), RootStatus::Running);
+    assert!(!storage.tasks().contains(id));
 }
 
 #[test]
@@ -275,14 +277,14 @@ fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
         static STORAGE: TasksStorage<1> = TasksStorage::new();
         STORAGE.claim(&(), ())
     };
-    storage.tasks.spawn(poll_fn(|cx| {
+    storage.tasks().spawn(poll_fn(|cx| {
         polls.set(polls.get() + 1);
         if polls.get() < 3 {
             cx.waker().wake_by_ref();
         }
         Poll::<()>::Pending
     }));
-    storage.tasks.run_ready();
+    storage.tasks().run_ready();
     assert_eq!(polls.get(), 3);
 }
 
@@ -293,12 +295,12 @@ fn task_spawned_during_a_poll_runs_in_the_same_run() {
         static STORAGE: TasksStorage<2> = TasksStorage::new();
         STORAGE.claim(&(), ())
     };
-    let tasks = storage.tasks;
+    let tasks = storage.tasks();
     let child = counting(&polls);
-    storage.tasks.spawn(async move {
+    storage.tasks().spawn(async move {
         tasks.spawn(child);
     });
-    storage.tasks.run_ready();
+    storage.tasks().run_ready();
     assert_eq!(polls.get(), 1);
 }
 
@@ -309,12 +311,12 @@ fn join_waiter_is_woken_when_the_task_finishes() {
         static STORAGE: TasksStorage<2> = TasksStorage::new();
         STORAGE.claim(&(), ())
     };
-    let waiter = storage.tasks.spawn(counting(&polls));
-    let task = storage.tasks.spawn(async {});
+    let waiter = storage.tasks().spawn(counting(&polls));
+    let task = storage.tasks().spawn(async {});
     storage
-        .tasks
-        .set_join_waiter(task, &storage.tasks.waker(waiter));
-    storage.tasks.run_ready();
+        .tasks()
+        .set_join_waiter(task, &storage.tasks().waker(waiter));
+    storage.tasks().run_ready();
     assert_eq!(polls.get(), 2);
 }
 
@@ -325,10 +327,10 @@ fn root_finishing_stops_the_run() {
         static STORAGE: TasksStorage<2> = TasksStorage::new();
         STORAGE.claim(&(), ())
     };
-    let root = storage.tasks.spawn(async {});
-    storage.tasks.set_root(Root::Running(root));
-    storage.tasks.spawn(counting(&polls));
-    assert_eq!(storage.tasks.run_ready(), RootStatus::Finished);
+    let root = storage.tasks().spawn(async {});
+    storage.tasks().set_root(Root::Running(root));
+    storage.tasks().spawn(counting(&polls));
+    assert_eq!(storage.tasks().run_ready(), RootStatus::Finished);
     assert_eq!(polls.get(), 0);
 }
 
@@ -339,13 +341,13 @@ fn spawning_into_a_reserved_slot_queues_the_task() {
         static STORAGE: TasksStorage<1> = TasksStorage::new();
         STORAGE.claim(&(), ())
     };
-    let id = storage.tasks.reserve().unwrap();
-    assert!(!storage.tasks.contains(id));
-    assert_eq!(storage.tasks.reserve(), None);
-    storage.tasks.spawn_reserved(id, counting(&polls));
-    storage.tasks.run_ready();
+    let id = storage.tasks().reserve().unwrap();
+    assert!(!storage.tasks().contains(id));
+    assert_eq!(storage.tasks().reserve(), None);
+    storage.tasks().spawn_reserved(id, counting(&polls));
+    storage.tasks().run_ready();
     assert_eq!(polls.get(), 1);
-    assert!(storage.tasks.contains(id));
+    assert!(storage.tasks().contains(id));
 }
 
 #[test]
@@ -355,14 +357,16 @@ fn releasing_a_slot_wakes_the_slot_waiter() {
         static STORAGE: TasksStorage<2> = TasksStorage::new();
         STORAGE.claim(&(), ())
     };
-    let waiter = storage.tasks.spawn(counting(&polls));
-    storage.tasks.run_ready();
-    storage.tasks.set_slot_waiter(&storage.tasks.waker(waiter));
-    let id = storage.tasks.reserve().unwrap();
-    storage.tasks.release(id);
-    storage.tasks.run_ready();
+    let waiter = storage.tasks().spawn(counting(&polls));
+    storage.tasks().run_ready();
+    storage
+        .tasks()
+        .set_slot_waiter(&storage.tasks().waker(waiter));
+    let id = storage.tasks().reserve().unwrap();
+    storage.tasks().release(id);
+    storage.tasks().run_ready();
     assert_eq!(polls.get(), 2);
-    assert!(storage.tasks.has_slot_waiter());
+    assert!(storage.tasks().has_slot_waiter());
 }
 
 #[test]
@@ -372,10 +376,12 @@ fn finishing_a_task_wakes_the_slot_waiter() {
         static STORAGE: TasksStorage<2> = TasksStorage::new();
         STORAGE.claim(&(), ())
     };
-    let waiter = storage.tasks.spawn(counting(&polls));
-    storage.tasks.run_ready();
-    storage.tasks.set_slot_waiter(&storage.tasks.waker(waiter));
-    storage.tasks.spawn(async {});
-    storage.tasks.run_ready();
+    let waiter = storage.tasks().spawn(counting(&polls));
+    storage.tasks().run_ready();
+    storage
+        .tasks()
+        .set_slot_waiter(&storage.tasks().waker(waiter));
+    storage.tasks().spawn(async {});
+    storage.tasks().run_ready();
     assert_eq!(polls.get(), 2);
 }

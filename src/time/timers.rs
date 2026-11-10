@@ -3,7 +3,6 @@ use core::{cell::Cell, task::Waker};
 use crate::{
     pool::ObjectPool,
     time::{Instant, TimerEntry, TimerIndex},
-    waker_slot::WakerSlot,
 };
 
 pub(crate) struct Timers<const N: usize> {
@@ -14,15 +13,7 @@ pub(crate) struct Timers<const N: usize> {
 impl<const N: usize> Timers<N> {
     pub(crate) const fn new() -> Self {
         Self {
-            pool: ObjectPool::new(
-                [const {
-                    TimerEntry {
-                        deadline: Cell::new(Instant::ZERO),
-                        seq: Cell::new(0),
-                        waker: WakerSlot::new(),
-                    }
-                }; N],
-            ),
+            pool: ObjectPool::new([const { TimerEntry::new() }; N]),
             next_seq: Cell::new(0),
         }
     }
@@ -33,9 +24,7 @@ impl<const N: usize> Timers<N> {
         };
         let seq = self.next_seq.get();
         self.next_seq.set(seq + 1);
-        timer.deadline.set(deadline);
-        timer.seq.set(seq);
-        timer.waker.set(waker);
+        timer.arm(deadline, seq, waker);
         index
     }
 
@@ -44,12 +33,12 @@ impl<const N: usize> Timers<N> {
             .pool
             .get(index)
             .expect("a pending sleep's timer is in storage");
-        timer.waker.store(waker);
+        timer.set_waker(waker);
     }
 
     pub(crate) fn release(&self, index: TimerIndex) {
         if let Some(timer) = self.pool.get(index) {
-            timer.waker.take();
+            timer.take_waker();
             self.pool.free(index);
         }
     }
@@ -61,19 +50,16 @@ impl<const N: usize> Timers<N> {
     }
 
     pub(crate) fn next_deadline(&self) -> Option<Instant> {
-        self.pool
-            .iter()
-            .map(|(_, timer)| timer.deadline.get())
-            .min()
+        self.pool.iter().map(|(_, timer)| timer.deadline()).min()
     }
 
     pub(crate) fn take_expired(&self, now: Instant) -> Option<Waker> {
         let (index, _) = self
             .pool
             .iter()
-            .filter(|(_, timer)| timer.deadline.get() <= now)
-            .min_by_key(|(_, timer)| (timer.deadline.get(), timer.seq.get()))?;
-        let waker = self.pool.get(index)?.waker.take();
+            .filter(|(_, timer)| timer.deadline() <= now)
+            .min_by_key(|(_, timer)| timer.expiry())?;
+        let waker = self.pool.get(index)?.take_waker();
         self.pool.free(index);
         waker
     }

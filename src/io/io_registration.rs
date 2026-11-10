@@ -13,9 +13,9 @@ use crate::{
 };
 
 pub(crate) struct IoRegistration<'a, const MAX_IO_COUNT: usize> {
-    pub(super) io_waiters: &'a IoWaiters<MAX_IO_COUNT>,
+    io_waiters: &'a IoWaiters<MAX_IO_COUNT>,
     selector: &'a Selector,
-    pub(super) index: IoIndex,
+    index: IoIndex,
     direction: Direction,
 }
 
@@ -51,10 +51,7 @@ impl<'a, const MAX_IO_COUNT: usize> IoRegistration<'a, MAX_IO_COUNT> {
     }
 
     pub(crate) fn wait(&mut self) -> Wait<'_, 'a, MAX_IO_COUNT> {
-        Wait {
-            registration: self,
-            waiting: false,
-        }
+        Wait::new(self)
     }
 
     pub(crate) fn poll_wait(&self, waiting: &mut bool, cx: &mut Context<'_>) -> Poll<()> {
