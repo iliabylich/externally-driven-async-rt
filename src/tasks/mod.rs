@@ -54,13 +54,6 @@ impl<const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TA
             slot_waiter: WakerSlot::new(),
         }
     }
-
-    pub(crate) fn claim<'a>(
-        &'static self,
-    ) -> TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE> {
-        self.queue.claim();
-        TasksGuard::new(self)
-    }
 }
 
 #[cfg(test)]

@@ -18,8 +18,9 @@ pub struct LoopStorage<
 }
 
 // SAFETY: a storage has no public methods, so other threads can only pass `&LoopStorage` around.
-// The crate touches it only through a `LoopStorageGuard`, which only `claim` creates, and `claim`
-// succeeds once ever, on the thread that runs the claiming loop; `EventLoop` and `Context` are
+// The crate touches it only through a `LoopStorageGuard`, which only `LoopStorageGuard::claim`
+// creates, and that succeeds once ever, on the thread that runs the claiming loop (claiming the
+// tasks claims their `WakeQueue`, which panics the second time); `EventLoop` and `Context` are
 // `!Send`, so everything but the wakers stays on that thread, and wakers only touch the atomic
 // `WakeQueue`, which asserts that thread.
 unsafe impl<
@@ -85,9 +86,7 @@ impl<
         MAX_IO_COUNT,
         Sel,
     > {
-        let tasks_guard = self.tasks.claim();
-        *self.state.borrow_mut() = Some(state);
-        LoopStorageGuard::new(self, selector, tasks_guard)
+        LoopStorageGuard::claim(self, selector, state)
     }
 }
 

@@ -1,16 +1,19 @@
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering::Relaxed};
 
-use crate::tasks::wake_queue::{NONE, UNTRACKED};
+use crate::tasks::{
+    WakeQueue,
+    wake_queue::{NONE, UNTRACKED},
+};
 
-pub(crate) struct Link {
-    queue: AtomicPtr<()>,
+pub(crate) struct Link<const N: usize> {
+    queue: AtomicPtr<WakeQueue<N>>,
     slot: u32,
     queued: AtomicBool,
     next: AtomicU32,
     generation: AtomicU64,
 }
 
-impl Link {
+impl<const N: usize> Link<N> {
     pub(crate) const fn new(slot: u32) -> Self {
         Self {
             queue: AtomicPtr::new(core::ptr::null_mut()),
@@ -21,12 +24,14 @@ impl Link {
         }
     }
 
-    pub(crate) fn queue(&self) -> *mut () {
-        self.queue.load(Relaxed)
+    pub(crate) fn queue(&self) -> Option<&'static WakeQueue<N>> {
+        // SAFETY: `queue` is null or was stored by `set_queue` from a `&'static WakeQueue<N>`.
+        unsafe { self.queue.load(Relaxed).cast_const().as_ref() }
     }
 
-    pub(super) fn set_queue(&self, queue: *mut ()) {
-        self.queue.store(queue, Relaxed);
+    pub(crate) fn set_queue(&self, queue: &'static WakeQueue<N>) {
+        self.queue
+            .store(core::ptr::from_ref(queue).cast_mut(), Relaxed);
     }
 
     pub(crate) fn slot(&self) -> u32 {

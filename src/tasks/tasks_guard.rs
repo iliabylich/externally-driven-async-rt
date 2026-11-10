@@ -1,6 +1,6 @@
 use core::{cell::Cell, future::Future, marker::PhantomData, task::Waker};
 
-use crate::tasks::{JoinStatus, Root, RootStatus, Task, TaskEntry, TaskId, TaskSlot, Tasks};
+use crate::tasks::{JoinStatus, Root, RootStatus, Task, TaskEntry, TaskId, Tasks};
 
 pub(crate) struct TasksGuard<
     'a,
@@ -15,9 +15,10 @@ pub(crate) struct TasksGuard<
 impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROOT_TASK_SIZE: usize>
     TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>
 {
-    pub(super) fn new(
+    pub(crate) fn claim(
         tasks: &'static Tasks<MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
     ) -> Self {
+        tasks.queue.claim();
         Self {
             tasks,
             futures: PhantomData,
@@ -122,10 +123,10 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
         // slot is reserved and holds no task (checked above), and a slot is only freed after its
         // future was dropped. The slot stays reserved until this future is dropped. `Tasks` keeps
         // its futures in fields private to the `tasks` module, where only `TasksGuard` touches
-        // them, and only `Tasks::claim` calls `TasksGuard::new`, once per `Tasks` (copies share
-        // its invariant `'a`), so every future in it was written through a guard with this same
-        // `'a` (which `Fut` outlives), and is polled and dropped only through one, before `'a`
-        // ends.
+        // them, and `TasksGuard::claim` creates a guard once per `Tasks` (it claims the
+        // `WakeQueue`, which panics the second time; copies share the guard's invariant `'a`), so
+        // every future in it was written through a guard with this same `'a` (which `Fut`
+        // outlives), and is polled and dropped only through one, before `'a` ends.
         let future = unsafe { Task::write(memory, future) };
         self.occupy(id, entry, future);
     }
@@ -172,16 +173,14 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
     }
 
     fn occupy(self, id: TaskId, entry: &TaskEntry, future: Task) {
-        entry.set_task(TaskSlot::Idle(future));
-        entry.take_join_waiter();
+        entry.occupy(future);
         self.tasks.queue.track(id);
     }
 
-    fn free(self, id: TaskId, entry: &TaskEntry, task: Task) -> Option<Waker> {
-        entry.set_task(TaskSlot::Empty);
+    fn free(self, id: TaskId, entry: &TaskEntry) -> Option<Waker> {
         let join_waiter = entry.take_join_waiter();
         self.tasks.queue.untrack(id);
-        drop(task);
+        entry.drop_task();
         self.release(id);
         join_waiter
     }
@@ -196,18 +195,12 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
                 .pool
                 .get(id)
                 .expect("the queue only yields tracked tasks");
-            let mut task = match entry.replace_task(TaskSlot::Polling) {
-                TaskSlot::Idle(task) => task,
-                TaskSlot::Polling => panic!("a task can't be polled re-entrantly"),
-                TaskSlot::Empty => unreachable!("an allocated task always has a future"),
-            };
             let waker = tasks.queue.waker(id.slot());
             let mut cx = core::task::Context::from_waker(&waker);
-            if task.poll(&mut cx).is_pending() {
-                entry.set_task(TaskSlot::Idle(task));
+            if entry.poll(&mut cx).is_pending() {
                 continue;
             }
-            if let Some(join_waiter) = self.free(id, entry, task) {
+            if let Some(join_waiter) = self.free(id, entry) {
                 join_waiter.wake();
             }
             if let Root::Running(root) = tasks.root.get()
@@ -221,10 +214,7 @@ impl<'a, const MAX_TASKS_COUNT: usize, const MAX_TASK_SIZE: usize, const MAX_ROO
 
     pub(crate) fn drop_all(self) {
         while let Some((id, entry)) = self.tasks.pool.iter().find(|(_, entry)| entry.is_idle()) {
-            let TaskSlot::Idle(task) = entry.replace_task(TaskSlot::Empty) else {
-                unreachable!("`is_idle` checked the slot");
-            };
-            self.free(id, entry, task);
+            self.free(id, entry);
         }
     }
 

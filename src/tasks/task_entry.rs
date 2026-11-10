@@ -1,6 +1,13 @@
-use core::{cell::Cell, task::Waker};
+use core::{
+    cell::Cell,
+    task::{Context, Poll, Waker},
+};
 
-use crate::{pool::Index, tasks::TaskSlot, waker_slot::WakerSlot};
+use crate::{
+    pool::Index,
+    tasks::{Task, TaskSlot},
+    waker_slot::WakerSlot,
+};
 
 pub(crate) struct TaskEntry {
     task: Cell<TaskSlot>,
@@ -30,12 +37,27 @@ impl TaskEntry {
         self.peek(|slot| matches!(slot, TaskSlot::Idle(_)))
     }
 
-    pub(super) fn set_task(&self, slot: TaskSlot) {
-        self.task.set(slot);
+    pub(crate) fn occupy(&self, task: Task) {
+        self.task.set(TaskSlot::Idle(task));
+        self.join_waiter.take();
     }
 
-    pub(super) fn replace_task(&self, slot: TaskSlot) -> TaskSlot {
-        self.task.replace(slot)
+    pub(crate) fn poll(&self, cx: &mut Context<'_>) -> Poll<()> {
+        let mut task = match self.task.replace(TaskSlot::Polling) {
+            TaskSlot::Idle(task) => task,
+            TaskSlot::Polling => panic!("a task can't be polled re-entrantly"),
+            TaskSlot::Empty => unreachable!("an allocated task always has a future"),
+        };
+        let poll = task.poll(cx);
+        self.task.set(TaskSlot::Idle(task));
+        poll
+    }
+
+    pub(crate) fn drop_task(&self) {
+        let TaskSlot::Idle(task) = self.task.replace(TaskSlot::Empty) else {
+            unreachable!("only an idle task is dropped");
+        };
+        drop(task);
     }
 
     pub(crate) fn set_join_waiter(&self, waker: &Waker) {

@@ -51,7 +51,7 @@ impl<
         Sel,
     >
 {
-    pub(super) fn new(
+    pub(crate) fn claim(
         storage: &'static LoopStorage<
             S,
             MAX_TASKS_COUNT,
@@ -61,8 +61,10 @@ impl<
             MAX_IO_COUNT,
         >,
         selector: &'a Sel,
-        tasks: TasksGuard<'a, MAX_TASKS_COUNT, MAX_TASK_SIZE, MAX_ROOT_TASK_SIZE>,
+        state: S,
     ) -> Self {
+        let tasks = TasksGuard::claim(&storage.tasks);
+        *storage.state.borrow_mut() = Some(state);
         Self {
             storage,
             selector,

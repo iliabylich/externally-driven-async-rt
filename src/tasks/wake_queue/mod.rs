@@ -20,7 +20,7 @@ pub(crate) struct WakeQueue<const N: usize> {
     owner: AtomicUsize,
     head: AtomicU32,
     tail: AtomicU32,
-    links: [Link; N],
+    links: [Link<N>; N],
 }
 
 impl<const N: usize> WakeQueue<N> {
@@ -58,7 +58,7 @@ impl<const N: usize> WakeQueue<N> {
 
     pub(crate) fn waker(&'static self, slot: u32) -> Waker {
         let link = &self.links[slot as usize];
-        link.set_queue(core::ptr::from_ref(self).cast_mut().cast());
+        link.set_queue(self);
         // SAFETY: the vtable functions below uphold the `RawWaker` contract for a pointer to a
         // link of a queue that is never freed, whose `queue` was just set.
         unsafe {
@@ -144,11 +144,10 @@ fn clone<const N: usize>(ptr: *const ()) -> RawWaker {
 unsafe fn wake<const N: usize>(ptr: *const ()) {
     // SAFETY: `ptr` comes from `WakeQueue::waker`: it points to a link of a queue that is never
     // freed.
-    let link = unsafe { &*ptr.cast::<Link>() };
-    // SAFETY: `WakeQueue::waker`, the only caller of `Link::set_queue`, stored its `&'static self`
-    // here before creating the waker, and whatever moved the waker to this thread made that store
-    // visible.
-    let queue = unsafe { &*link.queue().cast_const().cast::<WakeQueue<N>>() };
+    let link = unsafe { &*ptr.cast::<Link<N>>() };
+    let queue = link
+        .queue()
+        .expect("`WakeQueue::waker` sets the queue before creating the waker");
     assert_eq!(
         queue.owner.load(Relaxed),
         ThreadId::current().to_raw(),
