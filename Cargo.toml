@@ -2,16 +2,23 @@
 name = "externally-driven-async-rt"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.99"
 
 [features]
 strace-like = []
 
 [dependencies]
-rustix = { version = "1", default-features = false, features = ["event", "net"] }
+rustix = { version = "1", default-features = false, features = [
+    "event",
+    "net",
+] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { version = "1", default-features = false, features = ["time"] }
 
 [dev-dependencies]
-rustix = { version = "1", default-features = false, features = ["fs", "process", "std", "thread"] }
+rustix = { version = "1", default-features = false, features = [
+    "fs",
+    "process",
+    "std",
+    "thread",
+] }
