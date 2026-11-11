@@ -30,9 +30,12 @@ impl<'a, const FDS: usize> IoRegistration<'a, FDS> {
         cached: &Cell<Option<IoIndex>>,
         direction: Direction,
     ) -> Self {
-        let (index, io) = ctx.io_waiters.register(cached, fd.as_raw_fd(), direction);
+        let (index, io) = ctx
+            .storage
+            .io_waiters
+            .register(cached, fd.as_raw_fd(), direction);
         Self {
-            io_waiters: ctx.io_waiters,
+            io_waiters: &ctx.storage.io_waiters,
             selector: ctx.selector,
             index,
             io,

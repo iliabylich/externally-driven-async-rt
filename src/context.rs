@@ -7,14 +7,12 @@ use core::{
 };
 
 use crate::{
-    io::{IoIndex, IoWaiters},
+    io::IoIndex,
     selector::{EVENTS_PER_CALL, Selector, SelectorEvent},
     state::State,
     storage::LoopStorage,
-    tasks::{
-        JoinHandle, JoinStatus, ReserveTask, Root, RootStatus, Task, TaskEntry, TaskId, Tasks,
-    },
-    time::{Instant, Sleep, Timeout, Timers},
+    tasks::{JoinHandle, JoinStatus, ReserveTask, Root, RootStatus, Task, TaskEntry, TaskId},
+    time::{Instant, Sleep, Timeout},
 };
 
 /// A handle of the event loop that you are currently in.
@@ -29,9 +27,7 @@ pub struct Context<
     const TIMERS: usize,
     const FDS: usize,
 > {
-    tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
-    pub(crate) timers: &'static Timers<TIMERS>,
-    pub(crate) io_waiters: &'static IoWaiters<FDS>,
+    pub(crate) storage: &'static LoopStorage<TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     pub(crate) selector: &'a Selector,
     pub(crate) state: &'a RefCell<S>,
     futures: PhantomData<(Cell<&'a ()>, *const ())>,
@@ -54,9 +50,7 @@ impl<
     ) -> Self {
         storage.tasks.queue.claim();
         Self {
-            tasks: &storage.tasks,
-            timers: &storage.timers,
-            io_waiters: &storage.io_waiters,
+            storage,
             selector,
             state,
             futures: PhantomData,
@@ -105,7 +99,10 @@ impl<
 
     /// Sleeps for `duration`.
     pub fn sleep(&self, duration: Duration) -> Sleep<'_, TIMERS> {
-        Sleep::new(self.timers, Instant::now().saturating_add(duration))
+        Sleep::new(
+            &self.storage.timers,
+            Instant::now().saturating_add(duration),
+        )
     }
 
     /// Runs `future` with a timeout of `duration`, resolves to `None` in case of a timeout.
@@ -114,21 +111,25 @@ impl<
     }
 
     pub(crate) fn root(self) -> Root<TASK_SIZE> {
-        self.tasks.root.get()
+        self.storage.tasks.root.get()
     }
 
     #[cfg(test)]
     pub(crate) fn set_root(self, root: Root<TASK_SIZE>) {
-        self.tasks.root.set(root);
+        self.storage.tasks.root.set(root);
     }
 
     #[cfg(test)]
     pub(crate) fn contains(self, id: TaskId<TASK_SIZE>) -> bool {
-        self.tasks.pool.get(id).is_some_and(TaskEntry::has_task)
+        self.storage
+            .tasks
+            .pool
+            .get(id)
+            .is_some_and(TaskEntry::has_task)
     }
 
     pub(crate) fn set_join_waiter(self, id: TaskId<TASK_SIZE>, waker: &Waker) -> JoinStatus {
-        match self.tasks.pool.get(id) {
+        match self.storage.tasks.pool.get(id) {
             Some(entry) if entry.has_task() => {
                 entry.set_join_waiter(waker);
                 JoinStatus::Running
@@ -138,12 +139,12 @@ impl<
     }
 
     pub(crate) fn has_ready(self) -> bool {
-        !self.tasks.queue.is_empty()
+        !self.storage.tasks.queue.is_empty()
     }
 
     #[cfg(test)]
     pub(crate) fn count(self) -> usize {
-        self.tasks.pool.iter().count()
+        self.storage.tasks.pool.iter().count()
     }
 
     pub(crate) fn insert<Fut>(self, future: Fut) -> TaskId<TASK_SIZE>
@@ -158,24 +159,24 @@ impl<
     }
 
     pub(crate) fn reserve(self) -> Option<(TaskId<TASK_SIZE>, &'static TaskEntry<TASK_SIZE>)> {
-        self.tasks.pool.alloc()
+        self.storage.tasks.pool.alloc()
     }
 
     pub(crate) fn release(self, id: TaskId<TASK_SIZE>) {
-        self.tasks.pool.free(id);
-        self.tasks.slot_waiter.wake_by_ref();
+        self.storage.tasks.pool.free(id);
+        self.storage.tasks.slot_waiter.wake_by_ref();
     }
 
     pub(crate) fn has_slot_waiter(self) -> bool {
-        self.tasks.slot_waiter.is_set()
+        self.storage.tasks.slot_waiter.is_set()
     }
 
     pub(crate) fn set_slot_waiter(self, waker: &Waker) {
-        self.tasks.slot_waiter.store(waker);
+        self.storage.tasks.slot_waiter.store(waker);
     }
 
     pub(crate) fn clear_slot_waiter(self) {
-        self.tasks.slot_waiter.take();
+        self.storage.tasks.slot_waiter.take();
     }
 
     pub(crate) fn spawn_reserved<Fut>(
@@ -187,7 +188,7 @@ impl<
         Fut: Future<Output = ()> + 'a,
     {
         self.write(entry, future);
-        self.tasks.queue.push(id.slot());
+        self.storage.tasks.queue.push(id.slot());
     }
 
     fn write<Fut>(self, entry: &TaskEntry<TASK_SIZE>, future: Fut)
@@ -222,7 +223,7 @@ impl<
         Fut: Future<Output = ()> + 'a,
     {
         let id = self.insert(future);
-        self.tasks.queue.push(id.slot());
+        self.storage.tasks.queue.push(id.slot());
         id
     }
 
@@ -230,7 +231,7 @@ impl<
     where
         Fut: Future<Output = ()> + 'a,
     {
-        let tasks = self.tasks;
+        let tasks = &self.storage.tasks;
         assert!(
             matches!(tasks.root.get(), Root::Unset),
             "the root is already spawned"
@@ -266,7 +267,7 @@ impl<
     }
 
     pub(crate) fn run_ready(self) -> RootStatus {
-        let tasks = self.tasks;
+        let tasks = &self.storage.tasks;
         loop {
             let Some(slot) = tasks.queue.pop() else {
                 return RootStatus::Running;
@@ -295,20 +296,26 @@ impl<
     }
 
     pub(crate) fn drop_all(self) {
-        while let Some((id, entry)) = self.tasks.pool.iter().find(|(_, entry)| entry.is_idle()) {
+        while let Some((id, entry)) = self
+            .storage
+            .tasks
+            .pool
+            .iter()
+            .find(|(_, entry)| entry.is_idle())
+        {
             self.free(id, entry);
         }
     }
 
     #[cfg(test)]
     pub(crate) fn waker(self, id: TaskId<TASK_SIZE>) -> Waker {
-        self.tasks.queue.waker(id.slot())
+        self.storage.tasks.queue.waker(id.slot())
     }
 
     pub(crate) fn clear(self) {
         self.drop_all();
-        self.timers.clear();
-        self.io_waiters.clear();
+        self.storage.timers.clear();
+        self.storage.io_waiters.clear();
     }
 
     pub(crate) fn process_selector_events(self) -> rustix::io::Result<()> {
@@ -318,11 +325,13 @@ impl<
             for event in events.iter().map_while(|event| *event) {
                 match event {
                     SelectorEvent::Io { token, ready } => {
-                        self.io_waiters.wake_ready(IoIndex::from_bits(token), ready);
+                        self.storage
+                            .io_waiters
+                            .wake_ready(IoIndex::from_bits(token), ready);
                     }
                     SelectorEvent::Timer => {
                         let now = Instant::now();
-                        while let Some(waker) = self.timers.take_expired(now) {
+                        while let Some(waker) = self.storage.timers.take_expired(now) {
                             waker.wake();
                         }
                     }
@@ -335,12 +344,13 @@ impl<
     }
 
     pub(crate) fn flush(self) -> rustix::io::Result<()> {
-        match self.timers.next_deadline() {
+        match self.storage.timers.next_deadline() {
             Some(deadline) => self.selector.arm_timer(deadline),
             None => self.selector.disarm_timer(),
         }
-        self.selector.flush(self.io_waiters.pending_changes())?;
-        self.io_waiters.mark_flushed();
+        self.selector
+            .flush(self.storage.io_waiters.pending_changes())?;
+        self.storage.io_waiters.mark_flushed();
         Ok(())
     }
 }

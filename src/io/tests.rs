@@ -65,7 +65,7 @@ fn drain_receive_buffer(fd: &OwnedFd) {
 }
 
 fn registrations(event_loop: &TestLoop<Log>) -> usize {
-    event_loop.ctx().io_waiters.count()
+    event_loop.ctx().storage.io_waiters.count()
 }
 
 #[test]
@@ -198,7 +198,7 @@ fn dropping_a_pending_wait_deregisters() {
     ctx.flush().unwrap();
     drop(wait);
     drop(registration);
-    assert_eq!(ctx.io_waiters.count(), 0);
+    assert_eq!(ctx.storage.io_waiters.count(), 0);
     rustix::io::write(&tx, b"abc").unwrap();
     assert!(!is_readable(selector.as_fd(), 0));
 }
@@ -277,5 +277,5 @@ fn sequential_registrations_reuse_the_slot() {
         ctx.process_selector_events().unwrap();
         assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Ready(()));
     }
-    assert_eq!(ctx.io_waiters.count(), 0);
+    assert_eq!(ctx.storage.io_waiters.count(), 0);
 }

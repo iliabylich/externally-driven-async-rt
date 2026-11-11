@@ -56,11 +56,11 @@ mod tests {
     };
 
     fn registrations(event_loop: &TestLoop<Log>) -> usize {
-        event_loop.ctx().io_waiters.count()
+        event_loop.ctx().storage.io_waiters.count()
     }
 
     fn has_timers(event_loop: &TestLoop<Log>) -> bool {
-        event_loop.ctx().timers.next_deadline().is_some()
+        event_loop.ctx().storage.timers.next_deadline().is_some()
     }
 
     #[test]

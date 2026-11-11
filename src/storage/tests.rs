@@ -13,8 +13,11 @@ fn clearing_drops_live_wakers() {
         static STORAGE: SmallStorage = SmallStorage::new();
         STORAGE.claim(&selector, &state)
     };
-    ctx.timers.alloc(Instant::now(), counting_waker(&drops));
+    ctx.storage
+        .timers
+        .alloc(Instant::now(), counting_waker(&drops));
     let (_, io) = ctx
+        .storage
         .io_waiters
         .register(&Cell::new(None), 3, Direction::Read);
     let io_waker = counting_waker(&drops);
