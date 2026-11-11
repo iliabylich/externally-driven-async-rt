@@ -14,9 +14,7 @@ use rustix::{
 };
 
 use crate::{
-    selector::{
-        Directions, EVENTS_PER_CALL, IoChange, KernelTimer, SelectorEvent, TimerChange, Token,
-    },
+    selector::{Directions, EVENTS_PER_CALL, IoChange, KernelTimer, SelectorEvent, TimerChange},
     strace::{syscall, syscall_end, syscall_start},
     time::Instant,
 };
@@ -127,10 +125,7 @@ impl EpollSelector {
             TIMER_DATA => self.consume_timer(),
             token => {
                 let ready = Self::ready(event.flags);
-                Ok((ready != Directions::Empty).then_some(SelectorEvent::Io {
-                    token: Token::from_bits(token),
-                    ready,
-                }))
+                Ok((ready != Directions::Empty).then_some(SelectorEvent::Io { token, ready }))
             }
         }
     }
@@ -180,7 +175,7 @@ impl EpollSelector {
             Directions::Write => EventFlags::OUT,
             Directions::Both => EventFlags::IN | EventFlags::OUT,
         };
-        let data = EventData::new_ptr(core::ptr::without_provenance_mut(change.token().to_bits()));
+        let data = EventData::new_ptr(core::ptr::without_provenance_mut(change.token()));
         let flags = interest | EventFlags::ONESHOT;
         syscall_start!(
             "epoll_ctl",

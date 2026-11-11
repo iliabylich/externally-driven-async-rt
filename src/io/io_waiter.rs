@@ -4,7 +4,7 @@ use rustix::fd::RawFd;
 
 use crate::{
     pool::Index,
-    selector::{Direction, Directions, IoChange, Token},
+    selector::{Direction, Directions, IoChange},
     waker_slot::WakerSlot,
 };
 
@@ -101,11 +101,7 @@ impl IoWaiter {
     }
 
     fn change(&self, index: IoIndex) -> IoChange {
-        IoChange::new(
-            Token::from_bits(index.to_bits()),
-            self.fd(),
-            self.interest(),
-        )
+        IoChange::new(index.to_bits(), self.fd(), self.interest())
     }
 }
 

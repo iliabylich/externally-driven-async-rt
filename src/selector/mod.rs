@@ -7,7 +7,6 @@ mod kernel_timer;
 mod kqueue;
 mod selector_event;
 mod timer_change;
-mod token;
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 compile_error!("externally-driven-async-rt supports only macOS and Linux");
@@ -24,7 +23,6 @@ pub(crate) use self::{
     kernel_timer::KernelTimer,
     selector_event::{EVENTS_PER_CALL, SelectorEvent},
     timer_change::TimerChange,
-    token::Token,
 };
 use crate::time::Instant;
 

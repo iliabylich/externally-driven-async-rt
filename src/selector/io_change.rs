@@ -1,16 +1,16 @@
 use rustix::fd::RawFd;
 
-use crate::selector::{Directions, Token};
+use crate::selector::Directions;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct IoChange {
-    token: Token,
+    token: usize,
     fd: RawFd,
     interest: Directions,
 }
 
 impl IoChange {
-    pub(crate) fn new(token: Token, fd: RawFd, interest: Directions) -> Self {
+    pub(crate) fn new(token: usize, fd: RawFd, interest: Directions) -> Self {
         Self {
             token,
             fd,
@@ -18,7 +18,7 @@ impl IoChange {
         }
     }
 
-    pub(crate) fn token(self) -> Token {
+    pub(crate) fn token(self) -> usize {
         self.token
     }
 

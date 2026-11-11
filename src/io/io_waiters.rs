@@ -5,7 +5,7 @@ use rustix::fd::RawFd;
 use crate::{
     io::{IoIndex, IoWaiter},
     pool::ObjectPool,
-    selector::{Direction, Directions, IoChange, Token},
+    selector::{Direction, Directions, IoChange},
 };
 
 pub(crate) struct IoWaiters<const N: usize> {
@@ -55,8 +55,8 @@ impl<const N: usize> IoWaiters<N> {
         change
     }
 
-    pub(crate) fn wake_ready(&self, token: Token, ready: Directions) {
-        if let Some(io) = self.pool.get(IoIndex::from_bits(token.to_bits())) {
+    pub(crate) fn wake_ready(&self, index: IoIndex, ready: Directions) {
+        if let Some(io) = self.pool.get(index) {
             io.wake(ready);
         }
     }
@@ -92,7 +92,7 @@ mod tests {
 
     use crate::{
         io::{IoIndex, IoWaiters},
-        selector::{Direction, Directions, IoChange, Token},
+        selector::{Direction, Directions, IoChange},
         testing::assert_yields,
     };
 
@@ -105,7 +105,7 @@ mod tests {
     }
 
     fn change(index: IoIndex, fd: i32, interest: Directions) -> IoChange {
-        IoChange::new(Token::from_bits(index.to_bits()), fd, interest)
+        IoChange::new(index.to_bits(), fd, interest)
     }
 
     #[test]
@@ -211,7 +211,7 @@ mod tests {
         io.waker(Direction::Write).store(Waker::noop());
         io_waiters.mark_flushed();
 
-        io_waiters.wake_ready(Token::from_bits(index.to_bits()), Directions::Read);
+        io_waiters.wake_ready(index, Directions::Read);
         assert!(!io.waker(Direction::Read).is_set());
         assert!(io.waker(Direction::Write).is_set());
         assert_pending_changes(io_waiters, [change(index, 3, Directions::Write)]);
@@ -227,7 +227,7 @@ mod tests {
         io.waker(Direction::Read).store(Waker::noop());
         io_waiters.mark_flushed();
 
-        io_waiters.wake_ready(Token::from_bits(stale.to_bits()), Directions::Both);
+        io_waiters.wake_ready(stale, Directions::Both);
         assert!(io.waker(Direction::Read).is_set());
         assert_pending_changes(io_waiters, []);
     }

@@ -9,7 +9,6 @@ use rustix::{
 use crate::{
     selector::{
         Direction, Directions, EVENTS_PER_CALL, IoChange, KernelTimer, SelectorEvent, TimerChange,
-        Token,
     },
     strace::{syscall, syscall_end, syscall_start},
     time::Instant,
@@ -148,7 +147,7 @@ impl KqueueSelector {
     }
 
     fn consume(&self, event: &Event) -> SelectorEvent {
-        let token = Token::from_bits(event.udata().addr());
+        let token = event.udata().addr();
         match event.filter() {
             EventFilter::Read(_) => SelectorEvent::Io {
                 token,
@@ -185,7 +184,7 @@ impl KqueueSelector {
     }
 
     fn io_kevents(change: IoChange) -> [Event; 2] {
-        let udata = core::ptr::without_provenance_mut(change.token().to_bits());
+        let udata = core::ptr::without_provenance_mut(change.token());
         [
             Self::io_kevent(
                 EventFilter::Read(change.fd()),

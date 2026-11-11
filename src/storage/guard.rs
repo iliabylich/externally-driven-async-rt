@@ -1,7 +1,7 @@
 use core::cell::RefCell;
 
 use crate::{
-    io::IoWaiters,
+    io::{IoIndex, IoWaiters},
     selector::{EVENTS_PER_CALL, Selector, SelectorEvent},
     storage::LoopStorage,
     tasks::TasksGuard,
@@ -93,7 +93,8 @@ impl<
             for event in events.iter().map_while(|event| *event) {
                 match event {
                     SelectorEvent::Io { token, ready } => {
-                        self.io_waiters().wake_ready(token, ready);
+                        self.io_waiters()
+                            .wake_ready(IoIndex::from_bits(token), ready);
                     }
                     SelectorEvent::Timer => {
                         let now = Instant::now();
