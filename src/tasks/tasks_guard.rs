@@ -60,15 +60,15 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
     where
         Fut: Future<Output = ()> + 'a,
     {
-        let Some(id) = self.reserve() else {
+        let Some((id, entry)) = self.reserve() else {
             panic!("more than {TASKS} concurrent tasks");
         };
-        self.write(id, future);
+        self.write(id, entry, future);
         id
     }
 
-    pub(crate) fn reserve(self) -> Option<TaskId> {
-        self.tasks.pool.alloc().map(|(id, _)| id)
+    pub(crate) fn reserve(self) -> Option<(TaskId, &'static TaskEntry)> {
+        self.tasks.pool.alloc()
     }
 
     pub(crate) fn release(self, id: TaskId) {
@@ -88,15 +88,15 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
         self.tasks.slot_waiter.take();
     }
 
-    pub(crate) fn spawn_reserved<Fut>(self, id: TaskId, future: Fut)
+    pub(crate) fn spawn_reserved<Fut>(self, id: TaskId, entry: &TaskEntry, future: Fut)
     where
         Fut: Future<Output = ()> + 'a,
     {
-        self.write(id, future);
+        self.write(id, entry, future);
         self.tasks.queue.push(id.slot());
     }
 
-    fn write<Fut>(self, id: TaskId, future: Fut)
+    fn write<Fut>(self, id: TaskId, entry: &TaskEntry, future: Fut)
     where
         Fut: Future<Output = ()> + 'a,
     {
@@ -110,13 +110,8 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
             "a task future aligned to {} bytes doesn't fit (align at most 16)",
             align_of::<Fut>(),
         );
-        let tasks = self.tasks;
-        let entry = tasks
-            .pool
-            .get(id)
-            .expect("a task is written into a reserved slot");
         assert!(!entry.has_task(), "a reserved slot holds no task yet");
-        let memory = tasks.slab[id.slot() as usize].as_ptr();
+        let memory = self.tasks.slab[id.slot() as usize].as_ptr();
         // SAFETY: `Fut` fits the slab's blocks (checked above). The slot's block is unused: the
         // slot is reserved and holds no task (checked above), and a slot is only freed after its
         // future was dropped. The slot stays reserved until this future is dropped. `Tasks` keeps

@@ -53,12 +53,12 @@ impl<
         let this = self.get_mut();
         let tasks = this.storage.tasks();
         match tasks.reserve() {
-            Some(id) => {
+            Some((id, entry)) => {
                 if this.waiting {
                     tasks.clear_slot_waiter();
                     this.waiting = false;
                 }
-                Poll::Ready(TaskReservation::new(this.storage, id))
+                Poll::Ready(TaskReservation::new(this.storage, id, entry))
             }
             None => {
                 assert!(

@@ -356,10 +356,10 @@ fn spawning_into_a_reserved_slot_queues_the_task() {
         static STORAGE: TasksStorage<1> = TasksStorage::new();
         STORAGE.claim(&(), &state)
     };
-    let id = storage.tasks().reserve().unwrap();
+    let (id, entry) = storage.tasks().reserve().unwrap();
     assert!(!storage.tasks().contains(id));
-    assert_eq!(storage.tasks().reserve(), None);
-    storage.tasks().spawn_reserved(id, counting(&polls));
+    assert!(storage.tasks().reserve().is_none());
+    storage.tasks().spawn_reserved(id, entry, counting(&polls));
     storage.tasks().run_ready();
     assert_eq!(polls.get(), 1);
     assert!(storage.tasks().contains(id));
@@ -378,7 +378,7 @@ fn releasing_a_slot_wakes_the_slot_waiter() {
     storage
         .tasks()
         .set_slot_waiter(&storage.tasks().waker(waiter));
-    let id = storage.tasks().reserve().unwrap();
+    let (id, _) = storage.tasks().reserve().unwrap();
     storage.tasks().release(id);
     storage.tasks().run_ready();
     assert_eq!(polls.get(), 2);

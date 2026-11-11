@@ -2,7 +2,7 @@ use crate::{
     context::Context,
     state::State,
     storage::LoopStorageGuard,
-    tasks::{JoinHandle, TaskId},
+    tasks::{JoinHandle, TaskEntry, TaskId},
 };
 
 /// A task reservation that can be used to spawn a task without waiting for a free slot.
@@ -18,6 +18,7 @@ pub struct TaskReservation<
 > {
     storage: LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     id: TaskId,
+    entry: &'static TaskEntry,
 }
 
 impl<
@@ -33,8 +34,9 @@ impl<
     pub(crate) fn new(
         storage: LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         id: TaskId,
+        entry: &'static TaskEntry,
     ) -> Self {
-        Self { storage, id }
+        Self { storage, id, entry }
     }
 
     /// Spawns a task using a reserved slot that is held by this [`TaskReservation`].
@@ -50,8 +52,10 @@ impl<
         F: FnOnce(Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
-        let Self { storage, id } = self;
-        storage.tasks().spawn_reserved(id, f(Context::new(storage)));
+        let Self { storage, id, entry } = self;
+        storage
+            .tasks()
+            .spawn_reserved(id, entry, f(Context::new(storage)));
         core::mem::forget(self);
         JoinHandle::new(storage.tasks(), id)
     }
