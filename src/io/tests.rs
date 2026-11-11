@@ -1,6 +1,5 @@
 use core::{
-    cell::Cell,
-    cell::RefCell,
+    cell::{Cell, RefCell},
     future::{Future, pending, poll_fn},
     pin::{Pin, pin},
     task::{Poll, Waker},

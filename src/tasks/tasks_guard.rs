@@ -121,7 +121,7 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
         // every future in it was written through a guard with this same `'a` (which `Fut`
         // outlives), and is polled and dropped only through one, before `'a` ends.
         let future = unsafe { Task::write(memory, future) };
-        self.occupy(id, entry, future);
+        entry.occupy(future);
     }
 
     pub(crate) fn spawn<Fut>(self, future: Fut) -> TaskId
@@ -160,19 +160,13 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
         // is still `Unset` (asserted above), and leaves that state below, so this is the only
         // call that gets here. `Fut` outlives its use as in `insert`.
         let future = unsafe { Task::write(tasks.root_region.as_ptr(), future) };
-        self.occupy(id, entry, future);
+        entry.occupy(future);
         tasks.queue.push(id.slot());
         tasks.root.set(Root::Running(id));
     }
 
-    fn occupy(self, id: TaskId, entry: &TaskEntry, future: Task) {
-        entry.occupy(future);
-        self.tasks.queue.track(id);
-    }
-
     fn free(self, id: TaskId, entry: &TaskEntry) -> Option<Waker> {
         let join_waiter = entry.take_join_waiter();
-        self.tasks.queue.untrack(id);
         entry.drop_task();
         self.release(id);
         join_waiter
@@ -181,14 +175,16 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
     pub(crate) fn run_ready(self) -> RootStatus {
         let tasks = self.tasks;
         loop {
-            let Some(id) = tasks.queue.pop() else {
+            let Some(slot) = tasks.queue.pop() else {
                 return RootStatus::Running;
             };
-            let entry = tasks
-                .pool
-                .get(id)
-                .expect("the queue only yields tracked tasks");
-            let waker = tasks.queue.waker(id.slot());
+            let Some((id, entry)) = tasks.pool.get_at(slot) else {
+                continue;
+            };
+            if !entry.has_task() {
+                continue;
+            }
+            let waker = tasks.queue.waker(slot);
             let mut cx = core::task::Context::from_waker(&waker);
             if entry.poll(&mut cx).is_pending() {
                 continue;

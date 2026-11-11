@@ -161,3 +161,17 @@ fn occupied_list_stays_consistent() {
         }
     }
 }
+
+#[test]
+fn get_at_finds_the_current_occupant_of_a_slot() {
+    let pool = &ObjectPool::<Cell<u32>, 1>::new([const { Cell::new(0) }; 1]);
+    assert!(pool.get_at(0).is_none());
+    let first = alloc(pool, 1).unwrap();
+    pool.free(first);
+    assert!(pool.get_at(0).is_none());
+    let second = alloc(pool, 2).unwrap();
+    let (index, value) = pool.get_at(0).unwrap();
+    assert_eq!(index, second);
+    assert_eq!(value.get(), 2);
+    assert!(pool.get_at(1).is_none());
+}

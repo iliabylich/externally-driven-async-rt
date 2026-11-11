@@ -1,12 +1,11 @@
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 
-use crate::tasks::wake_queue::{NONE, UNTRACKED};
+use crate::tasks::wake_queue::NONE;
 
 pub(crate) struct Link {
     slot: u32,
     queued: AtomicBool,
     next: AtomicU32,
-    generation: AtomicU64,
 }
 
 impl Link {
@@ -15,7 +14,6 @@ impl Link {
             slot,
             queued: AtomicBool::new(false),
             next: AtomicU32::new(NONE),
-            generation: AtomicU64::new(UNTRACKED),
         }
     }
 
@@ -37,13 +35,5 @@ impl Link {
 
     pub(crate) fn set_next(&self, next: u32) {
         self.next.store(next, Relaxed);
-    }
-
-    pub(crate) fn generation(&self) -> u64 {
-        self.generation.load(Relaxed)
-    }
-
-    pub(crate) fn set_generation(&self, generation: u64) {
-        self.generation.store(generation, Relaxed);
     }
 }

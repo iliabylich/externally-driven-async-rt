@@ -111,6 +111,17 @@ impl<T, const N: usize> ObjectPool<T, N> {
             .map(|_| &self.values[index.slot() as usize])
     }
 
+    pub(crate) fn get_at(&self, slot: u32) -> Option<(Index<T>, &T)> {
+        let meta = self.meta.get(slot as usize)?;
+        if !matches!(meta.links(), Links::Occupied { .. }) {
+            return None;
+        }
+        Some((
+            Index::from_parts(slot, meta.generation()),
+            &self.values[slot as usize],
+        ))
+    }
+
     pub(crate) fn iter(&self) -> impl Iterator<Item = (Index<T>, &T)> {
         let mut cursor = self.occupied_head.get();
         core::iter::from_fn(move || {

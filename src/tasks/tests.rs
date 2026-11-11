@@ -1,6 +1,5 @@
 use core::{
-    cell::Cell,
-    cell::RefCell,
+    cell::{Cell, RefCell},
     future::poll_fn,
     task::{Poll, Waker},
 };
@@ -278,6 +277,73 @@ fn finished_task_is_removed() {
     let id = storage.tasks().spawn(async {});
     assert_eq!(storage.tasks().run_ready(), RootStatus::Running);
     assert!(!storage.tasks().contains(id));
+}
+
+#[test]
+fn a_stale_wake_of_a_freed_slot_polls_nothing() {
+    let state = RefCell::new(());
+    let storage = {
+        static STORAGE: TasksStorage<1> = TasksStorage::new();
+        STORAGE.claim(&(), &state)
+    };
+    let id = storage.tasks().spawn(async {});
+    let waker = storage.tasks().waker(id);
+    storage.tasks().run_ready();
+    waker.wake();
+    assert_eq!(storage.tasks().run_ready(), RootStatus::Running);
+    assert!(!storage.tasks().has_ready());
+}
+
+#[test]
+fn a_stale_wake_of_a_reserved_slot_is_skipped() {
+    let polls = Cell::new(0);
+    let state = RefCell::new(());
+    let storage = {
+        static STORAGE: TasksStorage<1> = TasksStorage::new();
+        STORAGE.claim(&(), &state)
+    };
+    let id = storage.tasks().spawn(async {});
+    let waker = storage.tasks().waker(id);
+    storage.tasks().run_ready();
+    let (id, entry) = storage.tasks().reserve().unwrap();
+    waker.wake();
+    assert_eq!(storage.tasks().run_ready(), RootStatus::Running);
+    storage.tasks().spawn_reserved(id, entry, counting(&polls));
+    storage.tasks().run_ready();
+    assert_eq!(polls.get(), 1);
+}
+
+#[test]
+fn a_stale_wake_of_a_reused_slot_polls_its_new_task() {
+    let polls = Cell::new(0);
+    let state = RefCell::new(());
+    let storage = {
+        static STORAGE: TasksStorage<1> = TasksStorage::new();
+        STORAGE.claim(&(), &state)
+    };
+    let id = storage.tasks().spawn(async {});
+    let waker = storage.tasks().waker(id);
+    storage.tasks().run_ready();
+    storage.tasks().spawn(counting(&polls));
+    storage.tasks().run_ready();
+    waker.wake();
+    storage.tasks().run_ready();
+    assert_eq!(polls.get(), 2);
+}
+
+#[test]
+fn a_task_dropped_while_queued_is_skipped() {
+    let dropped = Cell::new(false);
+    let state = RefCell::new(());
+    let storage = {
+        static STORAGE: TasksStorage<1> = TasksStorage::new();
+        STORAGE.claim(&(), &state)
+    };
+    storage.tasks().spawn(FlagOnDrop::new(&dropped));
+    storage.tasks().drop_all();
+    assert!(dropped.get());
+    assert_eq!(storage.tasks().run_ready(), RootStatus::Running);
+    assert!(!storage.tasks().has_ready());
 }
 
 #[test]
