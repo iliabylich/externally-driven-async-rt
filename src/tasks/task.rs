@@ -11,8 +11,8 @@ impl Task {
     /// # Safety
     ///
     /// `memory` must be valid for writes of `Fut`, aligned for it, and stay valid and otherwise
-    /// unused until the returned `Task` is dropped. The returned `Task` must be dropped (if at
-    /// all) while everything `Fut` borrows is still alive.
+    /// unused until the returned `Task` is dropped. The returned `Task` must be polled and dropped
+    /// (if at all) only while everything `Fut` borrows is still alive.
     pub(crate) unsafe fn write<Fut>(memory: NonNull<u8>, future: Fut) -> Self
     where
         Fut: Future<Output = ()>,
@@ -51,9 +51,9 @@ impl Drop for Task {
 #[cfg(test)]
 mod tests {
     use core::{
-        cell::Cell,
         mem::MaybeUninit,
         ptr::NonNull,
+        sync::atomic::{AtomicBool, Ordering::Relaxed},
         task::{Context, Poll, Waker},
     };
 
@@ -91,10 +91,10 @@ mod tests {
 
     #[test]
     fn dropping_drops_the_future_in_place() {
-        let dropped = Cell::new(false);
+        let dropped = AtomicBool::new(false);
         let mut memory = MaybeUninit::uninit();
         let task = write_task(&mut memory, FlagOnDrop::new(&dropped));
         drop(task);
-        assert!(dropped.get());
+        assert!(dropped.load(Relaxed));
     }
 }

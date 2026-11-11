@@ -55,7 +55,10 @@ impl<
         Fut: Future<Output = ()> + 'a,
     {
         let Self { ctx, id, entry } = self;
-        ctx.spawn_reserved(id, entry, f(ctx));
+        let future = f(ctx);
+        // SAFETY: `Fut: 'a`, the invariant lifetime of `ctx`, so the task outlives every poll and
+        // drop as in `Context::spawn`.
+        unsafe { ctx.storage.tasks.spawn_reserved(id, entry, future) };
         core::mem::forget(self);
         JoinHandle::new(ctx, id)
     }
@@ -71,7 +74,7 @@ impl<
 > Drop for TaskReservation<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn drop(&mut self) {
-        self.ctx.release(self.id);
+        self.ctx.storage.tasks.release(self.id);
     }
 }
 

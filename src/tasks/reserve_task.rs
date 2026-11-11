@@ -50,20 +50,20 @@ impl<
     fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         let ctx = this.ctx;
-        match ctx.reserve() {
+        match ctx.storage.tasks.reserve() {
             Some((id, entry)) => {
                 if this.waiting {
-                    ctx.clear_slot_waiter();
+                    ctx.storage.tasks.clear_slot_waiter();
                     this.waiting = false;
                 }
                 Poll::Ready(TaskReservation::new(this.ctx, id, entry))
             }
             None => {
                 assert!(
-                    this.waiting || !ctx.has_slot_waiter(),
+                    this.waiting || !ctx.storage.tasks.has_slot_waiter(),
                     "only one task can wait for a free task slot"
                 );
-                ctx.set_slot_waiter(cx.waker());
+                ctx.storage.tasks.set_slot_waiter(cx.waker());
                 this.waiting = true;
                 Poll::Pending
             }
@@ -82,7 +82,7 @@ impl<
 {
     fn drop(&mut self) {
         if self.waiting {
-            self.ctx.clear_slot_waiter();
+            self.ctx.storage.tasks.clear_slot_waiter();
         }
     }
 }

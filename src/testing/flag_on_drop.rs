@@ -1,21 +1,21 @@
 use core::{
-    cell::Cell,
     future::Future,
     pin::Pin,
+    sync::atomic::{AtomicBool, Ordering::Relaxed},
     task::{Context, Poll},
 };
 
-pub(crate) struct FlagOnDrop<'a>(&'a Cell<bool>);
+pub(crate) struct FlagOnDrop<'a>(&'a AtomicBool);
 
 impl<'a> FlagOnDrop<'a> {
-    pub(crate) fn new(flag: &'a Cell<bool>) -> Self {
+    pub(crate) fn new(flag: &'a AtomicBool) -> Self {
         Self(flag)
     }
 }
 
 impl Drop for FlagOnDrop<'_> {
     fn drop(&mut self) {
-        self.0.set(true);
+        self.0.store(true, Relaxed);
     }
 }
 

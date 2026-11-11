@@ -17,7 +17,7 @@ pub struct JoinHandle<
     const FDS: usize,
 > {
     ctx: Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    id: TaskId<TASK_SIZE>,
+    pub(crate) id: TaskId<TASK_SIZE>,
 }
 
 impl<
@@ -50,7 +50,7 @@ impl<
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {
-        match self.ctx.set_join_waiter(self.id, cx.waker()) {
+        match self.ctx.storage.tasks.set_join_waiter(self.id, cx.waker()) {
             JoinStatus::Running => Poll::Pending,
             JoinStatus::Finished => Poll::Ready(()),
         }

@@ -1,6 +1,6 @@
 use core::{
     cell::Cell,
-    ptr::NonNull,
+    future::Future,
     task::{Context, Poll, Waker},
 };
 
@@ -25,8 +25,33 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
         }
     }
 
-    pub(crate) fn memory(&self) -> NonNull<u8> {
-        self.memory.as_ptr()
+    /// # Safety
+    ///
+    /// `self` must not move while it holds this task, and everything `Fut` borrows must outlive
+    /// every poll and drop of the task.
+    pub(crate) unsafe fn write<Fut>(&self, future: Fut)
+    where
+        Fut: Future<Output = ()>,
+    {
+        assert!(
+            size_of::<Fut>() <= SIZE,
+            "a task future of {} bytes doesn't fit TASK_SIZE ({SIZE} bytes)",
+            size_of::<Fut>(),
+        );
+        assert!(
+            align_of::<Fut>() <= 16,
+            "a task future aligned to {} bytes doesn't fit (align at most 16)",
+            align_of::<Fut>(),
+        );
+        assert!(!self.has_task(), "a reserved slot holds no task yet");
+        // SAFETY: `Fut` fits the memory, which is aligned to 16 (both checked above). The memory
+        // is unused: it holds no task (checked above), and only a `write` puts one there. It
+        // stays valid and unused until the task is dropped: the task lives in `self`, which
+        // doesn't move while holding it (guaranteed by the caller), and the next `write` asserts
+        // the task is gone. Everything `Fut` borrows outlives every poll and drop of the task
+        // (guaranteed by the caller).
+        let task = unsafe { Task::write(self.memory.as_ptr(), future) };
+        self.occupy(task);
     }
 
     fn peek<R>(&self, f: impl FnOnce(&TaskSlot) -> R) -> R {

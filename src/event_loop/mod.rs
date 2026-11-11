@@ -58,8 +58,12 @@ impl<
     {
         let ctx = storage.claim(selector, state);
         let event_loop = Self { ctx };
-        ctx.spawn_root(f(ctx));
-        match ctx.run_ready() {
+        let root = f(ctx);
+        // SAFETY: `Fut: 'a`, where `'a` is the invariant lifetime of the `Context` that
+        // `storage.claim` just created, the only one this storage will ever have. `EventLoop` drops
+        // every task before `'a` ends, so the root outlives every poll and drop of its task.
+        unsafe { ctx.storage.tasks.spawn_root(root) };
+        match ctx.storage.tasks.run_ready() {
             RootStatus::Running => {}
             RootStatus::Finished => return Err(Error::RootFinished),
         }
@@ -72,15 +76,15 @@ impl<
     /// submits them back to epoll/kqueue.
     pub fn drain_events_without_blocking(&mut self) -> Result<(), Error> {
         let ctx = self.ctx;
-        if let Root::Finished = ctx.root() {
+        if let Root::Finished = ctx.storage.tasks.root() {
             return Err(Error::RootFinished);
         }
         let status = loop {
             ctx.process_selector_events().map_err(Error::Io)?;
-            if !ctx.has_ready() {
+            if !ctx.storage.tasks.has_ready() {
                 break RootStatus::Running;
             }
-            if ctx.run_ready() == RootStatus::Finished {
+            if ctx.storage.tasks.run_ready() == RootStatus::Finished {
                 break RootStatus::Finished;
             }
         };
@@ -96,7 +100,7 @@ impl<
 
     fn finish_drain(&self, status: RootStatus) -> Result<(), Error> {
         if status == RootStatus::Finished {
-            self.ctx.drop_all();
+            self.ctx.storage.tasks.drop_all();
         }
         self.ctx.flush().map_err(Error::Io)?;
         match status {
