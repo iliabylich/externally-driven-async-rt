@@ -1,3 +1,4 @@
+use core::cell::RefCell;
 use core::{
     cell::Cell,
     future::{Future, pending, poll_fn},
@@ -73,13 +74,14 @@ fn registrations(event_loop: &TestLoop<Log>) -> usize {
 fn read_waits_until_the_peer_writes() {
     let (rx, tx) = socketpair();
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut state,
         async move |ctx| {
             let n = read_some(&ctx, &rx, &Cell::new(None)).await.unwrap();
             ctx.dispatch(n as u32);
@@ -103,13 +105,14 @@ fn write_waits_on_a_full_buffer() {
     let (tx, rx) = socketpair();
     fill_send_buffer(&tx);
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut state,
         async move |ctx| {
             let n = write_some(&ctx, &tx, &Cell::new(None)).await.unwrap();
             ctx.dispatch(n as u32);
@@ -130,13 +133,14 @@ fn read_and_write_wait_on_one_fd_at_the_same_time() {
     let (a, b) = socketpair();
     fill_send_buffer(&a);
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut state,
         async move |ctx| {
             let cached = Cell::new(None);
             let mut read = pin!(read_some(&ctx, &a, &cached));
@@ -176,15 +180,16 @@ fn read_and_write_wait_on_one_fd_at_the_same_time() {
     assert_eq!(event_loop.state_mut().events(), [3, 101]);
 }
 
-type IoStorage = LoopStorage<Log, 1, 64, 0, 1, 1>;
+type IoStorage = LoopStorage<1, 64, 0, 1, 1>;
 
 #[test]
 #[cfg_attr(miri, ignore)]
 fn dropping_a_pending_wait_deregisters() {
     let selector = Selector::new().unwrap();
+    let state = RefCell::new(Log::default());
     let storage = {
         static STORAGE: IoStorage = IoStorage::new();
-        STORAGE.claim(&selector, Log::default())
+        STORAGE.claim(&selector, &state)
     };
     let (rx, tx) = socketpair();
     let mut cx = core::task::Context::from_waker(Waker::noop());
@@ -204,9 +209,10 @@ fn dropping_a_pending_wait_deregisters() {
 #[cfg_attr(miri, ignore)]
 fn wait_survives_a_spurious_poll() {
     let selector = Selector::new().unwrap();
+    let state = RefCell::new(Log::default());
     let storage = {
         static STORAGE: IoStorage = IoStorage::new();
-        STORAGE.claim(&selector, Log::default())
+        STORAGE.claim(&selector, &state)
     };
     let (rx, tx) = socketpair();
     let mut cx = core::task::Context::from_waker(Waker::noop());
@@ -226,9 +232,10 @@ fn wait_survives_a_spurious_poll() {
 #[cfg_attr(miri, ignore)]
 fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
     let selector = Selector::new().unwrap();
+    let state = RefCell::new(Log::default());
     let storage = {
         static STORAGE: IoStorage = IoStorage::new();
-        STORAGE.claim(&selector, Log::default())
+        STORAGE.claim(&selector, &state)
     };
     let mut cx = core::task::Context::from_waker(Waker::noop());
     let (old_rx, _old_tx) = socketpair();
@@ -256,9 +263,10 @@ fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
 #[cfg_attr(miri, ignore)]
 fn sequential_registrations_reuse_the_slot() {
     let selector = Selector::new().unwrap();
+    let state = RefCell::new(Log::default());
     let storage = {
         static STORAGE: IoStorage = IoStorage::new();
-        STORAGE.claim(&selector, Log::default())
+        STORAGE.claim(&selector, &state)
     };
     let (rx, tx) = socketpair();
     let mut cx = core::task::Context::from_waker(Waker::noop());

@@ -19,7 +19,7 @@ The whole concept of the library is to define an async closure, wrap it with the
 
 + [`EventLoop`] - the main type
     + takes an async closure in [`EventLoop::new`]
-    + wraps user-defined state (see [`State`])
+    + borrows user-defined state (see [`State`]) for its whole lifetime
     + implements [`rustix::fd::AsFd`]
     + can be driven with [`EventLoop::drain_events_without_blocking`]
     + the state can be accessed between drains with [`EventLoop::state_mut`]
@@ -42,7 +42,7 @@ The whole concept of the library is to define an async closure, wrap it with the
 ### Example
 
 ```rust,no_run
-use core::time::Duration;
+use core::{cell::RefCell, time::Duration};
 
 use externally_driven_async_rt::{EventLoop, LoopStorage, Selector};
 use rustix::event::{PollFd, PollFlags, poll};
@@ -53,12 +53,13 @@ const ROOT_TASK_SIZE: usize = 256;
 const TIMERS: usize = 1;
 const FDS: usize = 1;
 
-type Storage = LoopStorage<(), TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
+type Storage = LoopStorage<TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     static STORAGE: Storage = Storage::new();
     let mut selector = Selector::new()?;
-    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, (), async |ctx| loop {
+    let mut state = RefCell::new(());
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, &mut state, async |ctx| loop {
         ctx.sleep(Duration::from_secs(1)).await;
         println!("hello");
     })?;

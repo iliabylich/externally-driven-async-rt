@@ -1,7 +1,8 @@
+use core::cell::RefCell;
 use core::{
     cell::Cell,
     future::{pending, poll_fn},
-    task::{Poll, Waker},
+    task::Poll,
 };
 
 use rustix::{fd::AsRawFd, io::Errno};
@@ -10,8 +11,7 @@ use crate::{
     Error, EventLoop, LoopStorage, Selector, State,
     testing::{
         DispatchOnDrop, EventLoopTestingExt, Log, TEST_FDS, TEST_TASK_SIZE, TEST_TASKS,
-        TEST_TIMERS, TestContext, TestLoop, TestStorage, counting_waker, is_readable, socketpair,
-        wait_readable,
+        TEST_TIMERS, TestContext, TestLoop, TestStorage, is_readable, socketpair, wait_readable,
     },
 };
 
@@ -19,13 +19,14 @@ use crate::{
 #[cfg_attr(miri, ignore)]
 fn root_finishing_during_new_is_an_error() {
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
     let result = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut state,
         async |ctx| ctx.dispatch(1),
     );
     assert_eq!(result.err(), Some(Error::RootFinished));
@@ -35,13 +36,14 @@ fn root_finishing_during_new_is_an_error() {
 #[cfg_attr(miri, ignore)]
 fn events_dispatched_during_new_are_applied() {
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
     let event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut state,
         async |ctx| {
             ctx.dispatch(1);
             ctx.dispatch(2);
@@ -55,13 +57,14 @@ fn events_dispatched_during_new_are_applied() {
 #[cfg_attr(miri, ignore)]
 fn idle_loop_is_not_readable_and_drains_to_nothing() {
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut state,
         async |_| pending().await,
     )
     .unwrap();
@@ -75,13 +78,14 @@ fn idle_loop_is_not_readable_and_drains_to_nothing() {
 fn root_finishing_inside_a_drain() {
     let (rx, tx) = socketpair();
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut state,
         async move |ctx| {
             ctx.dispatch(1);
             wait_readable(&ctx, &rx).await;
@@ -110,13 +114,14 @@ fn root_finishing_inside_a_drain() {
 fn root_progresses_across_drains() {
     let (rx, tx) = socketpair();
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut state,
         async move |ctx| {
             let mut i = 0;
             loop {
@@ -143,13 +148,14 @@ fn two_loops_on_one_thread_are_independent() {
     let (rx1, tx1) = socketpair();
     let (rx2, _tx2) = socketpair();
     let mut selector = Selector::new().unwrap();
+    let mut first_state = RefCell::new(Log::default());
     let mut first = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut first_state,
         async move |ctx| {
             wait_readable(&ctx, &rx1).await;
             ctx.dispatch(1);
@@ -157,13 +163,14 @@ fn two_loops_on_one_thread_are_independent() {
     )
     .unwrap();
     let mut selector = Selector::new().unwrap();
+    let mut second_state = RefCell::new(Log::default());
     let mut second = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut second_state,
         async move |ctx| {
             wait_readable(&ctx, &rx2).await;
             ctx.dispatch(2);
@@ -187,13 +194,14 @@ fn two_loops_on_one_thread_are_independent() {
 #[should_panic(expected = "boom in new")]
 fn panic_propagates_out_of_new() {
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
     let _ = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut state,
         async |_| panic!("boom in new"),
     );
 }
@@ -204,13 +212,14 @@ fn panic_propagates_out_of_new() {
 fn panic_propagates_out_of_drain() {
     let (rx, tx) = socketpair();
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut state,
         async move |ctx| {
             wait_readable(&ctx, &rx).await;
             panic!("boom in drain");
@@ -236,13 +245,14 @@ fn panic_in_apply_propagates() {
     }
 
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(PanickingState);
     let _ = TestLoop::new(
         {
-            static STORAGE: TestStorage<PanickingState> = TestStorage::new();
+            static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        PanickingState,
+        &mut state,
         async |ctx| {
             ctx.dispatch(());
             pending::<()>().await;
@@ -255,10 +265,10 @@ fn panic_in_apply_propagates() {
 fn root_future_bigger_than_task_size_is_fine() {
     let data = [7u8; 3 * TEST_TASK_SIZE];
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
     let mut event_loop = EventLoop::new(
         {
             static STORAGE: LoopStorage<
-                Log,
                 TEST_TASKS,
                 TEST_TASK_SIZE,
                 { 8 * TEST_TASK_SIZE },
@@ -268,7 +278,7 @@ fn root_future_bigger_than_task_size_is_fine() {
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut state,
         async move |ctx| {
             ctx.dispatch(u32::from(data.iter().all(|byte| *byte == 7)));
             pending::<()>().await;
@@ -283,13 +293,14 @@ fn root_future_bigger_than_task_size_is_fine() {
 fn tasks_are_dropped_when_the_root_finishes() {
     let (rx, tx) = socketpair();
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut state,
         async move |ctx| {
             ctx.spawn(async |ctx| {
                 let _guard = DispatchOnDrop(&ctx, 10);
@@ -330,13 +341,14 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
 
     let (rx, tx) = socketpair();
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut state,
         async move |ctx| {
             ctx.spawn(async |ctx| {
                 let _guard = SpawnOnDrop(&ctx);
@@ -379,13 +391,14 @@ fn events_dispatched_while_dropping_the_loop_are_applied() {
     }
 
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(LastEvent::default());
     let mut event_loop = TestLoop::new(
         {
-            static STORAGE: TestStorage<LastEvent> = TestStorage::new();
+            static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        LastEvent::default(),
+        &mut state,
         async |ctx| {
             ctx.dispatch(1);
             ctx.spawn(async |ctx| {
@@ -402,51 +415,18 @@ fn events_dispatched_while_dropping_the_loop_are_applied() {
 
 #[test]
 #[cfg_attr(miri, ignore)]
-fn dropping_the_loop_drops_its_state() {
-    struct Counted {
-        _waker: Waker,
-    }
-
-    impl State for Counted {
-        type Event = ();
-
-        fn apply(&mut self, (): ()) {}
-    }
-
-    let drops = Cell::new(0);
-    let mut selector = Selector::new().unwrap();
-    let event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage<Counted> = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        Counted {
-            _waker: counting_waker(&drops),
-        },
-        async |_| {
-            pending::<()>().await;
-        },
-    )
-    .unwrap();
-    assert_eq!(drops.get(), 0);
-    drop(event_loop);
-    assert_eq!(drops.get(), 1);
-}
-
-#[test]
-#[cfg_attr(miri, ignore)]
 fn waking_after_the_loop_is_gone_is_harmless() {
     let escaped = Cell::new(None);
     {
         let mut selector = Selector::new().unwrap();
+        let mut state = RefCell::new(Log::default());
         let event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            Log::default(),
+            &mut state,
             async |_| {
                 poll_fn(|cx| {
                     escaped.set(Some(cx.waker().clone()));
@@ -465,13 +445,14 @@ fn waking_after_the_loop_is_gone_is_harmless() {
 fn loop_exposes_the_selector_fd() {
     let mut selector = Selector::new().unwrap();
     let fd = selector.as_fd().as_raw_fd();
+    let mut state = RefCell::new(Log::default());
     let event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut state,
         async |_| pending().await,
     )
     .unwrap();

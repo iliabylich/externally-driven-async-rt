@@ -1,15 +1,17 @@
 use core::cell::Cell;
+use core::cell::RefCell;
 
 use crate::{LoopStorage, selector::Direction, testing::counting_waker, time::Instant};
 
-type SmallStorage = LoopStorage<(), 1, 64, 0, 2, 2>;
+type SmallStorage = LoopStorage<1, 64, 0, 2, 2>;
 
 #[test]
 fn clearing_drops_live_wakers() {
     let drops = Cell::new(0);
+    let state = RefCell::new(());
     let storage = {
         static STORAGE: SmallStorage = SmallStorage::new();
-        STORAGE.claim(&(), ())
+        STORAGE.claim(&(), &state)
     };
     storage
         .timers()
@@ -31,8 +33,9 @@ fn clearing_drops_live_wakers() {
 #[should_panic(expected = "a WakeQueue can only be used by one EventLoop")]
 fn a_storage_can_only_be_claimed_once() {
     static STORAGE: SmallStorage = SmallStorage::new();
-    STORAGE.claim(&(), ());
-    STORAGE.claim(&(), ());
+    let state = RefCell::new(());
+    STORAGE.claim(&(), &state);
+    STORAGE.claim(&(), &state);
 }
 
 #[test]

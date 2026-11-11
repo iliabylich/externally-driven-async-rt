@@ -39,6 +39,8 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> co
 
 #[cfg(test)]
 mod tests {
+    use core::cell::RefCell;
+
     use core::future::pending;
 
     use crate::{
@@ -51,13 +53,14 @@ mod tests {
     fn joining_a_running_task_waits_for_it() {
         let (rx, tx) = socketpair();
         let mut selector = Selector::new().unwrap();
+        let mut state = RefCell::new(Log::default());
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            Log::default(),
+            &mut state,
             async move |ctx| {
                 ctx.spawn(async move |ctx| {
                     wait_readable(&ctx, &rx).await;
@@ -82,13 +85,14 @@ mod tests {
     fn joining_a_finished_task_resolves_immediately() {
         let (rx, tx) = socketpair();
         let mut selector = Selector::new().unwrap();
+        let mut state = RefCell::new(Log::default());
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            Log::default(),
+            &mut state,
             async move |ctx| {
                 let handle = ctx.spawn(async |ctx| ctx.dispatch(1));
                 wait_readable(&ctx, &rx).await;
@@ -111,13 +115,14 @@ mod tests {
     fn dropped_handle_detaches_the_task() {
         let (rx, tx) = socketpair();
         let mut selector = Selector::new().unwrap();
+        let mut state = RefCell::new(Log::default());
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            Log::default(),
+            &mut state,
             async move |ctx| {
                 ctx.spawn(async move |ctx| {
                     wait_readable(&ctx, &rx).await;
@@ -136,13 +141,14 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn spawned_task_can_spawn_and_join() {
         let mut selector = Selector::new().unwrap();
+        let mut state = RefCell::new(Log::default());
         let event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            Log::default(),
+            &mut state,
             async |ctx| {
                 ctx.spawn(async |ctx| {
                     ctx.spawn(async |ctx| ctx.dispatch(1)).await;

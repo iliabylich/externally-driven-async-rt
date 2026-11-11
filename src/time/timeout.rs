@@ -41,6 +41,8 @@ impl<F, const TIMERS: usize> core::fmt::Debug for Timeout<'_, F, TIMERS> {
 
 #[cfg(test)]
 mod tests {
+    use core::cell::RefCell;
+
     use core::{
         future::{Future, pending},
         pin::pin,
@@ -67,13 +69,14 @@ mod tests {
     fn future_finishing_first_wins() {
         let (rx, tx) = socketpair();
         let mut selector = Selector::new().unwrap();
+        let mut state = RefCell::new(Log::default());
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            Log::default(),
+            &mut state,
             async move |ctx| {
                 let result = ctx
                     .timeout(Duration::from_secs(60), wait_readable(&ctx, &rx))
@@ -97,13 +100,14 @@ mod tests {
     fn elapsing_drops_the_future() {
         let (rx, _tx) = socketpair();
         let mut selector = Selector::new().unwrap();
+        let mut state = RefCell::new(Log::default());
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            Log::default(),
+            &mut state,
             async move |ctx| {
                 let result = ctx
                     .timeout(Duration::from_millis(10), wait_readable(&ctx, &rx))
@@ -125,13 +129,14 @@ mod tests {
         let (rx, tx) = socketpair();
         rustix::io::write(&tx, b"x").unwrap();
         let mut selector = Selector::new().unwrap();
+        let mut state = RefCell::new(Log::default());
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            Log::default(),
+            &mut state,
             async move |ctx| {
                 let result = ctx.timeout(Duration::ZERO, wait_readable(&ctx, &rx)).await;
                 ctx.dispatch(result.map_or(0, |()| 1));

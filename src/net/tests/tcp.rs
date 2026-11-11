@@ -1,3 +1,4 @@
+use core::cell::RefCell;
 use core::{
     future::{pending, poll_fn},
     net::SocketAddr,
@@ -37,13 +38,14 @@ fn raw_listener() -> (OwnedFd, SocketAddr) {
 fn echo_with_a_raw_peer() {
     let (listener, addr) = raw_listener();
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut state,
         async move |ctx| {
             let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
             assert_eq!(stream.peer_addr().unwrap(), addr);
@@ -79,13 +81,14 @@ fn listener_accepts_a_raw_client() {
     let mut listener = TcpListener::bind(LOCALHOST).unwrap();
     let addr = listener.local_addr().unwrap();
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut state,
         async move |ctx| {
             let (mut stream, peer) = listener.accept(&ctx).await.unwrap();
             assert_eq!(stream.peer_addr().unwrap(), peer);
@@ -119,13 +122,14 @@ fn listener_accepts_a_raw_client() {
 fn connect_to_a_closed_port_fails() {
     let addr = TcpListener::bind(LOCALHOST).unwrap().local_addr().unwrap();
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut state,
         async move |ctx| {
             let errno = TcpStream::connect(&ctx, addr).await.err().unwrap();
             ctx.dispatch(errno.raw_os_error() as u32);
@@ -148,13 +152,14 @@ fn borrowed_halves_read_and_write_concurrently_in_one_task() {
     let mut listener = TcpListener::bind(LOCALHOST).unwrap();
     let addr = listener.local_addr().unwrap();
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut state,
         async move |ctx| {
             ctx.spawn(async move |ctx| {
                 let (mut stream, _) = listener.accept(&ctx).await.unwrap();

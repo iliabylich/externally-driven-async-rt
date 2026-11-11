@@ -54,6 +54,8 @@ impl<const TIMERS: usize> core::fmt::Debug for Sleep<'_, TIMERS> {
 
 #[cfg(test)]
 mod tests {
+    use core::cell::RefCell;
+
     use core::{
         pin::Pin,
         task::{Context, Poll, Waker},
@@ -72,13 +74,14 @@ mod tests {
     fn sleep_waits_at_least_its_duration() {
         let start = Instant::now();
         let mut selector = Selector::new().unwrap();
+        let mut state = RefCell::new(Log::default());
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            Log::default(),
+            &mut state,
             async |ctx| {
                 ctx.sleep(Duration::from_millis(20)).await;
                 ctx.dispatch(1);
@@ -95,13 +98,14 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn sleeps_complete_in_deadline_order() {
         let mut selector = Selector::new().unwrap();
+        let mut state = RefCell::new(Log::default());
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            Log::default(),
+            &mut state,
             async |ctx| {
                 let handles = [30, 10, 20].map(|ms| {
                     ctx.spawn(async move |ctx| {
@@ -126,13 +130,14 @@ mod tests {
         let period = Duration::from_millis(10);
         let start = Instant::now();
         let mut selector = Selector::new().unwrap();
+        let mut state = RefCell::new(Log::default());
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            Log::default(),
+            &mut state,
             async move |ctx| {
                 let mut next = Instant::now();
                 for i in 0..5 {

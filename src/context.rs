@@ -46,12 +46,7 @@ impl<
 
     /// Dispatches given `event` on a state that was given to [`EventLoop`](crate::EventLoop).
     pub fn dispatch(&self, event: S::Event) {
-        self.storage
-            .state_slot()
-            .borrow_mut()
-            .as_mut()
-            .expect("the state is set while tasks run")
-            .apply(event);
+        self.storage.state().borrow_mut().apply(event);
     }
 
     /// Spawns a task with a given async closure.

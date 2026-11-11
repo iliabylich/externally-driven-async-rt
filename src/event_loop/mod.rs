@@ -1,6 +1,6 @@
 mod error;
 
-use core::cell::RefMut;
+use core::cell::{RefCell, RefMut};
 
 use rustix::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
@@ -47,9 +47,9 @@ impl<
     /// 2. the future is bigger than `ROOT_TASK_SIZE` bytes
     /// 3. the future is aligned to more than 16 bytes.
     pub fn new<F, Fut>(
-        storage: &'static LoopStorage<S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        storage: &'static LoopStorage<TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         selector: &'a mut Selector,
-        state: S,
+        state: &'a mut RefCell<S>,
         f: F,
     ) -> Result<Self, Error>
     where
@@ -91,11 +91,7 @@ impl<
     ///
     /// This is the only way to communicate with the external world.
     pub fn state_mut(&mut self) -> RefMut<'_, S> {
-        RefMut::map(self.storage.state_slot().borrow_mut(), |state| {
-            state
-                .as_mut()
-                .expect("the state is set until the loop is dropped")
-        })
+        self.storage.state().borrow_mut()
     }
 
     fn finish_drain(&self, status: RootStatus) -> Result<(), Error> {
@@ -129,7 +125,6 @@ impl<
 {
     fn drop(&mut self) {
         self.storage.clear();
-        drop(self.storage.state_slot().borrow_mut().take());
     }
 }
 

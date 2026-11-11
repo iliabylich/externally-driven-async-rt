@@ -18,8 +18,9 @@ pub(crate) struct LoopStorageGuard<
     const FDS: usize,
     Sel = Selector,
 > {
-    storage: &'static LoopStorage<S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    storage: &'static LoopStorage<TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     selector: &'a Sel,
+    state: &'a RefCell<S>,
     tasks: TasksGuard<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
 }
 
@@ -35,15 +36,15 @@ impl<
 > LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, Sel>
 {
     pub(crate) fn claim(
-        storage: &'static LoopStorage<S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        storage: &'static LoopStorage<TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         selector: &'a Sel,
-        state: S,
+        state: &'a RefCell<S>,
     ) -> Self {
         let tasks = TasksGuard::claim(&storage.tasks);
-        *storage.state.borrow_mut() = Some(state);
         Self {
             storage,
             selector,
+            state,
             tasks,
         }
     }
@@ -60,8 +61,8 @@ impl<
         &self.storage.io_waiters
     }
 
-    pub(crate) fn state_slot(self) -> &'static RefCell<Option<S>> {
-        &self.storage.state
+    pub(crate) fn state(self) -> &'a RefCell<S> {
+        self.state
     }
 
     pub(crate) fn clear(self) {

@@ -1,3 +1,4 @@
+use core::cell::RefCell;
 use core::{net::SocketAddr, time::Duration};
 
 use externally_driven_async_rt::{
@@ -22,7 +23,7 @@ const FDS: usize = MAX_CLIENTS + 1;
 
 type ServerLoop<'a> = EventLoop<'a, Server, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
 type ServerContext<'a> = Context<'a, Server, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
-type ServerStorage = LoopStorage<Server, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
+type ServerStorage = LoopStorage<TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
 
 #[derive(Default)]
 struct Server {
@@ -185,7 +186,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     static STORAGE: ServerStorage = ServerStorage::new();
     let mut selector = Selector::new()?;
-    let mut event_loop = ServerLoop::new(&STORAGE, &mut selector, Server::default(), root)?;
+    let mut state = RefCell::new(Server::default());
+    let mut event_loop = ServerLoop::new(&STORAGE, &mut selector, &mut state, root)?;
     loop {
         for line in core::mem::take(&mut event_loop.state_mut().log) {
             println!("{line}");

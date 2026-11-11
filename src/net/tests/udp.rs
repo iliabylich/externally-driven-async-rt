@@ -1,3 +1,4 @@
+use core::cell::RefCell;
 use core::{
     future::pending,
     net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -29,13 +30,14 @@ fn raw_peer() -> (OwnedFd, SocketAddr) {
 fn round_trip_with_a_raw_peer() {
     let (peer, peer_addr) = raw_peer();
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut state,
         async move |ctx| {
             let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
             assert!(socket.local_addr().unwrap().port() != 0);
@@ -74,13 +76,14 @@ fn round_trip_with_a_raw_peer() {
 fn connected_socket_reports_a_refused_peer() {
     let closed = raw_peer().1;
     let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        Log::default(),
+        &mut state,
         async move |ctx| {
             let mut buf = [0; 8];
             let mut socket = UdpSocket::bind(LOCALHOST).unwrap();

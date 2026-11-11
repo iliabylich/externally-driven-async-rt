@@ -88,6 +88,8 @@ impl<
 
 #[cfg(test)]
 mod tests {
+    use core::cell::RefCell;
+
     use core::{future::pending, time::Duration};
 
     use crate::{
@@ -99,13 +101,14 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn spawning_runs_the_task() {
         let mut selector = Selector::new().unwrap();
+        let mut state = RefCell::new(Log::default());
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            Log::default(),
+            &mut state,
             async |ctx| {
                 let task = ctx.reserve_task().await;
                 task.spawn(async |ctx| ctx.dispatch(1)).await;
@@ -121,13 +124,14 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn dropping_frees_the_slot_and_wakes_the_waiter() {
         let mut selector = Selector::new().unwrap();
+        let mut state = RefCell::new(Log::default());
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            Log::default(),
+            &mut state,
             async |ctx| {
                 for _ in 0..TEST_TASKS - 3 {
                     ctx.spawn(async |_| pending::<()>().await);
@@ -155,13 +159,14 @@ mod tests {
     #[should_panic(expected = "more than 16 concurrent tasks")]
     fn a_reserved_slot_is_not_handed_to_spawn() {
         let mut selector = Selector::new().unwrap();
+        let mut state = RefCell::new(Log::default());
         let _ = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            Log::default(),
+            &mut state,
             async |ctx| {
                 for _ in 0..TEST_TASKS - 2 {
                     ctx.spawn(async |_| pending::<()>().await);

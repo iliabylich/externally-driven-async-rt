@@ -106,6 +106,8 @@ impl<
 
 #[cfg(test)]
 mod tests {
+    use core::cell::RefCell;
+
     use core::{future::pending, time::Duration};
 
     use crate::{
@@ -117,13 +119,14 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn waits_until_a_task_finishes() {
         let mut selector = Selector::new().unwrap();
+        let mut state = RefCell::new(Log::default());
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            Log::default(),
+            &mut state,
             async |ctx| {
                 ctx.spawn(async |ctx| {
                     ctx.sleep(Duration::from_millis(10)).await;
@@ -148,13 +151,14 @@ mod tests {
     #[should_panic(expected = "only one task can wait for a free task slot")]
     fn a_second_waiter_panics() {
         let mut selector = Selector::new().unwrap();
+        let mut state = RefCell::new(Log::default());
         let _ = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            Log::default(),
+            &mut state,
             async |ctx| {
                 for _ in 0..TEST_TASKS - 3 {
                     ctx.spawn(async |_| pending::<()>().await);
