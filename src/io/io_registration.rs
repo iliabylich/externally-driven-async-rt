@@ -6,7 +6,7 @@ use core::{
 use rustix::fd::{AsRawFd, BorrowedFd};
 
 use crate::{
-    io::{IoIndex, IoWaiters, Wait},
+    io::{IoIndex, IoWaiter, IoWaiters, Wait},
     selector::{Direction, Selector},
     state::State,
     storage::LoopStorageGuard,
@@ -16,6 +16,7 @@ pub(crate) struct IoRegistration<'a, const FDS: usize> {
     io_waiters: &'a IoWaiters<FDS>,
     selector: &'a Selector,
     index: IoIndex,
+    io: &'a IoWaiter,
     direction: Direction,
 }
 
@@ -32,12 +33,14 @@ impl<'a, const FDS: usize> IoRegistration<'a, FDS> {
         cached: &Cell<Option<IoIndex>>,
         direction: Direction,
     ) -> Self {
+        let (index, io) = storage
+            .io_waiters()
+            .register(cached, fd.as_raw_fd(), direction);
         Self {
             io_waiters: storage.io_waiters(),
             selector: storage.selector(),
-            index: storage
-                .io_waiters()
-                .register(cached, fd.as_raw_fd(), direction),
+            index,
+            io,
             direction,
         }
     }
@@ -47,19 +50,19 @@ impl<'a, const FDS: usize> IoRegistration<'a, FDS> {
     }
 
     pub(crate) fn poll_wait(&self, waiting: &mut bool, cx: &mut Context<'_>) -> Poll<()> {
-        if *waiting && !self.io_waiters.has_waker(self.index, self.direction) {
+        let waker = self.io.waker(self.direction);
+        if *waiting && !waker.is_set() {
             *waiting = false;
             return Poll::Ready(());
         }
-        self.io_waiters
-            .set_waker(self.index, self.direction, cx.waker());
+        waker.store(cx.waker());
         *waiting = true;
         Poll::Pending
     }
 
     pub(crate) fn cancel_wait(&self, waiting: bool) {
         if waiting {
-            self.io_waiters.remove_waker(self.index, self.direction);
+            self.io.waker(self.direction).take();
         }
     }
 }

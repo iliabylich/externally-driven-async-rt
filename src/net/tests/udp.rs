@@ -1,5 +1,5 @@
-use core::cell::RefCell;
 use core::{
+    cell::RefCell,
     future::pending,
     net::{IpAddr, Ipv4Addr, SocketAddr},
 };

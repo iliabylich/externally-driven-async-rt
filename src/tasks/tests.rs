@@ -1,6 +1,6 @@
-use core::cell::RefCell;
 use core::{
     cell::Cell,
+    cell::RefCell,
     future::poll_fn,
     task::{Poll, Waker},
 };

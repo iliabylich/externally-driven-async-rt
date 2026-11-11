@@ -1,5 +1,4 @@
-use core::cell::RefCell;
-use core::{ffi::CStr, future::pending};
+use core::{cell::RefCell, ffi::CStr, future::pending};
 
 use rustix::{
     io::Errno,

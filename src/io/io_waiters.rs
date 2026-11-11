@@ -1,4 +1,4 @@
-use core::{cell::Cell, task::Waker};
+use core::cell::Cell;
 
 use rustix::fd::RawFd;
 
@@ -24,7 +24,7 @@ impl<const N: usize> IoWaiters<N> {
         cached: &Cell<Option<IoIndex>>,
         fd: RawFd,
         direction: Direction,
-    ) -> IoIndex {
+    ) -> (IoIndex, &IoWaiter) {
         let (index, io) = match cached
             .get()
             .and_then(|index| Some((index, self.pool.get(index)?)))
@@ -35,7 +35,7 @@ impl<const N: usize> IoWaiters<N> {
         };
         cached.set(Some(index));
         io.register(direction);
-        index
+        (index, io)
     }
 
     fn alloc(&self, fd: RawFd) -> (IoIndex, &IoWaiter) {
@@ -53,23 +53,6 @@ impl<const N: usize> IoWaiters<N> {
             self.pool.free(index);
         }
         change
-    }
-
-    pub(crate) fn set_waker(&self, index: IoIndex, direction: Direction, waker: &Waker) {
-        let io = self.pool.get(index).expect("IO is not registered");
-        io.waker(direction).store(waker);
-    }
-
-    pub(crate) fn remove_waker(&self, index: IoIndex, direction: Direction) {
-        if let Some(io) = self.pool.get(index) {
-            io.waker(direction).take();
-        }
-    }
-
-    pub(crate) fn has_waker(&self, index: IoIndex, direction: Direction) -> bool {
-        self.pool
-            .get(index)
-            .is_some_and(|io| io.waker(direction).is_set())
     }
 
     pub(crate) fn wake_ready(&self, token: Token, ready: Directions) {
@@ -129,14 +112,14 @@ mod tests {
     fn register_wait_release() {
         let io_waiters = &IoWaiters::<1>::new();
         let cached = &Cell::new(None);
-        let index = io_waiters.register(cached, 3, Direction::Write);
-        assert!(!io_waiters.has_waker(index, Direction::Write));
-        io_waiters.set_waker(index, Direction::Write, Waker::noop());
-        assert!(io_waiters.has_waker(index, Direction::Write));
+        let (index, io) = io_waiters.register(cached, 3, Direction::Write);
+        assert!(!io.waker(Direction::Write).is_set());
+        io.waker(Direction::Write).store(Waker::noop());
+        assert!(io.waker(Direction::Write).is_set());
         assert_eq!(io_waiters.release(index, Direction::Write), None);
-        assert!(!io_waiters.has_waker(index, Direction::Write));
+        assert!(!io.waker(Direction::Write).is_set());
         assert_eq!(io_waiters.count(), 0);
-        let reused = io_waiters.register(cached, 3, Direction::Read);
+        let (reused, _) = io_waiters.register(cached, 3, Direction::Read);
         assert_ne!(reused, index);
     }
 
@@ -144,8 +127,8 @@ mod tests {
     fn both_directions_of_one_fd_share_an_entry() {
         let io_waiters = &IoWaiters::<1>::new();
         let cached = &Cell::new(None);
-        let reader = io_waiters.register(cached, 3, Direction::Read);
-        let writer = io_waiters.register(cached, 3, Direction::Write);
+        let (reader, _) = io_waiters.register(cached, 3, Direction::Read);
+        let (writer, _) = io_waiters.register(cached, 3, Direction::Write);
         assert_eq!(reader, writer);
         assert_eq!(io_waiters.count(), 1);
     }
@@ -154,8 +137,8 @@ mod tests {
     fn a_cached_index_of_another_fd_is_not_reused() {
         let io_waiters = &IoWaiters::<2>::new();
         let cached = &Cell::new(None);
-        let first = io_waiters.register(cached, 3, Direction::Read);
-        let second = io_waiters.register(cached, 4, Direction::Read);
+        let (first, _) = io_waiters.register(cached, 3, Direction::Read);
+        let (second, _) = io_waiters.register(cached, 4, Direction::Read);
         assert_ne!(first, second);
         assert_eq!(cached.get(), Some(second));
     }
@@ -172,15 +155,15 @@ mod tests {
     #[test]
     fn changes_follow_the_stored_wakers() {
         let io_waiters = &IoWaiters::<1>::new();
-        let index = io_waiters.register(&Cell::new(None), 3, Direction::Read);
+        let (index, io) = io_waiters.register(&Cell::new(None), 3, Direction::Read);
         assert_pending_changes(io_waiters, []);
 
-        io_waiters.set_waker(index, Direction::Read, Waker::noop());
+        io.waker(Direction::Read).store(Waker::noop());
         assert_pending_changes(io_waiters, [change(index, 3, Directions::Read)]);
         io_waiters.mark_flushed();
         assert_pending_changes(io_waiters, []);
 
-        io_waiters.remove_waker(index, Direction::Read);
+        io.waker(Direction::Read).take();
         assert_pending_changes(io_waiters, [change(index, 3, Directions::Empty)]);
     }
 
@@ -188,10 +171,10 @@ mod tests {
     fn one_change_per_fd_with_the_combined_interest() {
         let io_waiters = &IoWaiters::<1>::new();
         let cached = &Cell::new(None);
-        let index = io_waiters.register(cached, 3, Direction::Read);
+        let (index, io) = io_waiters.register(cached, 3, Direction::Read);
         io_waiters.register(cached, 3, Direction::Write);
-        io_waiters.set_waker(index, Direction::Read, Waker::noop());
-        io_waiters.set_waker(index, Direction::Write, Waker::noop());
+        io.waker(Direction::Read).store(Waker::noop());
+        io.waker(Direction::Write).store(Waker::noop());
         assert_pending_changes(io_waiters, [change(index, 3, Directions::Both)]);
     }
 
@@ -199,10 +182,10 @@ mod tests {
     fn releasing_an_armed_direction_returns_the_remaining_interest() {
         let io_waiters = &IoWaiters::<1>::new();
         let cached = &Cell::new(None);
-        let index = io_waiters.register(cached, 3, Direction::Read);
+        let (index, io) = io_waiters.register(cached, 3, Direction::Read);
         io_waiters.register(cached, 3, Direction::Write);
-        io_waiters.set_waker(index, Direction::Read, Waker::noop());
-        io_waiters.set_waker(index, Direction::Write, Waker::noop());
+        io.waker(Direction::Read).store(Waker::noop());
+        io.waker(Direction::Write).store(Waker::noop());
         io_waiters.mark_flushed();
 
         assert_eq!(
@@ -222,15 +205,15 @@ mod tests {
     fn an_event_wakes_only_the_ready_direction_and_rearms_the_other() {
         let io_waiters = &IoWaiters::<1>::new();
         let cached = &Cell::new(None);
-        let index = io_waiters.register(cached, 3, Direction::Read);
+        let (index, io) = io_waiters.register(cached, 3, Direction::Read);
         io_waiters.register(cached, 3, Direction::Write);
-        io_waiters.set_waker(index, Direction::Read, Waker::noop());
-        io_waiters.set_waker(index, Direction::Write, Waker::noop());
+        io.waker(Direction::Read).store(Waker::noop());
+        io.waker(Direction::Write).store(Waker::noop());
         io_waiters.mark_flushed();
 
         io_waiters.wake_ready(Token::from_bits(index.to_bits()), Directions::Read);
-        assert!(!io_waiters.has_waker(index, Direction::Read));
-        assert!(io_waiters.has_waker(index, Direction::Write));
+        assert!(!io.waker(Direction::Read).is_set());
+        assert!(io.waker(Direction::Write).is_set());
         assert_pending_changes(io_waiters, [change(index, 3, Directions::Write)]);
     }
 
@@ -238,14 +221,14 @@ mod tests {
     fn an_event_for_a_released_entry_is_ignored() {
         let io_waiters = &IoWaiters::<1>::new();
         let cached = &Cell::new(None);
-        let stale = io_waiters.register(cached, 3, Direction::Read);
+        let (stale, _) = io_waiters.register(cached, 3, Direction::Read);
         io_waiters.release(stale, Direction::Read);
-        let index = io_waiters.register(cached, 3, Direction::Read);
-        io_waiters.set_waker(index, Direction::Read, Waker::noop());
+        let (_, io) = io_waiters.register(cached, 3, Direction::Read);
+        io.waker(Direction::Read).store(Waker::noop());
         io_waiters.mark_flushed();
 
         io_waiters.wake_ready(Token::from_bits(stale.to_bits()), Directions::Both);
-        assert!(io_waiters.has_waker(index, Direction::Read));
+        assert!(io.waker(Direction::Read).is_set());
         assert_pending_changes(io_waiters, []);
     }
 

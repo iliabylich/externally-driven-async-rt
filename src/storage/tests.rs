@@ -1,5 +1,4 @@
-use core::cell::Cell;
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 
 use crate::{LoopStorage, selector::Direction, testing::counting_waker, time::Instant};
 
@@ -16,13 +15,11 @@ fn clearing_drops_live_wakers() {
     storage
         .timers()
         .alloc(Instant::now(), counting_waker(&drops));
-    let io = storage
+    let (_, io) = storage
         .io_waiters()
         .register(&Cell::new(None), 3, Direction::Read);
     let io_waker = counting_waker(&drops);
-    storage
-        .io_waiters()
-        .set_waker(io, Direction::Read, &io_waker);
+    io.waker(Direction::Read).store(&io_waker);
     drop(io_waker);
     assert_eq!(drops.get(), 1);
     storage.clear();

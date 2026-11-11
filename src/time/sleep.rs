@@ -54,9 +54,8 @@ impl<const TIMERS: usize> core::fmt::Debug for Sleep<'_, TIMERS> {
 
 #[cfg(test)]
 mod tests {
-    use core::cell::RefCell;
-
     use core::{
+        cell::RefCell,
         pin::Pin,
         task::{Context, Poll, Waker},
         time::Duration,

@@ -1,5 +1,4 @@
-use core::cell::RefCell;
-use core::{net::SocketAddr, time::Duration};
+use core::{cell::RefCell, net::SocketAddr, time::Duration};
 use std::os::fd::AsFd;
 
 use externally_driven_async_rt::{

@@ -88,9 +88,7 @@ impl<
 
 #[cfg(test)]
 mod tests {
-    use core::cell::RefCell;
-
-    use core::{future::pending, time::Duration};
+    use core::{cell::RefCell, future::pending, time::Duration};
 
     use crate::{
         Selector,

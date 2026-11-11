@@ -41,9 +41,8 @@ impl<F, const TIMERS: usize> core::fmt::Debug for Timeout<'_, F, TIMERS> {
 
 #[cfg(test)]
 mod tests {
-    use core::cell::RefCell;
-
     use core::{
+        cell::RefCell,
         future::{Future, pending},
         pin::pin,
         task::{Context, Poll, Waker},

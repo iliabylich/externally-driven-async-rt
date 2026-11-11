@@ -39,9 +39,7 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> co
 
 #[cfg(test)]
 mod tests {
-    use core::cell::RefCell;
-
-    use core::future::pending;
+    use core::{cell::RefCell, future::pending};
 
     use crate::{
         Error, Selector,

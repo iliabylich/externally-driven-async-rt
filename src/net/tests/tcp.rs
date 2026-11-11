@@ -1,5 +1,5 @@
-use core::cell::RefCell;
 use core::{
+    cell::RefCell,
     future::{pending, poll_fn},
     net::SocketAddr,
     pin::pin,
