@@ -1,6 +1,8 @@
 use core::cell::RefCell;
 
-use crate::{event_loop::EventLoopGuard, io::IoWaiters, tasks::Tasks, time::Timers};
+use crate::{
+    context::Context, io::IoWaiters, selector::Selector, state::State, tasks::Tasks, time::Timers,
+};
 
 /// The main pre-allocated storage that [`EventLoop`](crate::EventLoop) needs.
 ///
@@ -18,7 +20,7 @@ pub struct LoopStorage<
 }
 
 // SAFETY: a storage has no public methods, so other threads can only pass `&LoopStorage` around.
-// The crate touches it only through an `EventLoopGuard`, which only `EventLoopGuard::claim`
+// The crate touches it only through a `Context`, which only `Context::claim`
 // creates, and that succeeds once ever, on the thread that runs the claiming loop (claiming the
 // tasks claims their `WakeQueue`, which panics the second time); `EventLoop` and `Context` are
 // `!Send`, so everything but the wakers stays on that thread, and wakers only touch the atomic
@@ -50,12 +52,12 @@ impl<
         }
     }
 
-    pub(crate) fn claim<'a, S: 'static, Sel>(
+    pub(crate) fn claim<'a, S: State>(
         &'static self,
-        selector: &'a Sel,
+        selector: &'a Selector,
         state: &'a RefCell<S>,
-    ) -> EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, Sel> {
-        EventLoopGuard::claim(self, selector, state)
+    ) -> Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
+        Context::claim(self, selector, state)
     }
 }
 

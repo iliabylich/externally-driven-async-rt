@@ -1,9 +1,11 @@
 mod direction;
-#[cfg(target_os = "linux")]
+#[cfg(miri)]
+mod dummy;
+#[cfg(all(target_os = "linux", not(miri)))]
 mod epoll;
 mod io_change;
 mod kernel_timer;
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(miri)))]
 mod kqueue;
 mod selector_event;
 mod timer_change;
@@ -13,9 +15,11 @@ compile_error!("externally-driven-async-rt supports only macOS and Linux");
 
 use rustix::fd::{AsFd, BorrowedFd};
 
-#[cfg(target_os = "linux")]
+#[cfg(miri)]
+use self::dummy::DummySelector as Backend;
+#[cfg(all(target_os = "linux", not(miri)))]
 use self::epoll::EpollSelector as Backend;
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(miri)))]
 use self::kqueue::KqueueSelector as Backend;
 pub(crate) use self::{
     direction::{Direction, Directions},

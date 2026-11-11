@@ -1,7 +1,7 @@
 use core::{future::Future, pin::Pin, task::Poll};
 
 use crate::{
-    event_loop::EventLoopGuard,
+    context::Context,
     state::State,
     tasks::{JoinStatus, TaskId},
 };
@@ -16,7 +16,7 @@ pub struct JoinHandle<
     const TIMERS: usize,
     const FDS: usize,
 > {
-    guard: EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    ctx: Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     id: TaskId<TASK_SIZE>,
 }
 
@@ -31,10 +31,10 @@ impl<
 > JoinHandle<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     pub(crate) fn new(
-        guard: EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         id: TaskId<TASK_SIZE>,
     ) -> Self {
-        Self { guard, id }
+        Self { ctx, id }
     }
 }
 
@@ -50,7 +50,7 @@ impl<
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {
-        match self.guard.set_join_waiter(self.id, cx.waker()) {
+        match self.ctx.set_join_waiter(self.id, cx.waker()) {
             JoinStatus::Running => Poll::Pending,
             JoinStatus::Finished => Poll::Ready(()),
         }

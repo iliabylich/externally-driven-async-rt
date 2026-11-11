@@ -85,7 +85,7 @@ impl Socket {
             Err(Errno::INPROGRESS | Errno::INTR) => {}
             Err(errno) => return Err(errno),
         }
-        IoRegistration::new(ctx.guard(), socket.0.as_fd(), &socket.1, Direction::Write)
+        IoRegistration::new(ctx, socket.0.as_fd(), &socket.1, Direction::Write)
             .wait()
             .await;
         syscall_start!("getsockopt", socket.0, "SOL_SOCKET", "SO_ERROR");

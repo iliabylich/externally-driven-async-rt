@@ -1,6 +1,6 @@
 use core::{future::Future, pin::Pin, task::Poll};
 
-use crate::{event_loop::EventLoopGuard, state::State, tasks::TaskReservation};
+use crate::{context::Context, state::State, tasks::TaskReservation};
 
 /// A future to obtain a [`TaskReservation`].
 #[must_use = "futures do nothing unless you `.await` or poll them"]
@@ -13,7 +13,7 @@ pub struct ReserveTask<
     const TIMERS: usize,
     const FDS: usize,
 > {
-    guard: EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    ctx: Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     waiting: bool,
 }
 
@@ -27,11 +27,9 @@ impl<
     const FDS: usize,
 > ReserveTask<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
-    pub(crate) fn new(
-        guard: EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    ) -> Self {
+    pub(crate) fn new(ctx: Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>) -> Self {
         Self {
-            guard,
+            ctx,
             waiting: false,
         }
     }
@@ -51,21 +49,21 @@ impl<
 
     fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        let guard = this.guard;
-        match guard.reserve() {
+        let ctx = this.ctx;
+        match ctx.reserve() {
             Some((id, entry)) => {
                 if this.waiting {
-                    guard.clear_slot_waiter();
+                    ctx.clear_slot_waiter();
                     this.waiting = false;
                 }
-                Poll::Ready(TaskReservation::new(this.guard, id, entry))
+                Poll::Ready(TaskReservation::new(this.ctx, id, entry))
             }
             None => {
                 assert!(
-                    this.waiting || !guard.has_slot_waiter(),
+                    this.waiting || !ctx.has_slot_waiter(),
                     "only one task can wait for a free task slot"
                 );
-                guard.set_slot_waiter(cx.waker());
+                ctx.set_slot_waiter(cx.waker());
                 this.waiting = true;
                 Poll::Pending
             }
@@ -84,7 +82,7 @@ impl<
 {
     fn drop(&mut self) {
         if self.waiting {
-            self.guard.clear_slot_waiter();
+            self.ctx.clear_slot_waiter();
         }
     }
 }

@@ -1,6 +1,5 @@
 use crate::{
     context::Context,
-    event_loop::EventLoopGuard,
     state::State,
     tasks::{JoinHandle, TaskEntry, TaskId},
 };
@@ -16,7 +15,7 @@ pub struct TaskReservation<
     const TIMERS: usize,
     const FDS: usize,
 > {
-    guard: EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    ctx: Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     id: TaskId<TASK_SIZE>,
     entry: &'static TaskEntry<TASK_SIZE>,
 }
@@ -32,11 +31,11 @@ impl<
 > TaskReservation<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     pub(crate) fn new(
-        guard: EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         id: TaskId<TASK_SIZE>,
         entry: &'static TaskEntry<TASK_SIZE>,
     ) -> Self {
-        Self { guard, id, entry }
+        Self { ctx, id, entry }
     }
 
     /// Spawns a task using a reserved slot that is held by this [`TaskReservation`].
@@ -55,10 +54,10 @@ impl<
         F: FnOnce(Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
-        let Self { guard, id, entry } = self;
-        guard.spawn_reserved(id, entry, f(Context::new(guard)));
+        let Self { ctx, id, entry } = self;
+        ctx.spawn_reserved(id, entry, f(ctx));
         core::mem::forget(self);
-        JoinHandle::new(guard, id)
+        JoinHandle::new(ctx, id)
     }
 }
 
@@ -72,7 +71,7 @@ impl<
 > Drop for TaskReservation<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn drop(&mut self) {
-        self.guard.release(self.id);
+        self.ctx.release(self.id);
     }
 }
 

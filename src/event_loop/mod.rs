@@ -1,12 +1,10 @@
 mod error;
-mod guard;
 
 use core::cell::{RefCell, RefMut};
 
 use rustix::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
 pub use self::error::Error;
-pub(crate) use self::guard::EventLoopGuard;
 
 use crate::{
     context::Context,
@@ -26,7 +24,7 @@ pub struct EventLoop<
     const TIMERS: usize,
     const FDS: usize,
 > {
-    guard: EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    ctx: Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
 }
 
 impl<
@@ -58,10 +56,10 @@ impl<
         F: FnOnce(Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
-        let guard = storage.claim(selector, state);
-        let event_loop = Self { guard };
-        Context::spawn_root(guard, f);
-        match guard.run_ready() {
+        let ctx = storage.claim(selector, state);
+        let event_loop = Self { ctx };
+        ctx.spawn_root(f(ctx));
+        match ctx.run_ready() {
             RootStatus::Running => {}
             RootStatus::Finished => return Err(Error::RootFinished),
         }
@@ -73,16 +71,16 @@ impl<
     /// polls woken futures until none is ready,
     /// submits them back to epoll/kqueue.
     pub fn drain_events_without_blocking(&mut self) -> Result<(), Error> {
-        let guard = self.guard;
-        if let Root::Finished = guard.root() {
+        let ctx = self.ctx;
+        if let Root::Finished = ctx.root() {
             return Err(Error::RootFinished);
         }
         let status = loop {
-            guard.process_selector_events().map_err(Error::Io)?;
-            if !guard.has_ready() {
+            ctx.process_selector_events().map_err(Error::Io)?;
+            if !ctx.has_ready() {
                 break RootStatus::Running;
             }
-            if guard.run_ready() == RootStatus::Finished {
+            if ctx.run_ready() == RootStatus::Finished {
                 break RootStatus::Finished;
             }
         };
@@ -93,14 +91,14 @@ impl<
     ///
     /// This is the only way to communicate with the external world.
     pub fn state_mut(&mut self) -> RefMut<'_, S> {
-        self.guard.state.borrow_mut()
+        self.ctx.state.borrow_mut()
     }
 
     fn finish_drain(&self, status: RootStatus) -> Result<(), Error> {
         if status == RootStatus::Finished {
-            self.guard.drop_all();
+            self.ctx.drop_all();
         }
-        self.guard.flush().map_err(Error::Io)?;
+        self.ctx.flush().map_err(Error::Io)?;
         match status {
             RootStatus::Running => Ok(()),
             RootStatus::Finished => Err(Error::RootFinished),
@@ -108,10 +106,8 @@ impl<
     }
 
     #[cfg(test)]
-    pub(crate) fn guard(
-        &self,
-    ) -> EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
-        self.guard
+    pub(crate) fn ctx(&self) -> Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
+        self.ctx
     }
 }
 
@@ -126,7 +122,7 @@ impl<
 > Drop for EventLoop<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn drop(&mut self) {
-        self.guard.clear();
+        self.ctx.clear();
     }
 }
 
@@ -141,7 +137,7 @@ impl<
 > AsFd for EventLoop<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn as_fd(&self) -> BorrowedFd<'_> {
-        self.guard.selector.as_fd()
+        self.ctx.selector.as_fd()
     }
 }
 

@@ -86,12 +86,7 @@ impl<
     fn poll(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         let registration = this.registration.get_or_insert_with(|| {
-            IoRegistration::new(
-                this.ctx.guard(),
-                this.fd.as_fd(),
-                this.cached,
-                this.direction,
-            )
+            IoRegistration::new(this.ctx, this.fd.as_fd(), this.cached, this.direction)
         });
         loop {
             if this.waiting && registration.poll_wait(&mut this.waiting, cx).is_pending() {

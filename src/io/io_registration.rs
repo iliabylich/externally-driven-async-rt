@@ -1,12 +1,9 @@
-use core::{
-    cell::Cell,
-    task::{Context, Poll},
-};
+use core::{cell::Cell, task::Poll};
 
 use rustix::fd::{AsRawFd, BorrowedFd};
 
 use crate::{
-    event_loop::EventLoopGuard,
+    context::Context,
     io::{IoIndex, IoWaiter, IoWaiters, Wait},
     selector::{Direction, Selector},
     state::State,
@@ -28,15 +25,15 @@ impl<'a, const FDS: usize> IoRegistration<'a, FDS> {
         const ROOT_TASK_SIZE: usize,
         const TIMERS: usize,
     >(
-        guard: &'a EventLoopGuard<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         fd: BorrowedFd<'a>,
         cached: &Cell<Option<IoIndex>>,
         direction: Direction,
     ) -> Self {
-        let (index, io) = guard.io_waiters.register(cached, fd.as_raw_fd(), direction);
+        let (index, io) = ctx.io_waiters.register(cached, fd.as_raw_fd(), direction);
         Self {
-            io_waiters: guard.io_waiters,
-            selector: guard.selector,
+            io_waiters: ctx.io_waiters,
+            selector: ctx.selector,
             index,
             io,
             direction,
@@ -47,7 +44,11 @@ impl<'a, const FDS: usize> IoRegistration<'a, FDS> {
         Wait::new(self)
     }
 
-    pub(crate) fn poll_wait(&self, waiting: &mut bool, cx: &mut Context<'_>) -> Poll<()> {
+    pub(crate) fn poll_wait(
+        &self,
+        waiting: &mut bool,
+        cx: &mut core::task::Context<'_>,
+    ) -> Poll<()> {
         let waker = self.io.waker(self.direction);
         if *waiting && !waker.is_set() {
             *waiting = false;

@@ -1,26 +1,27 @@
 use core::cell::{Cell, RefCell};
 
-use crate::{LoopStorage, selector::Direction, testing::counting_waker, time::Instant};
+use crate::{LoopStorage, Selector, selector::Direction, testing::counting_waker, time::Instant};
 
 type SmallStorage = LoopStorage<1, 64, 0, 2, 2>;
 
 #[test]
 fn clearing_drops_live_wakers() {
     let drops = Cell::new(0);
+    let selector = Selector::new().unwrap();
     let state = RefCell::new(());
-    let guard = {
+    let ctx = {
         static STORAGE: SmallStorage = SmallStorage::new();
-        STORAGE.claim(&(), &state)
+        STORAGE.claim(&selector, &state)
     };
-    guard.timers.alloc(Instant::now(), counting_waker(&drops));
-    let (_, io) = guard
+    ctx.timers.alloc(Instant::now(), counting_waker(&drops));
+    let (_, io) = ctx
         .io_waiters
         .register(&Cell::new(None), 3, Direction::Read);
     let io_waker = counting_waker(&drops);
     io.waker(Direction::Read).store(&io_waker);
     drop(io_waker);
     assert_eq!(drops.get(), 1);
-    guard.clear();
+    ctx.clear();
     assert_eq!(drops.get(), 3);
 }
 
@@ -28,9 +29,10 @@ fn clearing_drops_live_wakers() {
 #[should_panic(expected = "a WakeQueue can only be used by one EventLoop")]
 fn a_storage_can_only_be_claimed_once() {
     static STORAGE: SmallStorage = SmallStorage::new();
+    let selector = Selector::new().unwrap();
     let state = RefCell::new(());
-    STORAGE.claim(&(), &state);
-    STORAGE.claim(&(), &state);
+    STORAGE.claim(&selector, &state);
+    STORAGE.claim(&selector, &state);
 }
 
 #[test]
