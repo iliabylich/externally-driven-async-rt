@@ -1,6 +1,6 @@
 use core::net::SocketAddr;
 
-use rustix::net::Shutdown;
+use rustix::{io::Errno, net::Shutdown};
 
 use crate::{
     context::Context,
@@ -84,7 +84,10 @@ impl TcpStream {
 
     /// Returns peer address.
     pub fn peer_addr(&self) -> rustix::io::Result<SocketAddr> {
-        self.socket.peer_addr()
+        self.socket
+            .peer_addr()?
+            .ok_or(Errno::AFNOSUPPORT)?
+            .try_into()
     }
 
     /// Splits the [`TcpStream`] into two halves: reader and writer.

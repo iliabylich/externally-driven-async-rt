@@ -56,7 +56,15 @@ impl UnixDatagram {
         ctx: &'a Context<'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = rustix::io::Result<(usize, SocketAddrUnix)>> {
-        self.socket.recv_from(ctx, buf)
+        let recv = self.socket.recv_from(ctx, buf);
+        async move {
+            let (len, addr) = recv.await?;
+            let addr = match addr {
+                Some(addr) => addr.try_into()?,
+                None => SocketAddrUnix::new("")?,
+            };
+            Ok((len, addr))
+        }
     }
 
     /// Connects to a given address, which makes it the peer of [`send`](Self::send) and [`recv`](Self::recv).

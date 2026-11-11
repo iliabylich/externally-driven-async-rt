@@ -1,4 +1,3 @@
-mod address;
 mod borrowed_read_half;
 mod borrowed_write_half;
 mod retry;

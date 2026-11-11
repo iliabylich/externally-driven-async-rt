@@ -33,6 +33,10 @@ impl UnixListener {
         ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     ) -> rustix::io::Result<(UnixStream, SocketAddrUnix)> {
         let (socket, addr) = self.socket.accept(ctx).await?;
+        let addr = match addr {
+            Some(addr) => addr.try_into()?,
+            None => SocketAddrUnix::new("")?,
+        };
         Ok((UnixStream::new(socket), addr))
     }
 

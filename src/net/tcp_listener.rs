@@ -1,10 +1,13 @@
 use core::net::SocketAddr;
 
-use rustix::net::SocketType;
+use rustix::{
+    io::Errno,
+    net::{SocketType, addr::SocketAddrArg},
+};
 
 use crate::{
     context::Context,
-    net::{TcpStream, address::Address, socket::Socket},
+    net::{TcpStream, socket::Socket},
     state::State,
 };
 
@@ -16,7 +19,7 @@ pub struct TcpListener {
 impl TcpListener {
     /// Binds on a given address with `SO_REUSEADDR` set, starts listening.
     pub fn bind(addr: SocketAddr) -> rustix::io::Result<Self> {
-        let socket = Socket::new(addr.family(), SocketType::STREAM)?;
+        let socket = Socket::new(addr.as_any().address_family(), SocketType::STREAM)?;
         socket.set_reuseaddr()?;
         socket.bind(&addr)?;
         socket.listen()?;
@@ -36,7 +39,10 @@ impl TcpListener {
         ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     ) -> rustix::io::Result<(TcpStream, SocketAddr)> {
         let (socket, addr) = self.socket.accept(ctx).await?;
-        Ok((TcpStream::new(socket), addr))
+        Ok((
+            TcpStream::new(socket),
+            addr.ok_or(Errno::AFNOSUPPORT)?.try_into()?,
+        ))
     }
 
     /// Returns local address, useful when you bind on port 0.

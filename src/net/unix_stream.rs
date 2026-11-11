@@ -82,7 +82,10 @@ impl UnixStream {
 
     /// Returns peer address.
     pub fn peer_addr(&self) -> rustix::io::Result<SocketAddrUnix> {
-        self.socket.peer_addr()
+        match self.socket.peer_addr()? {
+            Some(addr) => addr.try_into(),
+            None => SocketAddrUnix::new(""),
+        }
     }
 
     /// Splits the [`UnixStream`] into two halves: reader and writer.

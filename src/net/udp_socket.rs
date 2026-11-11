@@ -1,12 +1,11 @@
 use core::net::SocketAddr;
 
-use rustix::net::SocketType;
-
-use crate::{
-    context::Context,
-    net::{address::Address, socket::Socket},
-    state::State,
+use rustix::{
+    io::Errno,
+    net::{SocketType, addr::SocketAddrArg},
 };
+
+use crate::{context::Context, net::socket::Socket, state::State};
 
 /// A UDP socket.
 pub struct UdpSocket {
@@ -16,7 +15,7 @@ pub struct UdpSocket {
 impl UdpSocket {
     /// Binds on a given address.
     pub fn bind(addr: SocketAddr) -> rustix::io::Result<Self> {
-        let socket = Socket::new(addr.family(), SocketType::DGRAM)?;
+        let socket = Socket::new(addr.as_any().address_family(), SocketType::DGRAM)?;
         socket.bind(&addr)?;
         Ok(Self { socket })
     }
@@ -53,7 +52,11 @@ impl UdpSocket {
         ctx: &'a Context<'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = rustix::io::Result<(usize, SocketAddr)>> {
-        self.socket.recv_from(ctx, buf)
+        let recv = self.socket.recv_from(ctx, buf);
+        async move {
+            let (len, addr) = recv.await?;
+            Ok((len, addr.ok_or(Errno::AFNOSUPPORT)?.try_into()?))
+        }
     }
 
     /// Connects to a given address, which makes it the peer of [`send`](Self::send) and [`recv`](Self::recv).

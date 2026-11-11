@@ -4,7 +4,8 @@ use rustix::{
     fd::{AsFd, OwnedFd},
     io::{Errno, FdFlags, fcntl_setfd, ioctl_fionbio},
     net::{
-        AddressFamily, RecvFlags, SendFlags, Shutdown, SocketType,
+        AddressFamily, RecvFlags, SendFlags, Shutdown, SocketAddrAny, SocketType,
+        addr::SocketAddrArg,
         sockopt::{set_socket_reuseaddr, socket_error},
     },
 };
@@ -12,7 +13,7 @@ use rustix::{
 use crate::{
     context::Context,
     io::{IoIndex, IoRegistration},
-    net::{address::Address, retry::Retry},
+    net::retry::Retry,
     selector::Direction,
     state::State,
     strace::{syscall, syscall_end, syscall_start},
@@ -36,7 +37,7 @@ impl Socket {
         Ok(socket)
     }
 
-    pub(crate) fn bind<A: Address>(&self, addr: &A) -> rustix::io::Result<()> {
+    pub(crate) fn bind<A: SocketAddrArg>(&self, addr: &A) -> rustix::io::Result<()> {
         syscall_start!("bind", self.0, addr.as_any());
         let result = rustix::net::bind(&self.0, addr);
         syscall_end!(result);
@@ -57,7 +58,7 @@ impl Socket {
         result
     }
 
-    pub(crate) fn connect<A: Address>(&self, addr: &A) -> rustix::io::Result<()> {
+    pub(crate) fn connect<A: SocketAddrArg>(&self, addr: &A) -> rustix::io::Result<()> {
         syscall_start!("connect", self.0, addr.as_any());
         let result = rustix::net::connect(&self.0, addr);
         syscall_end!(result);
@@ -71,12 +72,12 @@ impl Socket {
         const ROOT_TASK_SIZE: usize,
         const TIMERS: usize,
         const FDS: usize,
-        A: Address,
+        A: SocketAddrArg,
     >(
         ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         addr: &A,
     ) -> rustix::io::Result<Self> {
-        let socket = Self::new(addr.family(), SocketType::STREAM)?;
+        let socket = Self::new(addr.as_any().address_family(), SocketType::STREAM)?;
         syscall_start!("connect", socket.0, addr.as_any());
         let result = rustix::net::connect(&socket.0, addr);
         syscall_end!(result);
@@ -102,11 +103,10 @@ impl Socket {
         const ROOT_TASK_SIZE: usize,
         const TIMERS: usize,
         const FDS: usize,
-        A: Address,
     >(
         &self,
         ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    ) -> rustix::io::Result<(Self, A)> {
+    ) -> rustix::io::Result<(Self, Option<SocketAddrAny>)> {
         let (fd, addr) = self
             .retry(ctx, Direction::Read, |fd| {
                 syscall_start!("accept", fd);
@@ -117,7 +117,7 @@ impl Socket {
             .await?;
         let socket = Self(fd, Cell::new(None));
         socket.configure(SocketType::STREAM)?;
-        Ok((socket, A::from_any(addr)?))
+        Ok((socket, addr))
     }
 
     pub(crate) fn read<
@@ -223,7 +223,7 @@ impl Socket {
         const ROOT_TASK_SIZE: usize,
         const TIMERS: usize,
         const FDS: usize,
-        A: Address,
+        A: SocketAddrArg,
     >(
         &'a self,
         ctx: &'a Context<'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
@@ -252,12 +252,11 @@ impl Socket {
         const ROOT_TASK_SIZE: usize,
         const TIMERS: usize,
         const FDS: usize,
-        A: Address,
     >(
         &self,
         ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &mut [u8],
-    ) -> rustix::io::Result<(usize, A)> {
+    ) -> rustix::io::Result<(usize, Option<SocketAddrAny>)> {
         let (len, _, addr) = self
             .retry(ctx, Direction::Read, |fd| {
                 syscall_start!("recvfrom", fd);
@@ -272,21 +271,23 @@ impl Socket {
                 result
             })
             .await?;
-        Ok((len, A::from_any(addr)?))
+        Ok((len, addr))
     }
 
-    pub(crate) fn local_addr<A: Address>(&self) -> rustix::io::Result<A> {
+    pub(crate) fn local_addr<A: TryFrom<SocketAddrAny, Error = Errno>>(
+        &self,
+    ) -> rustix::io::Result<A> {
         syscall_start!("getsockname", self.0);
         let addr = rustix::net::getsockname(&self.0);
         syscall_end!(addr; addr.as_ref().ok());
-        A::from_any(Some(addr?))
+        addr?.try_into()
     }
 
-    pub(crate) fn peer_addr<A: Address>(&self) -> rustix::io::Result<A> {
+    pub(crate) fn peer_addr(&self) -> rustix::io::Result<Option<SocketAddrAny>> {
         syscall_start!("getpeername", self.0);
         let addr = rustix::net::getpeername(&self.0);
         syscall_end!(addr; addr.as_ref().ok().and_then(Option::as_ref));
-        A::from_any(addr?)
+        addr
     }
 
     pub(crate) fn shutdown(&self, how: Shutdown) -> rustix::io::Result<()> {

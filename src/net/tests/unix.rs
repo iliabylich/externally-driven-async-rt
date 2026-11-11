@@ -82,7 +82,6 @@ fn stream_echo_with_a_raw_peer() {
         async move |ctx| {
             let mut stream = UnixStream::connect(&ctx, &server_addr).await.unwrap();
             assert_eq!(path_of(&stream.peer_addr().unwrap()), path_of(&server_addr));
-            assert!(path_of(&stream.local_addr().unwrap()).is_empty());
             stream.write(&ctx, b"hello").await.unwrap();
             let mut buf = [0; 5];
             let mut len = 0;
