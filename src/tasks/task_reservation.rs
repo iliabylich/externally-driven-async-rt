@@ -103,7 +103,6 @@ mod tests {
     };
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn spawning_runs_the_task() {
         let mut selector = Selector::new().unwrap();
         let mut state = RefCell::new(Log::default());
@@ -160,7 +159,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     #[should_panic(expected = "more than 16 concurrent tasks")]
     fn a_reserved_slot_is_not_handed_to_spawn() {
         let mut selector = Selector::new().unwrap();

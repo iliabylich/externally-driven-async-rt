@@ -20,19 +20,25 @@ impl DummySelector {
         panic!("no selector under Miri")
     }
 
-    pub(crate) fn disarm_timer(&self) {
-        panic!("no selector under Miri")
-    }
+    pub(crate) fn disarm_timer(&self) {}
 
-    pub(crate) fn flush(&self, _: impl IntoIterator<Item = IoChange>) -> rustix::io::Result<()> {
-        panic!("no selector under Miri")
+    pub(crate) fn flush(
+        &self,
+        io_changes: impl IntoIterator<Item = IoChange>,
+    ) -> rustix::io::Result<()> {
+        assert!(
+            io_changes.into_iter().next().is_none(),
+            "no selector under Miri"
+        );
+        Ok(())
     }
 
     pub(crate) fn poll_nonblocking(
         &self,
-        _: &mut [Option<SelectorEvent>; EVENTS_PER_CALL],
+        out: &mut [Option<SelectorEvent>; EVENTS_PER_CALL],
     ) -> rustix::io::Result<bool> {
-        panic!("no selector under Miri")
+        out.fill(None);
+        Ok(false)
     }
 }
 

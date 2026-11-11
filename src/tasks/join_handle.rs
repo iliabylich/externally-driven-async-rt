@@ -170,7 +170,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn spawned_task_can_spawn_and_join() {
         let mut selector = Selector::new().unwrap();
         let mut state = RefCell::new(Log::default());

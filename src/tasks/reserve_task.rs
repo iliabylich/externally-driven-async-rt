@@ -143,7 +143,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     #[should_panic(expected = "only one task can wait for a free task slot")]
     fn a_second_waiter_panics() {
         let mut selector = Selector::new().unwrap();

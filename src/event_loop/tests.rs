@@ -15,7 +15,6 @@ use crate::{
 };
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn root_finishing_during_new_is_an_error() {
     let mut selector = Selector::new().unwrap();
     let mut state = RefCell::new(Log::default());
@@ -32,7 +31,6 @@ fn root_finishing_during_new_is_an_error() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn events_dispatched_during_new_are_applied() {
     let mut selector = Selector::new().unwrap();
     let mut state = RefCell::new(Log::default());
@@ -189,7 +187,6 @@ fn two_loops_on_one_thread_are_independent() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 #[should_panic(expected = "boom in new")]
 fn panic_propagates_out_of_new() {
     let mut selector = Selector::new().unwrap();
@@ -230,7 +227,6 @@ fn panic_propagates_out_of_drain() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 #[should_panic(expected = "boom in apply")]
 fn panic_in_apply_propagates() {
     struct PanickingState;
@@ -260,7 +256,6 @@ fn panic_in_apply_propagates() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn root_future_bigger_than_task_size_is_fine() {
     let data = [7u8; 3 * TEST_TASK_SIZE];
     let mut selector = Selector::new().unwrap();
@@ -367,7 +362,6 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn events_dispatched_while_dropping_the_loop_are_applied() {
     #[derive(Default)]
     struct LastEvent(u32);
@@ -413,7 +407,6 @@ fn events_dispatched_while_dropping_the_loop_are_applied() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn waking_after_the_loop_is_gone_is_harmless() {
     let escaped = Cell::new(None);
     {
