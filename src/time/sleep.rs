@@ -1,13 +1,13 @@
 use core::{future::Future, pin::Pin, task::Poll};
 
-use crate::time::{Instant, TimerIndex, Timers};
+use crate::time::{Instant, TimerEntry, TimerIndex, Timers};
 
 /// A sleep future.
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 pub struct Sleep<'ctx, const TIMERS: usize> {
     timers: &'ctx Timers<TIMERS>,
     deadline: Instant,
-    timer: Option<TimerIndex>,
+    timer: Option<(TimerIndex, &'ctx TimerEntry)>,
 }
 
 impl<'ctx, const TIMERS: usize> Sleep<'ctx, TIMERS> {
@@ -25,13 +25,13 @@ impl<const TIMERS: usize> Future for Sleep<'_, TIMERS> {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {
         if Instant::now() >= self.deadline {
-            if let Some(timer) = self.timer.take() {
-                self.timers.release(timer);
+            if let Some((index, _)) = self.timer.take() {
+                self.timers.release(index);
             }
             return Poll::Ready(());
         }
         match self.timer {
-            Some(timer) => self.timers.set_waker(timer, cx.waker()),
+            Some((_, timer)) => timer.set_waker(cx.waker()),
             None => self.timer = Some(self.timers.alloc(self.deadline, cx.waker().clone())),
         }
         Poll::Pending
@@ -40,8 +40,8 @@ impl<const TIMERS: usize> Future for Sleep<'_, TIMERS> {
 
 impl<const TIMERS: usize> Drop for Sleep<'_, TIMERS> {
     fn drop(&mut self) {
-        if let Some(timer) = self.timer {
-            self.timers.release(timer);
+        if let Some((index, _)) = self.timer {
+            self.timers.release(index);
         }
     }
 }

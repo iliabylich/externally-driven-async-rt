@@ -38,6 +38,10 @@ impl TimerEntry {
     pub(crate) fn take_waker(&self) -> Option<Waker> {
         self.waker.take()
     }
+
+    pub(crate) fn has_waker(&self) -> bool {
+        self.waker.is_set()
+    }
 }
 
 pub(crate) type TimerIndex = Index<TimerEntry>;

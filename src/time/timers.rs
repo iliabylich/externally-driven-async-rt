@@ -18,22 +18,14 @@ impl<const N: usize> Timers<N> {
         }
     }
 
-    pub(crate) fn alloc(&self, deadline: Instant, waker: Waker) -> TimerIndex {
+    pub(crate) fn alloc(&self, deadline: Instant, waker: Waker) -> (TimerIndex, &TimerEntry) {
         let Some((index, timer)) = self.pool.alloc() else {
             panic!("more than {N} concurrent timers");
         };
         let seq = self.next_seq.get();
         self.next_seq.set(seq + 1);
         timer.arm(deadline, seq, waker);
-        index
-    }
-
-    pub(crate) fn set_waker(&self, index: TimerIndex, waker: &Waker) {
-        let timer = self
-            .pool
-            .get(index)
-            .expect("a pending sleep's timer is in storage");
-        timer.set_waker(waker);
+        (index, timer)
     }
 
     pub(crate) fn release(&self, index: TimerIndex) {
@@ -50,18 +42,20 @@ impl<const N: usize> Timers<N> {
     }
 
     pub(crate) fn next_deadline(&self) -> Option<Instant> {
-        self.pool.iter().map(|(_, timer)| timer.deadline()).min()
+        self.pool
+            .iter()
+            .filter(|(_, timer)| timer.has_waker())
+            .map(|(_, timer)| timer.deadline())
+            .min()
     }
 
     pub(crate) fn take_expired(&self, now: Instant) -> Option<Waker> {
-        let (index, _) = self
+        let (_, timer) = self
             .pool
             .iter()
-            .filter(|(_, timer)| timer.deadline() <= now)
+            .filter(|(_, timer)| timer.has_waker() && timer.deadline() <= now)
             .min_by_key(|(_, timer)| timer.expiry())?;
-        let waker = self.pool.get(index)?.take_waker();
-        self.pool.free(index);
-        waker
+        timer.take_waker()
     }
 }
 
@@ -91,7 +85,7 @@ mod tests {
         let now = Instant::now();
         let drops = Cell::new(0);
         let timers = &Timers::<2>::new();
-        let index = timers.alloc(now, counting_waker(&drops));
+        let (index, _) = timers.alloc(now, counting_waker(&drops));
         assert_eq!(timers.next_deadline(), Some(now));
 
         timers.release(index);
@@ -140,7 +134,7 @@ mod tests {
         static WAKERS: WakeQueue<8> = WakeQueue::new();
         let now = Instant::now();
         let timers = &Timers::<2>::new();
-        let first = timers.alloc(now, Waker::noop().clone());
+        let (first, _) = timers.alloc(now, Waker::noop().clone());
         timers.alloc(now, WAKERS.waker(1));
         timers.release(first);
         timers.alloc(now, WAKERS.waker(2));
@@ -152,7 +146,7 @@ mod tests {
         static WAKERS: WakeQueue<8> = WakeQueue::new();
         let now = Instant::now();
         let timers = &Timers::<1>::new();
-        let index = timers.alloc(now, WAKERS.waker(1));
+        let (index, _) = timers.alloc(now, WAKERS.waker(1));
         timers.release(index);
         assert_expires(timers, &WAKERS, now, []);
         assert_eq!(timers.next_deadline(), None);
@@ -163,8 +157,8 @@ mod tests {
         static WAKERS: WakeQueue<8> = WakeQueue::new();
         let now = Instant::now();
         let timers = &Timers::<1>::new();
-        let index = timers.alloc(now, WAKERS.waker(1));
-        timers.set_waker(index, &WAKERS.waker(2));
+        let (_, timer) = timers.alloc(now, WAKERS.waker(1));
+        timer.set_waker(&WAKERS.waker(2));
         assert_expires(timers, &WAKERS, now, [2]);
     }
 
@@ -176,7 +170,7 @@ mod tests {
         let later = now + Duration::from_millis(30);
         let earlier = now + Duration::from_millis(10);
         timers.alloc(later, Waker::noop().clone());
-        let earliest = timers.alloc(earlier, Waker::noop().clone());
+        let (earliest, _) = timers.alloc(earlier, Waker::noop().clone());
         timers.alloc(now + Duration::from_millis(20), Waker::noop().clone());
         assert_eq!(timers.next_deadline(), Some(earlier));
         timers.release(earliest);
