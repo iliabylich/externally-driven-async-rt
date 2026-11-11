@@ -24,6 +24,7 @@ unsafe extern "C" {
     safe fn clock_gettime(clock_id: ClockId, tp: &mut Timespec) -> i32;
 }
 
+#[must_use]
 pub(crate) fn monotonic_nanos() -> u64 {
     let mut time = Timespec {
         tv_sec: 0,

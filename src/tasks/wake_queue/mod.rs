@@ -16,6 +16,7 @@ fn decode(slot: u32) -> Option<u32> {
     (slot != NONE).then_some(slot)
 }
 
+#[must_use]
 pub(crate) struct WakeQueue<const N: usize> {
     owner: AtomicUsize,
     head: AtomicU32,
@@ -144,7 +145,7 @@ unsafe fn wake<const N: usize>(ptr: *const ()) {
     queue.push(slot);
 }
 
-fn drop_waker(_: *const ()) {}
+const fn drop_waker(_: *const ()) {}
 
 #[cfg(test)]
 mod tests {

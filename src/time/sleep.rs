@@ -11,7 +11,7 @@ pub struct Sleep<'ctx, const TIMERS: usize> {
 }
 
 impl<'ctx, const TIMERS: usize> Sleep<'ctx, TIMERS> {
-    pub(crate) fn new(timers: &'ctx Timers<TIMERS>, deadline: Instant) -> Self {
+    pub(crate) const fn new(timers: &'ctx Timers<TIMERS>, deadline: Instant) -> Self {
         Self {
             timers,
             deadline,

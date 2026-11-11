@@ -17,6 +17,7 @@ use crate::{
     state::State,
 };
 
+#[must_use]
 pub(crate) struct Retry<
     'a,
     'ctx,
@@ -49,7 +50,7 @@ impl<
     F,
 > Retry<'a, 'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, F>
 {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         ctx: &'a Context<'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         fd: &'a OwnedFd,
         cached: &'a Cell<Option<IoIndex>>,
@@ -69,8 +70,6 @@ impl<
 }
 
 impl<
-    'a,
-    'ctx,
     S: State,
     const TASKS: usize,
     const TASK_SIZE: usize,
@@ -79,7 +78,7 @@ impl<
     const FDS: usize,
     T,
     F: FnMut(&OwnedFd) -> rustix::io::Result<T> + Unpin,
-> Future for Retry<'a, 'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, F>
+> Future for Retry<'_, '_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, F>
 {
     type Output = rustix::io::Result<T>;
 

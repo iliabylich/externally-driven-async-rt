@@ -7,12 +7,17 @@ use crate::{
 };
 
 /// A Unix stream listener.
+#[must_use]
 pub struct UnixListener {
     socket: Socket,
 }
 
 impl UnixListener {
     /// Binds on a given address, starts listening.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a syscall fails.
     pub fn bind(addr: &SocketAddrUnix) -> rustix::io::Result<Self> {
         let socket = Socket::new(AddressFamily::UNIX, SocketType::STREAM)?;
         socket.bind(addr)?;
@@ -21,6 +26,10 @@ impl UnixListener {
     }
 
     /// Accepts incoming connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a syscall fails.
     pub async fn accept<
         S: State,
         const TASKS: usize,
@@ -41,6 +50,10 @@ impl UnixListener {
     }
 
     /// Returns local address.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a syscall fails.
     pub fn local_addr(&self) -> rustix::io::Result<SocketAddrUnix> {
         self.socket.local_addr()
     }

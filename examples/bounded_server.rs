@@ -110,7 +110,7 @@ enum Exchange {
 async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
     let mut listener = TcpListener::bind(addr).unwrap();
     ctx.dispatch(Event::Listening(listener.local_addr().unwrap()));
-    ctx.spawn(async |ctx| {
+    let _ = ctx.spawn(async |ctx| {
         loop {
             ctx.sleep(Duration::from_secs(10)).await;
             ctx.dispatch(Event::Tick);
@@ -129,7 +129,7 @@ async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
         };
         ctx.dispatch(Event::Connected(peer));
         let ctx = *ctx;
-        task.spawn(async move {
+        let _ = task.spawn(async move {
             let event = serve(&ctx, stream, peer).await;
             ctx.dispatch(event);
         });

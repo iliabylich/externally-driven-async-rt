@@ -10,7 +10,7 @@ pub struct Timeout<'ctx, F, const TIMERS: usize> {
 }
 
 impl<'ctx, F, const TIMERS: usize> Timeout<'ctx, F, TIMERS> {
-    pub(crate) fn new(future: F, sleep: Sleep<'ctx, TIMERS>) -> Self {
+    pub(crate) const fn new(future: F, sleep: Sleep<'ctx, TIMERS>) -> Self {
         Self { future, sleep }
     }
 }

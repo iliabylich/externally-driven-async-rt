@@ -25,6 +25,7 @@ const STREAM_SEND_FLAGS: SendFlags = SendFlags::empty();
 #[cfg(target_os = "linux")]
 const STREAM_SEND_FLAGS: SendFlags = SendFlags::NOSIGNAL;
 
+#[must_use]
 pub(crate) struct Socket(OwnedFd, Cell<Option<IoIndex>>);
 
 impl Socket {
@@ -122,7 +123,6 @@ impl Socket {
 
     pub(crate) fn read<
         'a,
-        'ctx,
         S: State,
         const TASKS: usize,
         const TASK_SIZE: usize,
@@ -131,7 +131,7 @@ impl Socket {
         const FDS: usize,
     >(
         &'a self,
-        ctx: &'a Context<'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.retry(ctx, Direction::Read, move |fd| {
@@ -144,7 +144,6 @@ impl Socket {
 
     pub(crate) fn write<
         'a,
-        'ctx,
         S: State,
         const TASKS: usize,
         const TASK_SIZE: usize,
@@ -153,7 +152,7 @@ impl Socket {
         const FDS: usize,
     >(
         &'a self,
-        ctx: &'a Context<'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.retry(ctx, Direction::Write, move |fd| {
@@ -166,7 +165,6 @@ impl Socket {
 
     pub(crate) fn send<
         'a,
-        'ctx,
         S: State,
         const TASKS: usize,
         const TASK_SIZE: usize,
@@ -175,7 +173,7 @@ impl Socket {
         const FDS: usize,
     >(
         &'a self,
-        ctx: &'a Context<'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.retry(ctx, Direction::Write, move |fd| {
@@ -216,7 +214,6 @@ impl Socket {
 
     pub(crate) fn send_to<
         'a,
-        'ctx,
         S: State,
         const TASKS: usize,
         const TASK_SIZE: usize,
@@ -226,7 +223,7 @@ impl Socket {
         A: SocketAddrArg,
     >(
         &'a self,
-        ctx: &'a Context<'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
         addr: &'a A,
     ) -> impl Future<Output = rustix::io::Result<usize>> {
@@ -319,7 +316,7 @@ impl Socket {
         Ok(())
     }
 
-    fn retry<
+    const fn retry<
         'a,
         'ctx,
         S: State,

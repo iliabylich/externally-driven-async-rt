@@ -13,6 +13,7 @@ use crate::{
 /// A handle of the event loop that you are currently in.
 ///
 /// Used to spawn tasks, sleep, dispatch events to the state and start IO operations.
+#[must_use]
 pub struct Context<
     'a,
     S: State,
@@ -88,7 +89,7 @@ impl<
     /// pool of tasks is available.
     ///
     /// The future stays pending until some other task finishes and frees a slot.
-    pub fn reserve_task(&self) -> ReserveTask<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE> {
+    pub const fn reserve_task(&self) -> ReserveTask<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE> {
         ReserveTask::new(&self.storage.tasks, self.claimed)
     }
 

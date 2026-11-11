@@ -12,5 +12,5 @@ pub trait State: 'static {
 impl State for () {
     type Event = ();
 
-    fn apply(&mut self, _: Self::Event) {}
+    fn apply(&mut self, (): Self::Event) {}
 }

@@ -65,8 +65,8 @@ fn finished_task_id_never_matches_a_reused_slot() {
 #[should_panic(expected = "more than 1 concurrent tasks")]
 fn full_task_pool_panics() {
     static TASKS: TestTasks<1> = TestTasks::new();
-    spawn_static(&TASKS, async {});
-    spawn_static(&TASKS, async {});
+    let _ = spawn_static(&TASKS, async {});
+    let _ = spawn_static(&TASKS, async {});
 }
 
 #[test]
@@ -116,7 +116,7 @@ fn full_size_futures_in_neighbouring_slots_do_not_overlap() {
 fn a_too_big_future_panics() {
     static TASKS: TestTasks<1> = TestTasks::new();
     let data = [0u8; 8192];
-    spawn_static(&TASKS, async move {
+    let _ = spawn_static(&TASKS, async move {
         let _data = data;
     });
 }
@@ -139,7 +139,7 @@ fn futures_up_to_task_size_fit() {
 #[should_panic(expected = "a task future of 101 bytes doesn't fit TASK_SIZE (100 bytes)")]
 fn a_future_one_byte_bigger_than_task_size_panics() {
     static TASKS: Tasks<1, 100, 0> = Tasks::new();
-    spawn_static(&TASKS, FixedFuture::new([0u8; 101]));
+    let _ = spawn_static(&TASKS, FixedFuture::new([0u8; 101]));
 }
 
 #[test]
@@ -149,7 +149,7 @@ fn an_overaligned_future_panics() {
     struct Aligned;
     static TASKS: TestTasks<1> = TestTasks::new();
     let aligned = Aligned;
-    spawn_static(&TASKS, async move {
+    let _ = spawn_static(&TASKS, async move {
         let _aligned = aligned;
     });
 }
@@ -225,7 +225,7 @@ fn a_stale_wake_of_a_freed_slot_polls_nothing() {
     TASKS.queue.claim();
     let id = spawn_static(&TASKS, async {});
     let waker = waker(&TASKS, id);
-    TASKS.run_ready();
+    let _ = TASKS.run_ready();
     waker.wake();
     assert_eq!(TASKS.run_ready(), RootStatus::Running);
     assert!(!TASKS.has_ready());
@@ -238,12 +238,12 @@ fn a_stale_wake_of_a_reserved_slot_is_skipped() {
     static POLLS: AtomicU32 = AtomicU32::new(0);
     let id = spawn_static(&TASKS, async {});
     let waker = waker(&TASKS, id);
-    TASKS.run_ready();
+    let _ = TASKS.run_ready();
     let (id, entry) = TASKS.reserve().unwrap();
     waker.wake();
     assert_eq!(TASKS.run_ready(), RootStatus::Running);
     spawn_reserved_static(&TASKS, id, entry, counting(&POLLS));
-    TASKS.run_ready();
+    let _ = TASKS.run_ready();
     assert_eq!(POLLS.load(Relaxed), 1);
 }
 
@@ -254,11 +254,11 @@ fn a_stale_wake_of_a_reused_slot_polls_its_new_task() {
     static POLLS: AtomicU32 = AtomicU32::new(0);
     let id = spawn_static(&TASKS, async {});
     let waker = waker(&TASKS, id);
-    TASKS.run_ready();
-    spawn_static(&TASKS, counting(&POLLS));
-    TASKS.run_ready();
+    let _ = TASKS.run_ready();
+    let _ = spawn_static(&TASKS, counting(&POLLS));
+    let _ = TASKS.run_ready();
     waker.wake();
-    TASKS.run_ready();
+    let _ = TASKS.run_ready();
     assert_eq!(POLLS.load(Relaxed), 2);
 }
 
@@ -266,7 +266,7 @@ fn a_stale_wake_of_a_reused_slot_polls_its_new_task() {
 fn a_task_dropped_while_queued_is_skipped() {
     static TASKS: TestTasks<1> = TestTasks::new();
     static DROPPED: AtomicBool = AtomicBool::new(false);
-    spawn_static(&TASKS, FlagOnDrop::new(&DROPPED));
+    let _ = spawn_static(&TASKS, FlagOnDrop::new(&DROPPED));
     TASKS.drop_all();
     assert!(DROPPED.load(Relaxed));
     assert_eq!(TASKS.run_ready(), RootStatus::Running);
@@ -278,7 +278,7 @@ fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
     static TASKS: TestTasks<1> = TestTasks::new();
     TASKS.queue.claim();
     static POLLS: AtomicU32 = AtomicU32::new(0);
-    spawn_static(
+    let _ = spawn_static(
         &TASKS,
         poll_fn(|cx| {
             POLLS.fetch_add(1, Relaxed);
@@ -288,7 +288,7 @@ fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
             Poll::<()>::Pending
         }),
     );
-    TASKS.run_ready();
+    let _ = TASKS.run_ready();
     assert_eq!(POLLS.load(Relaxed), 3);
 }
 
@@ -297,10 +297,10 @@ fn task_spawned_during_a_poll_runs_in_the_same_run() {
     static TASKS: TestTasks<2> = TestTasks::new();
     static POLLS: AtomicU32 = AtomicU32::new(0);
     let child = counting(&POLLS);
-    spawn_static(&TASKS, async move {
-        spawn_static(&TASKS, child);
+    let _ = spawn_static(&TASKS, async move {
+        let _ = spawn_static(&TASKS, child);
     });
-    TASKS.run_ready();
+    let _ = TASKS.run_ready();
     assert_eq!(POLLS.load(Relaxed), 1);
 }
 
@@ -311,8 +311,8 @@ fn join_waiter_is_woken_when_the_task_finishes() {
     static POLLS: AtomicU32 = AtomicU32::new(0);
     let waiter = spawn_static(&TASKS, counting(&POLLS));
     let task = spawn_static(&TASKS, async {});
-    TASKS.set_join_waiter(task, &waker(&TASKS, waiter));
-    TASKS.run_ready();
+    let _ = TASKS.set_join_waiter(task, &waker(&TASKS, waiter));
+    let _ = TASKS.run_ready();
     assert_eq!(POLLS.load(Relaxed), 2);
 }
 
@@ -322,7 +322,7 @@ fn root_finishing_stops_the_run() {
     static POLLS: AtomicU32 = AtomicU32::new(0);
     let root = spawn_static(&TASKS, async {});
     TASKS.root.set(Root::Running(root));
-    spawn_static(&TASKS, counting(&POLLS));
+    let _ = spawn_static(&TASKS, counting(&POLLS));
     assert_eq!(TASKS.run_ready(), RootStatus::Finished);
     assert_eq!(POLLS.load(Relaxed), 0);
 }
@@ -335,7 +335,7 @@ fn spawning_into_a_reserved_slot_queues_the_task() {
     assert!(!contains(&TASKS, id));
     assert!(TASKS.reserve().is_none());
     spawn_reserved_static(&TASKS, id, entry, counting(&POLLS));
-    TASKS.run_ready();
+    let _ = TASKS.run_ready();
     assert_eq!(POLLS.load(Relaxed), 1);
     assert!(contains(&TASKS, id));
 }
@@ -346,11 +346,11 @@ fn releasing_a_slot_wakes_the_slot_waiter() {
     TASKS.queue.claim();
     static POLLS: AtomicU32 = AtomicU32::new(0);
     let waiter = spawn_static(&TASKS, counting(&POLLS));
-    TASKS.run_ready();
+    let _ = TASKS.run_ready();
     TASKS.set_slot_waiter(&waker(&TASKS, waiter));
     let (id, _) = TASKS.reserve().unwrap();
     TASKS.release(id);
-    TASKS.run_ready();
+    let _ = TASKS.run_ready();
     assert_eq!(POLLS.load(Relaxed), 2);
     assert!(TASKS.has_slot_waiter());
 }
@@ -361,9 +361,9 @@ fn finishing_a_task_wakes_the_slot_waiter() {
     TASKS.queue.claim();
     static POLLS: AtomicU32 = AtomicU32::new(0);
     let waiter = spawn_static(&TASKS, counting(&POLLS));
-    TASKS.run_ready();
+    let _ = TASKS.run_ready();
     TASKS.set_slot_waiter(&waker(&TASKS, waiter));
-    spawn_static(&TASKS, async {});
-    TASKS.run_ready();
+    let _ = spawn_static(&TASKS, async {});
+    let _ = TASKS.run_ready();
     assert_eq!(POLLS.load(Relaxed), 2);
 }

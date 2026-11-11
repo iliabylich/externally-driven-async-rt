@@ -1,6 +1,7 @@
 use core::{cell::Cell, marker::PhantomData};
 
 #[derive(Clone, Copy)]
+#[must_use]
 pub(crate) struct Claimed<'a>(PhantomData<(Cell<&'a ()>, *const ())>);
 
 impl Claimed<'_> {

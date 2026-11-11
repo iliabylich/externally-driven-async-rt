@@ -8,6 +8,7 @@ use crate::{
     selector::{Direction, Directions, IoChange},
 };
 
+#[must_use]
 pub(crate) struct IoWaiters<const N: usize> {
     pool: ObjectPool<IoWaiter, N>,
 }
@@ -28,10 +29,9 @@ impl<const N: usize> IoWaiters<N> {
         let (index, io) = match cached
             .get()
             .and_then(|index| Some((index, self.pool.get(index)?)))
-            .filter(|(_, io)| io.fd() == fd)
         {
-            Some(entry) => entry,
-            None => self.alloc(fd),
+            Some((idx, io)) if io.fd() == fd => (idx, io),
+            _ => self.alloc(fd),
         };
         cached.set(Some(index));
         io.register(direction);
@@ -152,8 +152,8 @@ mod tests {
     fn a_direction_is_registered_once_per_fd() {
         let io_waiters = &IoWaiters::<1>::new();
         let cached = &Cell::new(None);
-        io_waiters.register(cached, 3, Direction::Read);
-        io_waiters.register(cached, 3, Direction::Read);
+        let _ = io_waiters.register(cached, 3, Direction::Read);
+        let _ = io_waiters.register(cached, 3, Direction::Read);
     }
 
     #[test]
@@ -176,7 +176,7 @@ mod tests {
         let io_waiters = &IoWaiters::<1>::new();
         let cached = &Cell::new(None);
         let (index, io) = io_waiters.register(cached, 3, Direction::Read);
-        io_waiters.register(cached, 3, Direction::Write);
+        let _ = io_waiters.register(cached, 3, Direction::Write);
         io.waker(Direction::Read).store(Waker::noop());
         io.waker(Direction::Write).store(Waker::noop());
         assert_pending_changes(io_waiters, [change(index, 3, Directions::Both)]);
@@ -187,7 +187,7 @@ mod tests {
         let io_waiters = &IoWaiters::<1>::new();
         let cached = &Cell::new(None);
         let (index, io) = io_waiters.register(cached, 3, Direction::Read);
-        io_waiters.register(cached, 3, Direction::Write);
+        let _ = io_waiters.register(cached, 3, Direction::Write);
         io.waker(Direction::Read).store(Waker::noop());
         io.waker(Direction::Write).store(Waker::noop());
         io_waiters.mark_flushed();
@@ -210,7 +210,7 @@ mod tests {
         let io_waiters = &IoWaiters::<1>::new();
         let cached = &Cell::new(None);
         let (index, io) = io_waiters.register(cached, 3, Direction::Read);
-        io_waiters.register(cached, 3, Direction::Write);
+        let _ = io_waiters.register(cached, 3, Direction::Write);
         io.waker(Direction::Read).store(Waker::noop());
         io.waker(Direction::Write).store(Waker::noop());
         io_waiters.mark_flushed();
@@ -240,7 +240,7 @@ mod tests {
     #[should_panic(expected = "more than 1 concurrently registered fds")]
     fn capacity_is_bounded() {
         let io_waiters = &IoWaiters::<1>::new();
-        io_waiters.register(&Cell::new(None), 3, Direction::Read);
-        io_waiters.register(&Cell::new(None), 4, Direction::Read);
+        let _ = io_waiters.register(&Cell::new(None), 3, Direction::Read);
+        let _ = io_waiters.register(&Cell::new(None), 4, Direction::Read);
     }
 }

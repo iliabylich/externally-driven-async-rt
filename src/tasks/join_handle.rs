@@ -3,6 +3,7 @@ use core::{future::Future, marker::PhantomData, pin::Pin, task::Poll};
 use crate::tasks::{JoinStatus, TaskId, Tasks};
 
 /// A join handle of the spawned task, resolves once the task is finished.
+#[must_use]
 pub struct JoinHandle<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> {
     tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
     pub(crate) id: TaskId<TASK_SIZE>,
@@ -12,7 +13,7 @@ pub struct JoinHandle<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TAS
 impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
     JoinHandle<TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
         id: TaskId<TASK_SIZE>,
     ) -> Self {
@@ -72,7 +73,7 @@ mod tests {
         static TASKS: TestTasks = TestTasks::new();
         let mut handle = JoinHandle::new(&TASKS, spawn_static(&TASKS, async {}));
         assert_eq!(poll(&mut handle), Poll::Pending);
-        TASKS.run_ready();
+        let _ = TASKS.run_ready();
         assert_eq!(poll(&mut handle), Poll::Ready(()));
     }
 
@@ -80,7 +81,7 @@ mod tests {
     fn joining_a_finished_task_resolves_immediately() {
         static TASKS: TestTasks = TestTasks::new();
         let id = spawn_static(&TASKS, async {});
-        TASKS.run_ready();
+        let _ = TASKS.run_ready();
         assert_eq!(poll(&mut JoinHandle::new(&TASKS, id)), Poll::Ready(()));
     }
 
@@ -90,7 +91,7 @@ mod tests {
         static RAN: AtomicBool = AtomicBool::new(false);
         let id = spawn_static(&TASKS, async { RAN.store(true, Relaxed) });
         drop(JoinHandle::new(&TASKS, id));
-        TASKS.run_ready();
+        let _ = TASKS.run_ready();
         assert!(RAN.load(Relaxed));
     }
 

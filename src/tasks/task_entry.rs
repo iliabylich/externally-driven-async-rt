@@ -10,6 +10,7 @@ use crate::{
     waker_slot::WakerSlot,
 };
 
+#[must_use]
 pub(crate) struct TaskEntry<const SIZE: usize> {
     task: Cell<TaskSlot>,
     join_waiter: WakerSlot,

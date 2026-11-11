@@ -1,6 +1,7 @@
 use crate::{selector::TimerChange, time::Instant};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[must_use]
 pub(crate) enum KernelTimer {
     #[default]
     Disarmed,
@@ -16,14 +17,14 @@ impl KernelTimer {
         }
     }
 
-    pub(crate) fn disarm_in_memory(&mut self) {
+    pub(crate) const fn disarm_in_memory(&mut self) {
         *self = match self {
             Self::Disarmed => Self::Disarmed,
             Self::Armed(_) | Self::ArmPending(_) | Self::DisarmPending => Self::DisarmPending,
         };
     }
 
-    pub(crate) fn flush(&mut self, now: Instant) -> Option<TimerChange> {
+    pub(crate) const fn flush(&mut self, now: Instant) -> Option<TimerChange> {
         match *self {
             Self::ArmPending(deadline) => {
                 *self = Self::Armed(deadline);
@@ -37,7 +38,7 @@ impl KernelTimer {
         }
     }
 
-    pub(crate) fn fired(&mut self) {
+    pub(crate) const fn fired(&mut self) {
         *self = match *self {
             Self::Armed(_) | Self::DisarmPending | Self::Disarmed => Self::Disarmed,
             Self::ArmPending(deadline) => Self::ArmPending(deadline),

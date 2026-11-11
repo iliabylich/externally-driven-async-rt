@@ -5,6 +5,7 @@ use crate::{
     time::Instant,
 };
 
+#[must_use]
 pub(crate) struct DummySelector;
 
 impl DummySelector {

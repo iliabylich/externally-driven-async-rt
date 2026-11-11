@@ -9,6 +9,7 @@ use crate::{
     state::State,
 };
 
+#[must_use]
 pub(crate) struct IoRegistration<'a, const FDS: usize> {
     io_waiters: &'a IoWaiters<FDS>,
     selector: &'a Selector,
@@ -43,15 +44,11 @@ impl<'a, const FDS: usize> IoRegistration<'a, FDS> {
         }
     }
 
-    pub(crate) fn wait(&mut self) -> Wait<'_, 'a, FDS> {
+    pub(crate) const fn wait(&mut self) -> Wait<'_, 'a, FDS> {
         Wait::new(self)
     }
 
-    pub(crate) fn poll_wait(
-        &self,
-        waiting: &mut bool,
-        cx: &mut core::task::Context<'_>,
-    ) -> Poll<()> {
+    pub(crate) fn poll_wait(&self, waiting: &mut bool, cx: &core::task::Context<'_>) -> Poll<()> {
         let waker = self.io.waker(self.direction);
         if *waiting && !waker.is_set() {
             *waiting = false;

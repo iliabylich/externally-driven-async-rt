@@ -17,7 +17,7 @@ pub struct ReserveTask<'a, const TASKS: usize, const TASK_SIZE: usize, const ROO
 impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
     ReserveTask<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
         claimed: Claimed<'a>,
     ) -> Self {
@@ -37,23 +37,20 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
     fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         let tasks = this.tasks;
-        match tasks.reserve() {
-            Some((id, entry)) => {
-                if this.waiting {
-                    tasks.clear_slot_waiter();
-                    this.waiting = false;
-                }
-                Poll::Ready(TaskReservation::new(tasks, this.claimed, id, entry))
+        if let Some((id, entry)) = tasks.reserve() {
+            if this.waiting {
+                tasks.clear_slot_waiter();
+                this.waiting = false;
             }
-            None => {
-                assert!(
-                    this.waiting || !tasks.has_slot_waiter(),
-                    "only one task can wait for a free task slot"
-                );
-                tasks.set_slot_waiter(cx.waker());
-                this.waiting = true;
-                Poll::Pending
-            }
+            Poll::Ready(TaskReservation::new(tasks, this.claimed, id, entry))
+        } else {
+            assert!(
+                this.waiting || !tasks.has_slot_waiter(),
+                "only one task can wait for a free task slot"
+            );
+            tasks.set_slot_waiter(cx.waker());
+            this.waiting = true;
+            Poll::Pending
         }
     }
 }
@@ -100,11 +97,11 @@ mod tests {
     #[test]
     fn waits_until_a_task_finishes() {
         static TASKS: TestTasks = TestTasks::new();
-        spawn_static(&TASKS, async {});
+        let _ = spawn_static(&TASKS, async {});
         let mut reserve = ReserveTask::new(&TASKS, claimed_forever());
         assert!(!poll(&mut reserve));
         assert!(TASKS.has_slot_waiter());
-        TASKS.run_ready();
+        let _ = TASKS.run_ready();
         assert!(poll(&mut reserve));
         assert!(!TASKS.has_slot_waiter());
     }
@@ -113,7 +110,7 @@ mod tests {
     #[should_panic(expected = "only one task can wait for a free task slot")]
     fn a_second_waiter_panics() {
         static TASKS: TestTasks = TestTasks::new();
-        spawn_static(&TASKS, pending());
+        let _ = spawn_static(&TASKS, pending());
         let mut first = ReserveTask::new(&TASKS, claimed_forever());
         let mut second = ReserveTask::new(&TASKS, claimed_forever());
         assert!(!poll(&mut first));

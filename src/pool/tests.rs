@@ -68,7 +68,7 @@ fn index_round_trips_through_bits() {
 #[test]
 fn full_pool_rejects_alloc() {
     let pool = &ObjectPool::<Cell<u32>, 1>::new([const { Cell::new(0) }; 1]);
-    alloc(pool, 1).unwrap();
+    let _ = alloc(pool, 1).unwrap();
     assert!(pool.alloc().is_none());
 }
 
@@ -90,8 +90,8 @@ fn double_free_is_rejected() {
     let index = alloc(pool, 1).unwrap();
     pool.free(index);
     pool.free(index);
-    alloc(pool, 2).unwrap();
-    alloc(pool, 3).unwrap();
+    let _ = alloc(pool, 2).unwrap();
+    let _ = alloc(pool, 3).unwrap();
     assert!(pool.alloc().is_none());
 }
 
@@ -127,7 +127,7 @@ fn iter_yields_only_occupied_slots() {
 fn freeing_the_yielded_slot_while_iterating() {
     let pool = &ObjectPool::<Cell<u32>, 3>::new([const { Cell::new(0) }; 3]);
     for value in 0..3 {
-        alloc(pool, value).unwrap();
+        let _ = alloc(pool, value).unwrap();
     }
     let freed = pool.iter().map(|(index, value)| {
         let value = value.get();

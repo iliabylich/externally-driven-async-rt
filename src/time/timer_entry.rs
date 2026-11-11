@@ -2,6 +2,7 @@ use core::{cell::Cell, task::Waker};
 
 use crate::{pool::Index, time::Instant, waker_slot::WakerSlot};
 
+#[must_use]
 pub(crate) struct TimerEntry {
     deadline: Cell<Instant>,
     seq: Cell<u64>,
@@ -23,11 +24,11 @@ impl TimerEntry {
         self.waker.set(waker);
     }
 
-    pub(crate) fn deadline(&self) -> Instant {
+    pub(crate) const fn deadline(&self) -> Instant {
         self.deadline.get()
     }
 
-    pub(crate) fn expiry(&self) -> (Instant, u64) {
+    pub(crate) const fn expiry(&self) -> (Instant, u64) {
         (self.deadline.get(), self.seq.get())
     }
 

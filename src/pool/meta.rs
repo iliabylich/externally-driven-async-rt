@@ -15,7 +15,7 @@ impl Meta {
         }
     }
 
-    pub(crate) fn generation(&self) -> u32 {
+    pub(crate) const fn generation(&self) -> u32 {
         self.generation.get()
     }
 
@@ -23,7 +23,7 @@ impl Meta {
         self.generation.set(generation);
     }
 
-    pub(crate) fn links(&self) -> Links {
+    pub(crate) const fn links(&self) -> Links {
         self.links.get()
     }
 

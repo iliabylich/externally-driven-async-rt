@@ -8,6 +8,7 @@ use crate::{
     waker_slot::WakerSlot,
 };
 
+#[must_use]
 pub(crate) struct IoWaiter {
     fd: Cell<RawFd>,
     registered: Cell<Directions>,
@@ -34,7 +35,7 @@ impl IoWaiter {
         self.clear();
     }
 
-    pub(crate) fn fd(&self) -> RawFd {
+    pub(crate) const fn fd(&self) -> RawFd {
         self.fd.get()
     }
 
@@ -62,7 +63,7 @@ impl IoWaiter {
         self.registered.get() != Directions::Empty
     }
 
-    pub(crate) fn waker(&self, direction: Direction) -> &WakerSlot {
+    pub(crate) const fn waker(&self, direction: Direction) -> &WakerSlot {
         match direction {
             Direction::Read => &self.reader,
             Direction::Write => &self.writer,

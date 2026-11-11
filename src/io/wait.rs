@@ -2,13 +2,14 @@ use core::{future::Future, pin::Pin, task::Poll};
 
 use crate::io::IoRegistration;
 
+#[must_use]
 pub(crate) struct Wait<'r, 'a, const FDS: usize> {
     registration: &'r mut IoRegistration<'a, FDS>,
     waiting: bool,
 }
 
 impl<'r, 'a, const FDS: usize> Wait<'r, 'a, FDS> {
-    pub(crate) fn new(registration: &'r mut IoRegistration<'a, FDS>) -> Self {
+    pub(crate) const fn new(registration: &'r mut IoRegistration<'a, FDS>) -> Self {
         Self {
             registration,
             waiting: false,

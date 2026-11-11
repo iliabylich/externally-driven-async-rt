@@ -296,11 +296,11 @@ fn tasks_are_dropped_when_the_root_finishes() {
         &mut selector,
         &mut state,
         async move |ctx| {
-            ctx.spawn(async |ctx| {
+            let _ = ctx.spawn(async |ctx| {
                 let _guard = DispatchOnDrop(&ctx, 10);
                 pending::<()>().await;
             });
-            ctx.spawn(async |ctx| {
+            let _ = ctx.spawn(async |ctx| {
                 let _guard = DispatchOnDrop(&ctx, 20);
                 pending::<()>().await;
             });
@@ -328,7 +328,7 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
 
     impl Drop for SpawnOnDrop<'_, '_> {
         fn drop(&mut self) {
-            self.0.spawn(async |ctx| ctx.dispatch(100));
+            let _ = self.0.spawn(async |ctx| ctx.dispatch(100));
             self.0.dispatch(3);
         }
     }
@@ -344,7 +344,7 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
         &mut selector,
         &mut state,
         async move |ctx| {
-            ctx.spawn(async |ctx| {
+            let _ = ctx.spawn(async |ctx| {
                 let _guard = SpawnOnDrop(&ctx);
                 pending::<()>().await;
             });
@@ -394,7 +394,7 @@ fn events_dispatched_while_dropping_the_loop_are_applied() {
         &mut state,
         async |ctx| {
             ctx.dispatch(1);
-            ctx.spawn(async |ctx| {
+            let _ = ctx.spawn(async |ctx| {
                 let _guard = DispatchOnDrop(&ctx, 2);
                 pending::<()>().await;
             });

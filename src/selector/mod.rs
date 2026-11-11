@@ -31,12 +31,17 @@ pub(crate) use self::{
 use crate::time::Instant;
 
 /// A selector for your current platform (epoll on Linux and kqueue on macOS).
+#[must_use]
 pub struct Selector {
     backend: Backend,
 }
 
 impl Selector {
     /// Constructor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an epoll/kqueue syscall fails.
     pub fn new() -> rustix::io::Result<Self> {
         Ok(Self {
             backend: Backend::new()?,

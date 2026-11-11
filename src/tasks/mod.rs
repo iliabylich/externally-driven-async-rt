@@ -26,6 +26,7 @@ pub(crate) use self::{
 };
 use crate::{claimed::Claimed, pool::ObjectPool, waker_slot::WakerSlot};
 
+#[must_use]
 pub(crate) struct Tasks<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> {
     pub(crate) pool: ObjectPool<TaskEntry<TASK_SIZE>, TASKS>,
     pub(crate) queue: WakeQueue<TASKS>,
@@ -56,7 +57,7 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         }
     }
 
-    pub(crate) fn root(&self) -> Root<TASK_SIZE> {
+    pub(crate) const fn root(&self) -> Root<TASK_SIZE> {
         self.root.get()
     }
 

@@ -15,6 +15,7 @@ use crate::{
 };
 
 /// The main type, an event loop.
+#[must_use]
 pub struct EventLoop<
     'a,
     S: State,
@@ -46,6 +47,13 @@ impl<
     /// 1. `storage` has already been used by another event loop
     /// 2. the future is bigger than `ROOT_TASK_SIZE` bytes
     /// 3. the future is aligned to more than 16 bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// 1. epoll/kqueue returned an error during initial poll
+    /// 2. given future completed during initial poll.
     pub fn new<F, Fut>(
         storage: &'static LoopStorage<TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         selector: &'a mut Selector,
@@ -70,9 +78,16 @@ impl<
     /// Drains all events from the underlying `epollfd` or `kqueuefd`,
     /// polls woken futures until none is ready,
     /// submits them back to epoll/kqueue.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// 1. epoll/kqueue returned an error
+    /// 2. root future completed
     pub fn drain_events_without_blocking(&mut self) -> Result<(), Error> {
         let ctx = self.ctx;
-        if let Root::Finished = ctx.storage.tasks.root() {
+        if matches!(ctx.storage.tasks.root(), Root::Finished) {
             return Err(Error::RootFinished);
         }
         let status = loop {
@@ -112,14 +127,13 @@ impl<
 }
 
 impl<
-    'a,
     S: State,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
-> Drop for EventLoop<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+> Drop for EventLoop<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn drop(&mut self) {
         self.ctx.clear();
@@ -127,14 +141,13 @@ impl<
 }
 
 impl<
-    'a,
     S: State,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
-> AsFd for EventLoop<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+> AsFd for EventLoop<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn as_fd(&self) -> BorrowedFd<'_> {
         self.ctx.selector.as_fd()
@@ -142,14 +155,13 @@ impl<
 }
 
 impl<
-    'a,
     S: State,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
-> AsRawFd for EventLoop<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+> AsRawFd for EventLoop<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn as_raw_fd(&self) -> RawFd {
         self.as_fd().as_raw_fd()
@@ -157,14 +169,13 @@ impl<
 }
 
 impl<
-    'a,
     S: State,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
-> core::fmt::Debug for EventLoop<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+> core::fmt::Debug for EventLoop<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("EventLoop")

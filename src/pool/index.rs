@@ -2,6 +2,7 @@ use core::{fmt, marker::PhantomData};
 
 const _: () = assert!(usize::BITS == 64, "only 64-bit targets are supported");
 
+#[must_use]
 pub(crate) struct Index<T> {
     slot: u32,
     generation: u32,
@@ -17,21 +18,21 @@ impl<T> Index<T> {
         }
     }
 
-    pub(crate) fn slot(self) -> u32 {
+    pub(crate) const fn slot(self) -> u32 {
         self.slot
     }
 
-    pub(crate) fn generation(self) -> u32 {
+    pub(crate) const fn generation(self) -> u32 {
         self.generation
     }
 
-    pub(crate) fn to_bits(self) -> usize {
+    pub(crate) const fn to_bits(self) -> usize {
         let [s0, s1, s2, s3] = self.slot.to_le_bytes();
         let [g0, g1, g2, g3] = self.generation.to_le_bytes();
         usize::from_le_bytes([s0, s1, s2, s3, g0, g1, g2, g3])
     }
 
-    pub(crate) fn from_bits(bits: usize) -> Self {
+    pub(crate) const fn from_bits(bits: usize) -> Self {
         let [s0, s1, s2, s3, g0, g1, g2, g3] = bits.to_le_bytes();
         Self {
             slot: u32::from_le_bytes([s0, s1, s2, s3]),

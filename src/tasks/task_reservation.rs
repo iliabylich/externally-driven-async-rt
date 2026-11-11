@@ -20,7 +20,7 @@ pub struct TaskReservation<
 impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
     TaskReservation<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
         claimed: Claimed<'a>,
         id: TaskId<TASK_SIZE>,
@@ -95,7 +95,7 @@ mod tests {
         let (id, entry) = TASKS.reserve().unwrap();
         let mut handle = TaskReservation::new(&TASKS, claimed_forever(), id, entry)
             .spawn(async { RAN.store(true, Relaxed) });
-        TASKS.run_ready();
+        let _ = TASKS.run_ready();
         assert!(RAN.load(Relaxed));
         let mut cx = Context::from_waker(Waker::noop());
         assert_eq!(Pin::new(&mut handle).poll(&mut cx), Poll::Ready(()));
@@ -106,7 +106,7 @@ mod tests {
         static TASKS: Tasks<2, 64, 0> = Tasks::new();
         TASKS.queue.claim();
         let waiter = spawn_static(&TASKS, pending());
-        TASKS.run_ready();
+        let _ = TASKS.run_ready();
         let (id, entry) = TASKS.reserve().unwrap();
         let reservation = TaskReservation::new(&TASKS, claimed_forever(), id, entry);
         let mut reserve = ReserveTask::new(&TASKS, claimed_forever());
@@ -124,6 +124,6 @@ mod tests {
         static TASKS: Tasks<1, 64, 0> = Tasks::new();
         let (id, entry) = TASKS.reserve().unwrap();
         let _reservation = TaskReservation::new(&TASKS, claimed_forever(), id, entry);
-        spawn_static(&TASKS, async {});
+        let _ = spawn_static(&TASKS, async {});
     }
 }

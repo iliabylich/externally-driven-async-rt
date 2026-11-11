@@ -5,6 +5,7 @@ use crate::{
     time::{Instant, TimerEntry, TimerIndex},
 };
 
+#[must_use]
 pub(crate) struct Timers<const N: usize> {
     pool: ObjectPool<TimerEntry, N>,
     next_seq: Cell<u64>,
@@ -100,8 +101,8 @@ mod tests {
     fn capacity_is_bounded() {
         let now = Instant::now();
         let timers = &Timers::<1>::new();
-        timers.alloc(now, Waker::noop().clone());
-        timers.alloc(now, Waker::noop().clone());
+        let _ = timers.alloc(now, Waker::noop().clone());
+        let _ = timers.alloc(now, Waker::noop().clone());
     }
 
     #[test]
@@ -110,11 +111,11 @@ mod tests {
         let earliest = Instant::now();
         let now = earliest + Duration::from_millis(1);
         let timers = &Timers::<8>::new();
-        timers.alloc(now + Duration::from_millis(5), WAKERS.waker(3));
-        timers.alloc(now, WAKERS.waker(2));
-        timers.alloc(now + Duration::from_millis(5), WAKERS.waker(4));
-        timers.alloc(now + Duration::from_millis(10), WAKERS.waker(5));
-        timers.alloc(earliest, WAKERS.waker(1));
+        let _ = timers.alloc(now + Duration::from_millis(5), WAKERS.waker(3));
+        let _ = timers.alloc(now, WAKERS.waker(2));
+        let _ = timers.alloc(now + Duration::from_millis(5), WAKERS.waker(4));
+        let _ = timers.alloc(now + Duration::from_millis(10), WAKERS.waker(5));
+        let _ = timers.alloc(earliest, WAKERS.waker(1));
 
         assert_expires(
             timers,
@@ -135,9 +136,9 @@ mod tests {
         let now = Instant::now();
         let timers = &Timers::<2>::new();
         let (first, _) = timers.alloc(now, Waker::noop().clone());
-        timers.alloc(now, WAKERS.waker(1));
+        let _ = timers.alloc(now, WAKERS.waker(1));
         timers.release(first);
-        timers.alloc(now, WAKERS.waker(2));
+        let _ = timers.alloc(now, WAKERS.waker(2));
         assert_expires(timers, &WAKERS, now, [1, 2]);
     }
 
@@ -169,9 +170,9 @@ mod tests {
         assert_eq!(timers.next_deadline(), None);
         let later = now + Duration::from_millis(30);
         let earlier = now + Duration::from_millis(10);
-        timers.alloc(later, Waker::noop().clone());
+        let _ = timers.alloc(later, Waker::noop().clone());
         let (earliest, _) = timers.alloc(earlier, Waker::noop().clone());
-        timers.alloc(now + Duration::from_millis(20), Waker::noop().clone());
+        let _ = timers.alloc(now + Duration::from_millis(20), Waker::noop().clone());
         assert_eq!(timers.next_deadline(), Some(earlier));
         timers.release(earliest);
         assert_eq!(

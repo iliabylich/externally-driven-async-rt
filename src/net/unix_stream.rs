@@ -7,16 +7,21 @@ use crate::{
 };
 
 /// A Unix stream.
+#[must_use]
 pub struct UnixStream {
     socket: Socket,
 }
 
 impl UnixStream {
-    pub(crate) fn new(socket: Socket) -> Self {
+    pub(crate) const fn new(socket: Socket) -> Self {
         Self { socket }
     }
 
     /// Connects to a given address.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a syscall fails.
     pub async fn connect<
         S: State,
         const TASKS: usize,
@@ -33,9 +38,12 @@ impl UnixStream {
     }
 
     /// Reads from the underlying socket into a given buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a syscall fails.
     pub fn read<
         'a,
-        'ctx,
         S: State,
         const TASKS: usize,
         const TASK_SIZE: usize,
@@ -44,16 +52,19 @@ impl UnixStream {
         const FDS: usize,
     >(
         &'a mut self,
-        ctx: &'a Context<'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.socket.read(ctx, buf)
     }
 
     /// Writes from a given buffer into the underlying socket.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a syscall fails.
     pub fn write<
         'a,
-        'ctx,
         S: State,
         const TASKS: usize,
         const TASK_SIZE: usize,
@@ -62,7 +73,7 @@ impl UnixStream {
         const FDS: usize,
     >(
         &'a mut self,
-        ctx: &'a Context<'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.socket.write(ctx, buf)
@@ -71,25 +82,36 @@ impl UnixStream {
     /// Shuts down the connection (which also impacts potentially existing read/write halves).
     ///
     /// The underlying file descriptor stays open until this value is dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a syscall fails.
     pub fn shutdown(&self, how: Shutdown) -> rustix::io::Result<()> {
         self.socket.shutdown(how)
     }
 
     /// Returns local address.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a syscall fails.
     pub fn local_addr(&self) -> rustix::io::Result<SocketAddrUnix> {
         self.socket.local_addr()
     }
 
     /// Returns peer address.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a syscall fails.
     pub fn peer_addr(&self) -> rustix::io::Result<SocketAddrUnix> {
-        match self.socket.peer_addr()? {
-            Some(addr) => addr.try_into(),
-            None => SocketAddrUnix::new(""),
-        }
+        self.socket
+            .peer_addr()?
+            .map_or_else(|| SocketAddrUnix::new(""), TryInto::try_into)
     }
 
     /// Splits the [`UnixStream`] into two halves: reader and writer.
-    pub fn split(&mut self) -> (BorrowedReadHalf<'_>, BorrowedWriteHalf<'_>) {
+    pub const fn split(&mut self) -> (BorrowedReadHalf<'_>, BorrowedWriteHalf<'_>) {
         (
             BorrowedReadHalf::new(&self.socket),
             BorrowedWriteHalf::new(&self.socket),

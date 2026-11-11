@@ -7,6 +7,7 @@ use crate::{
 /// The main pre-allocated storage that [`EventLoop`](crate::EventLoop) needs.
 ///
 /// A storage can be used by only one [`EventLoop`](crate::EventLoop) ever.
+#[must_use]
 pub struct LoopStorage<
     const TASKS: usize,
     const TASK_SIZE: usize,

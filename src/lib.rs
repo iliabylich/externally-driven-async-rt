@@ -9,7 +9,6 @@
     deprecated_in_future,
     unused_lifetimes
 )]
-#![allow(clippy::new_without_default)]
 #![cfg_attr(test, allow(clippy::arithmetic_side_effects, clippy::as_conversions))]
 
 mod claimed;

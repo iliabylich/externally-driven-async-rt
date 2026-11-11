@@ -17,6 +17,7 @@ use crate::{
 const TIMER_IDENT: isize = 0;
 const CHANGES_PER_CALL: usize = if cfg!(test) { 4 } else { 64 };
 
+#[must_use]
 pub(crate) struct KqueueSelector {
     kq: OwnedFd,
     timer: RefCell<KernelTimer>,
@@ -84,7 +85,7 @@ impl KqueueSelector {
                     out.fill_with(|| translated.next());
                     return Ok(full);
                 }
-                Err(Errno::INTR) => continue,
+                Err(Errno::INTR) => {}
                 Err(errno) => return Err(errno),
             }
         }

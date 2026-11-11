@@ -13,7 +13,8 @@ fn clearing_drops_live_wakers() {
         static STORAGE: SmallStorage = SmallStorage::new();
         STORAGE.claim(&selector, &state)
     };
-    ctx.storage
+    let _ = ctx
+        .storage
         .timers
         .alloc(Instant::now(), counting_waker(&drops));
     let (_, io) = ctx
@@ -34,8 +35,8 @@ fn a_storage_can_only_be_claimed_once() {
     static STORAGE: SmallStorage = SmallStorage::new();
     let selector = Selector::new().unwrap();
     let state = RefCell::new(());
-    STORAGE.claim(&selector, &state);
-    STORAGE.claim(&selector, &state);
+    let _ctx1 = STORAGE.claim(&selector, &state);
+    let _ctx2 = STORAGE.claim(&selector, &state);
 }
 
 #[test]

@@ -161,7 +161,7 @@ fn borrowed_halves_read_and_write_concurrently_in_one_task() {
         &mut selector,
         &mut state,
         async move |ctx| {
-            ctx.spawn(async move |ctx| {
+            let _ = ctx.spawn(async move |ctx| {
                 let (mut stream, _) = listener.accept(&ctx).await.unwrap();
                 let mut buf = [0; CHUNK];
                 loop {

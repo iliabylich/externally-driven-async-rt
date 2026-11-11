@@ -29,6 +29,7 @@ const NO_EVENT: Event = Event {
     data: EventData::new_u64(0),
 };
 
+#[must_use]
 pub(crate) struct EpollSelector {
     epoll: OwnedFd,
     timer_fd: OwnedFd,

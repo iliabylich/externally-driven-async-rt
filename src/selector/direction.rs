@@ -1,10 +1,12 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
 pub(crate) enum Direction {
     Read,
     Write,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
 pub(crate) enum Directions {
     Empty,
     Read,
@@ -13,7 +15,7 @@ pub(crate) enum Directions {
 }
 
 impl Directions {
-    pub(crate) fn with(self, direction: Direction) -> Self {
+    pub(crate) const fn with(self, direction: Direction) -> Self {
         match (self, direction) {
             (Self::Empty | Self::Read, Direction::Read) => Self::Read,
             (Self::Empty | Self::Write, Direction::Write) => Self::Write,
@@ -21,7 +23,7 @@ impl Directions {
         }
     }
 
-    pub(crate) fn without(self, direction: Direction) -> Self {
+    pub(crate) const fn without(self, direction: Direction) -> Self {
         match (self, direction) {
             (Self::Both, Direction::Read) => Self::Write,
             (Self::Both, Direction::Write) => Self::Read,
@@ -30,7 +32,7 @@ impl Directions {
         }
     }
 
-    pub(crate) fn contains(self, direction: Direction) -> bool {
+    pub(crate) const fn contains(self, direction: Direction) -> bool {
         matches!(
             (self, direction),
             (Self::Both, _) | (Self::Read, Direction::Read) | (Self::Write, Direction::Write)

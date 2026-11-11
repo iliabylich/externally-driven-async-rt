@@ -17,7 +17,7 @@ impl Link {
         }
     }
 
-    pub(crate) fn slot(&self) -> u32 {
+    pub(crate) const fn slot(&self) -> u32 {
         self.slot
     }
 

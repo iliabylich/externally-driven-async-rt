@@ -8,6 +8,7 @@ pub(crate) use self::index::Index;
 use self::{links::Links, meta::Meta};
 use crate::conversions::u32_to_usize;
 
+#[must_use]
 pub(crate) struct ObjectPool<T, const N: usize> {
     free_head: Cell<Option<u32>>,
     occupied_head: Cell<Option<u32>>,

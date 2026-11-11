@@ -5,6 +5,7 @@ use core::{
     task::{Context, Poll},
 };
 
+#[must_use]
 pub(crate) struct Task(NonNull<dyn Future<Output = ()>>);
 
 impl Task {
