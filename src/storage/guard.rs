@@ -19,9 +19,9 @@ pub(crate) struct LoopStorageGuard<
     Sel = Selector,
 > {
     storage: &'static LoopStorage<TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    selector: &'a Sel,
-    state: &'a RefCell<S>,
-    tasks: TasksGuard<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
+    pub(crate) selector: &'a Sel,
+    pub(crate) state: &'a RefCell<S>,
+    pub(crate) tasks: TasksGuard<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
 }
 
 impl<
@@ -49,20 +49,12 @@ impl<
         }
     }
 
-    pub(crate) fn tasks(self) -> TasksGuard<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE> {
-        self.tasks
-    }
-
     pub(crate) fn timers(self) -> &'static Timers<TIMERS> {
         &self.storage.timers
     }
 
     pub(crate) fn io_waiters(self) -> &'static IoWaiters<FDS> {
         &self.storage.io_waiters
-    }
-
-    pub(crate) fn state(self) -> &'a RefCell<S> {
-        self.state
     }
 
     pub(crate) fn clear(self) {
@@ -82,14 +74,10 @@ impl<
     const FDS: usize,
 > LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, Selector>
 {
-    pub(crate) fn selector(self) -> &'a Selector {
-        self.selector
-    }
-
     pub(crate) fn process_selector_events(&self) -> rustix::io::Result<()> {
         let mut events = [None; EVENTS_PER_CALL];
         loop {
-            let full = self.selector().poll_nonblocking(&mut events)?;
+            let full = self.selector.poll_nonblocking(&mut events)?;
             for event in events.iter().map_while(|event| *event) {
                 match event {
                     SelectorEvent::Io { token, ready } => {
@@ -111,7 +99,7 @@ impl<
     }
 
     pub(crate) fn flush(&self) -> rustix::io::Result<()> {
-        let selector = self.selector();
+        let selector = self.selector;
         match self.timers().next_deadline() {
             Some(deadline) => selector.arm_timer(deadline),
             None => selector.disarm_timer(),

@@ -160,8 +160,8 @@ impl EpollSelector {
     fn apply_io(&self, change: IoChange) -> rustix::io::Result<()> {
         // SAFETY: the callers (`flush`, `apply_now`) only pass fds that stay open for the
         // duration of this call.
-        let fd = unsafe { BorrowedFd::borrow_raw(change.fd()) };
-        let interest = match change.interest() {
+        let fd = unsafe { BorrowedFd::borrow_raw(change.fd) };
+        let interest = match change.interest {
             Directions::Empty => {
                 syscall_start!("epoll_ctl", self.epoll, "EPOLL_CTL_DEL", fd);
                 let deleted = epoll::delete(&self.epoll, fd);
@@ -175,7 +175,7 @@ impl EpollSelector {
             Directions::Write => EventFlags::OUT,
             Directions::Both => EventFlags::IN | EventFlags::OUT,
         };
-        let data = EventData::new_ptr(core::ptr::without_provenance_mut(change.token()));
+        let data = EventData::new_ptr(core::ptr::without_provenance_mut(change.token));
         let flags = interest | EventFlags::ONESHOT;
         syscall_start!(
             "epoll_ctl",

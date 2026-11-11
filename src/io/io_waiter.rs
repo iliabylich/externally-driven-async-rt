@@ -101,7 +101,11 @@ impl IoWaiter {
     }
 
     fn change(&self, index: IoIndex) -> IoChange {
-        IoChange::new(index.to_bits(), self.fd(), self.interest())
+        IoChange {
+            token: index.to_bits(),
+            fd: self.fd(),
+            interest: self.interest(),
+        }
     }
 }
 

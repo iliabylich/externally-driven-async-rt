@@ -105,7 +105,11 @@ mod tests {
     }
 
     fn change(index: IoIndex, fd: i32, interest: Directions) -> IoChange {
-        IoChange::new(index.to_bits(), fd, interest)
+        IoChange {
+            token: index.to_bits(),
+            fd,
+            interest,
+        }
     }
 
     #[test]

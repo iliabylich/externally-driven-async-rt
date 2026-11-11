@@ -54,10 +54,10 @@ impl<
     {
         let Self { storage, id, entry } = self;
         storage
-            .tasks()
+            .tasks
             .spawn_reserved(id, entry, f(Context::new(storage)));
         core::mem::forget(self);
-        JoinHandle::new(storage.tasks(), id)
+        JoinHandle::new(storage.tasks, id)
     }
 }
 
@@ -71,7 +71,7 @@ impl<
 > Drop for TaskReservation<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn drop(&mut self) {
-        self.storage.tasks().release(self.id);
+        self.storage.tasks.release(self.id);
     }
 }
 

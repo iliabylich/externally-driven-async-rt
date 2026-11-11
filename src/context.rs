@@ -46,7 +46,7 @@ impl<
 
     /// Dispatches given `event` on a state that was given to [`EventLoop`](crate::EventLoop).
     pub fn dispatch(&self, event: S::Event) {
-        self.storage.state().borrow_mut().apply(event);
+        self.storage.state.borrow_mut().apply(event);
     }
 
     /// Spawns a task with a given async closure.
@@ -65,8 +65,8 @@ impl<
         F: FnOnce(Self) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
-        let id = self.storage.tasks().spawn(f(*self));
-        JoinHandle::new(self.storage.tasks(), id)
+        let id = self.storage.tasks.spawn(f(*self));
+        JoinHandle::new(self.storage.tasks, id)
     }
 
     /// Reserves a task slot.
@@ -88,7 +88,7 @@ impl<
         F: FnOnce(Self) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
-        storage.tasks().spawn_root(f(Self::new(storage)));
+        storage.tasks.spawn_root(f(Self::new(storage)));
     }
 
     /// Sleeps for `duration`.

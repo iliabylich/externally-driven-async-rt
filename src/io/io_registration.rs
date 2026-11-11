@@ -38,7 +38,7 @@ impl<'a, const FDS: usize> IoRegistration<'a, FDS> {
             .register(cached, fd.as_raw_fd(), direction);
         Self {
             io_waiters: storage.io_waiters(),
-            selector: storage.selector(),
+            selector: storage.selector,
             index,
             io,
             direction,

@@ -184,16 +184,16 @@ impl KqueueSelector {
     }
 
     fn io_kevents(change: IoChange) -> [Event; 2] {
-        let udata = core::ptr::without_provenance_mut(change.token());
+        let udata = core::ptr::without_provenance_mut(change.token);
         [
             Self::io_kevent(
-                EventFilter::Read(change.fd()),
-                change.interest().contains(Direction::Read),
+                EventFilter::Read(change.fd),
+                change.interest.contains(Direction::Read),
                 udata,
             ),
             Self::io_kevent(
-                EventFilter::Write(change.fd()),
-                change.interest().contains(Direction::Write),
+                EventFilter::Write(change.fd),
+                change.interest.contains(Direction::Write),
                 udata,
             ),
         ]

@@ -9,15 +9,27 @@ use crate::{
 };
 
 fn arm(token: usize, fd: &OwnedFd, direction: Direction) -> IoChange {
-    IoChange::new(token, fd.as_raw_fd(), direction.into())
+    IoChange {
+        token,
+        fd: fd.as_raw_fd(),
+        interest: direction.into(),
+    }
 }
 
 fn arm_both(token: usize, fd: &OwnedFd) -> IoChange {
-    IoChange::new(token, fd.as_raw_fd(), Directions::Both)
+    IoChange {
+        token,
+        fd: fd.as_raw_fd(),
+        interest: Directions::Both,
+    }
 }
 
 fn disarm(token: usize, fd: &OwnedFd) -> IoChange {
-    IoChange::new(token, fd.as_raw_fd(), Directions::Empty)
+    IoChange {
+        token,
+        fd: fd.as_raw_fd(),
+        interest: Directions::Empty,
+    }
 }
 
 fn ready(token: usize, direction: Direction) -> SelectorEvent {

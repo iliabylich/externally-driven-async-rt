@@ -59,7 +59,7 @@ impl<
         let storage = storage.claim(selector, state);
         let event_loop = Self { storage };
         Context::spawn_root(storage, f);
-        match storage.tasks().run_ready() {
+        match storage.tasks.run_ready() {
             RootStatus::Running => {}
             RootStatus::Finished => return Err(Error::RootFinished),
         }
@@ -72,15 +72,15 @@ impl<
     /// submits them back to epoll/kqueue.
     pub fn drain_events_without_blocking(&mut self) -> Result<(), Error> {
         let storage = self.storage;
-        if let Root::Finished = storage.tasks().root() {
+        if let Root::Finished = storage.tasks.root() {
             return Err(Error::RootFinished);
         }
         let status = loop {
             storage.process_selector_events().map_err(Error::Io)?;
-            if !storage.tasks().has_ready() {
+            if !storage.tasks.has_ready() {
                 break RootStatus::Running;
             }
-            if storage.tasks().run_ready() == RootStatus::Finished {
+            if storage.tasks.run_ready() == RootStatus::Finished {
                 break RootStatus::Finished;
             }
         };
@@ -91,12 +91,12 @@ impl<
     ///
     /// This is the only way to communicate with the external world.
     pub fn state_mut(&mut self) -> RefMut<'_, S> {
-        self.storage.state().borrow_mut()
+        self.storage.state.borrow_mut()
     }
 
     fn finish_drain(&self, status: RootStatus) -> Result<(), Error> {
         if status == RootStatus::Finished {
-            self.storage.tasks().drop_all();
+            self.storage.tasks.drop_all();
         }
         self.storage.flush().map_err(Error::Io)?;
         match status {
@@ -139,7 +139,7 @@ impl<
 > AsFd for EventLoop<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn as_fd(&self) -> BorrowedFd<'_> {
-        self.storage.selector().as_fd()
+        self.storage.selector.as_fd()
     }
 }
 
