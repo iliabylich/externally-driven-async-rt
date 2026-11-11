@@ -97,9 +97,9 @@ impl KqueueSelector {
         let mut receipts = [MaybeUninit::<Event>::uninit(); CHANGES_PER_CALL];
         loop {
             let mut len = 0;
-            for (entry, change) in list.iter_mut().zip(&mut changes) {
+            for (filled, (entry, change)) in (1..).zip(list.iter_mut().zip(&mut changes)) {
                 *entry = change;
-                len += 1;
+                len = filled;
             }
             if len == 0 {
                 return Ok(());

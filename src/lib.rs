@@ -10,6 +10,7 @@
     unused_lifetimes
 )]
 #![allow(clippy::new_without_default)]
+#![cfg_attr(test, allow(clippy::arithmetic_side_effects))]
 
 mod context;
 mod event_loop;

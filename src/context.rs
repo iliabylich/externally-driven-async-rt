@@ -93,7 +93,10 @@ impl<
 
     /// Sleeps for `duration`.
     pub fn sleep(&self, duration: Duration) -> Sleep<'_, TIMERS> {
-        Sleep::new(self.storage.timers(), Instant::now() + duration)
+        Sleep::new(
+            self.storage.timers(),
+            Instant::now().saturating_add(duration),
+        )
     }
 
     /// Runs `future` with a timeout of `duration`, resolves to `None` in case of a timeout.

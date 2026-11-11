@@ -36,7 +36,7 @@ impl<const N: usize> WakeQueue<N> {
         let mut slot = 0;
         while slot < N {
             links[slot] = Link::new(slot as u32);
-            slot += 1;
+            slot = slot.wrapping_add(1);
         }
         Self {
             owner: AtomicUsize::new(UNCLAIMED),

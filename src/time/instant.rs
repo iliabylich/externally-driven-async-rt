@@ -1,4 +1,4 @@
-use core::{ops::Add, time::Duration};
+use core::time::Duration;
 
 use crate::sys::monotonic_nanos;
 
@@ -12,17 +12,22 @@ impl Instant {
         Self(monotonic_nanos())
     }
 
+    pub(crate) fn saturating_add(self, duration: Duration) -> Self {
+        let nanos = u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX);
+        Self(self.0.saturating_add(nanos))
+    }
+
     pub(crate) fn saturating_duration_since(self, earlier: Self) -> Duration {
         Duration::from_nanos(self.0.saturating_sub(earlier.0))
     }
 }
 
-impl Add<Duration> for Instant {
+#[cfg(test)]
+impl core::ops::Add<Duration> for Instant {
     type Output = Self;
 
     fn add(self, duration: Duration) -> Self {
-        let nanos = u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX);
-        Self(self.0.saturating_add(nanos))
+        self.saturating_add(duration)
     }
 }
 

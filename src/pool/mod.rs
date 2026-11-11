@@ -25,9 +25,11 @@ impl<T, const N: usize> ObjectPool<T, N> {
         }
         let mut meta = [const { Meta::new(None) }; N];
         let mut slot = 0;
-        while slot + 1 < N {
-            meta[slot] = Meta::new(Some((slot + 1) as u32));
-            slot += 1;
+        let mut next: usize = 1;
+        while next < N {
+            meta[slot] = Meta::new(Some(next as u32));
+            slot = next;
+            next = next.wrapping_add(1);
         }
         Self {
             free_head: Cell::new(Some(0)),

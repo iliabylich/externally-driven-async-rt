@@ -1,3 +1,9 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::arithmetic_side_effects
+)]
+
 use core::{cell::RefCell, net::SocketAddr, time::Duration};
 
 use externally_driven_async_rt::{

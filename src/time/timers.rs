@@ -23,7 +23,7 @@ impl<const N: usize> Timers<N> {
             panic!("more than {N} concurrent timers");
         };
         let seq = self.next_seq.get();
-        self.next_seq.set(seq + 1);
+        self.next_seq.set(seq.wrapping_add(1));
         timer.arm(deadline, seq, waker);
         (index, timer)
     }
