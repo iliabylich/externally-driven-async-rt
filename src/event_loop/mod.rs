@@ -58,11 +58,7 @@ impl<
     {
         let ctx = storage.claim(selector, state);
         let event_loop = Self { ctx };
-        let root = f(ctx);
-        // SAFETY: `Fut: 'a`, where `'a` is the invariant lifetime of the `Context` that
-        // `storage.claim` just created, the only one this storage will ever have. `EventLoop` drops
-        // every task before `'a` ends, so the root outlives every poll and drop of its task.
-        unsafe { ctx.storage.tasks.spawn_root(root) };
+        ctx.storage.tasks.spawn_root(ctx.claimed, f(ctx));
         match ctx.storage.tasks.run_ready() {
             RootStatus::Running => {}
             RootStatus::Finished => return Err(Error::RootFinished),

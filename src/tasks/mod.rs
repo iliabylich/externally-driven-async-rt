@@ -24,7 +24,7 @@ pub(crate) use self::{
     task_entry::{TaskEntry, TaskId},
     wake_queue::WakeQueue,
 };
-use crate::{pool::ObjectPool, waker_slot::WakerSlot};
+use crate::{claimed::Claimed, pool::ObjectPool, waker_slot::WakerSlot};
 
 pub(crate) struct Tasks<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> {
     pub(crate) pool: ObjectPool<TaskEntry<TASK_SIZE>, TASKS>,
@@ -36,8 +36,8 @@ pub(crate) struct Tasks<const TASKS: usize, const TASK_SIZE: usize, const ROOT_T
 
 // SAFETY: `Tasks` is crate-private, so only the crate can reach it, and the crate uses each one
 // from a single thread: a loop's tasks only through its `Context`, which `Context::claim` creates
-// on the claiming thread, and the `JoinHandle`s it hands out, both `!Send`; a test's tasks only
-// from that test. Wakers only touch the atomic `WakeQueue`, which asserts that thread.
+// on the claiming thread, and the `JoinHandle`s, `ReserveTask`s and `TaskReservation`s it hands
+// out, all `!Send`; a test's tasks only from that test. Wakers only touch the atomic `WakeQueue`, which asserts that thread.
 unsafe impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> Sync
     for Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
@@ -74,29 +74,23 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         !self.queue.is_empty()
     }
 
-    /// # Safety
-    ///
-    /// Everything `Fut` borrows must outlive every poll and drop of its task.
-    pub(crate) unsafe fn spawn<Fut>(&'static self, future: Fut) -> TaskId<TASK_SIZE>
+    pub(crate) fn spawn<'a, Fut>(&'static self, _: Claimed<'a>, future: Fut) -> TaskId<TASK_SIZE>
     where
-        Fut: Future<Output = ()>,
+        Fut: Future<Output = ()> + 'a,
     {
         let Some((id, entry)) = self.reserve() else {
             panic!("more than {TASKS} concurrent tasks");
         };
-        // SAFETY: `entry` lives in `self`, which is `'static`, so it never moves. Everything
-        // `Fut` borrows outlives every poll and drop of its task (guaranteed by the caller).
+        // SAFETY: `entry` lives in `self`, which is `'static`, so it never moves. `Fut: 'a`, and
+        // the `Claimed<'a>` guarantees every poll and drop of its task happens before `'a` ends.
         unsafe { entry.write(future) };
         self.queue.push(id.slot());
         id
     }
 
-    /// # Safety
-    ///
-    /// Everything `Fut` borrows must outlive every poll and drop of its task.
-    pub(crate) unsafe fn spawn_root<Fut>(&'static self, future: Fut)
+    pub(crate) fn spawn_root<'a, Fut>(&'static self, _: Claimed<'a>, future: Fut)
     where
-        Fut: Future<Output = ()>,
+        Fut: Future<Output = ()> + 'a,
     {
         assert!(
             matches!(self.root.get(), Root::Unset),
@@ -118,28 +112,26 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         };
         // SAFETY: `Fut` fits the root region (asserted above), which lives in `self`, so it is
         // `'static` and never moves. The region is unused: the root is still `Unset` (asserted
-        // above), and leaves that state below, so this is the only call that gets here.
-        // Everything `Fut` borrows outlives every poll and drop of its task (guaranteed by the
-        // caller).
+        // above), and leaves that state below, so this is the only call that gets here. `Fut: 'a`,
+        // and the `Claimed<'a>` guarantees every poll and drop of its task happens before `'a`
+        // ends.
         let task = unsafe { Task::write(self.root_region.as_ptr(), future) };
         entry.occupy(task);
         self.queue.push(id.slot());
         self.root.set(Root::Running(id));
     }
 
-    /// # Safety
-    ///
-    /// Everything `Fut` borrows must outlive every poll and drop of its task.
-    pub(crate) unsafe fn spawn_reserved<Fut>(
+    pub(crate) fn spawn_reserved<'a, Fut>(
         &self,
+        _: Claimed<'a>,
         id: TaskId<TASK_SIZE>,
         entry: &'static TaskEntry<TASK_SIZE>,
         future: Fut,
     ) where
-        Fut: Future<Output = ()>,
+        Fut: Future<Output = ()> + 'a,
     {
-        // SAFETY: `entry` is `'static`, so it never moves. Everything `Fut` borrows outlives every
-        // poll and drop of its task (guaranteed by the caller).
+        // SAFETY: `entry` is `'static`, so it never moves. `Fut: 'a`, and the `Claimed<'a>`
+        // guarantees every poll and drop of its task happens before `'a` ends.
         unsafe { entry.write(future) };
         self.queue.push(id.slot());
     }

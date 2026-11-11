@@ -1,11 +1,7 @@
-use core::{
-    cell::{Cell, RefCell},
-    future::Future,
-    marker::PhantomData,
-    time::Duration,
-};
+use core::{cell::RefCell, future::Future, time::Duration};
 
 use crate::{
+    claimed::Claimed,
     io::IoIndex,
     selector::{EVENTS_PER_CALL, Selector, SelectorEvent},
     state::State,
@@ -29,7 +25,7 @@ pub struct Context<
     pub(crate) storage: &'static LoopStorage<TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     pub(crate) selector: &'a Selector,
     pub(crate) state: &'a RefCell<S>,
-    _invariant_not_send: PhantomData<(Cell<&'a ()>, *const ())>,
+    pub(crate) claimed: Claimed<'a>,
 }
 
 impl<
@@ -52,7 +48,11 @@ impl<
             storage,
             selector,
             state,
-            _invariant_not_send: PhantomData,
+            // SAFETY: claiming the queue above panics unless this is the storage's first claim, so
+            // these tasks belong to this loop alone. Only the `EventLoop<'a>` that owns this claim
+            // polls and drops them, and it drops them all before `'a` ends or, if leaked, never
+            // touches them again.
+            claimed: unsafe { Claimed::new() },
         }
     }
 
@@ -78,12 +78,7 @@ impl<
         Fut: Future<Output = ()> + 'a,
     {
         let future = f(*self);
-        // SAFETY: futures are written into `Tasks` only through a `Context`, and `Context::claim`
-        // creates a context once per storage (it claims the `WakeQueue`, which panics the second
-        // time; copies share the context's invariant `'a`), so every future in it outlives this
-        // same `'a`. They are polled and dropped only while that loop runs: `EventLoop` drops
-        // them all before `'a` ends, and the storage can never be claimed again.
-        let id = unsafe { self.storage.tasks.spawn(future) };
+        let id = self.storage.tasks.spawn(self.claimed, future);
         JoinHandle::new(&self.storage.tasks, id)
     }
 
@@ -93,10 +88,8 @@ impl<
     /// pool of tasks is available.
     ///
     /// The future stays pending until some other task finishes and frees a slot.
-    pub fn reserve_task(
-        &self,
-    ) -> ReserveTask<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
-        ReserveTask::new(*self)
+    pub fn reserve_task(&self) -> ReserveTask<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE> {
+        ReserveTask::new(&self.storage.tasks, self.claimed)
     }
 
     /// Sleeps for `duration`.

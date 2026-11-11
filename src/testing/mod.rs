@@ -20,7 +20,7 @@ pub(crate) use self::{
     log::Log,
     poll::{is_readable, is_writable, sleep_blocking, wait_readable},
     sockets::{raw_accept, raw_socket, socketpair},
-    spawn::{spawn_reserved_static, spawn_root_static, spawn_static},
+    spawn::{claimed_forever, spawn_reserved_static, spawn_root_static, spawn_static},
     wakers::counting_waker,
 };
 

@@ -1,6 +1,14 @@
 use core::future::Future;
 
-use crate::tasks::{TaskEntry, TaskId, Tasks};
+use crate::{
+    claimed::Claimed,
+    tasks::{TaskEntry, TaskId, Tasks},
+};
+
+pub(crate) fn claimed_forever() -> Claimed<'static> {
+    // SAFETY: `'static` never ends.
+    unsafe { Claimed::new() }
+}
 
 pub(crate) fn spawn_static<
     const TASKS: usize,
@@ -10,8 +18,7 @@ pub(crate) fn spawn_static<
     tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
     future: impl Future<Output = ()> + 'static,
 ) -> TaskId<TASK_SIZE> {
-    // SAFETY: the future is `'static`, so everything it borrows outlives every poll and drop.
-    unsafe { tasks.spawn(future) }
+    tasks.spawn(claimed_forever(), future)
 }
 
 pub(crate) fn spawn_root_static<
@@ -22,8 +29,7 @@ pub(crate) fn spawn_root_static<
     tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
     future: impl Future<Output = ()> + 'static,
 ) {
-    // SAFETY: the future is `'static`, so everything it borrows outlives every poll and drop.
-    unsafe { tasks.spawn_root(future) };
+    tasks.spawn_root(claimed_forever(), future);
 }
 
 pub(crate) fn spawn_reserved_static<
@@ -36,6 +42,5 @@ pub(crate) fn spawn_reserved_static<
     entry: &'static TaskEntry<TASK_SIZE>,
     future: impl Future<Output = ()> + 'static,
 ) {
-    // SAFETY: the future is `'static`, so everything it borrows outlives every poll and drop.
-    unsafe { tasks.spawn_reserved(id, entry, future) };
+    tasks.spawn_reserved(claimed_forever(), id, entry, future);
 }

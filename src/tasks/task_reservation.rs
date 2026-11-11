@@ -1,8 +1,5 @@
-use core::{cell::Cell, marker::PhantomData};
-
 use crate::{
-    context::Context,
-    state::State,
+    claimed::Claimed,
     tasks::{JoinHandle, TaskEntry, TaskId, Tasks},
 };
 
@@ -15,24 +12,25 @@ pub struct TaskReservation<
     const ROOT_TASK_SIZE: usize,
 > {
     tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
+    claimed: Claimed<'a>,
     id: TaskId<TASK_SIZE>,
     entry: &'static TaskEntry<TASK_SIZE>,
-    _invariant_not_send: PhantomData<(Cell<&'a ()>, *const ())>,
 }
 
 impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
     TaskReservation<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
-    pub(crate) fn new<S: State, const TIMERS: usize, const FDS: usize>(
-        ctx: Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    pub(crate) fn new(
+        tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
+        claimed: Claimed<'a>,
         id: TaskId<TASK_SIZE>,
         entry: &'static TaskEntry<TASK_SIZE>,
     ) -> Self {
         Self {
-            tasks: &ctx.storage.tasks,
+            tasks,
+            claimed,
             id,
             entry,
-            _invariant_not_send: PhantomData,
         }
     }
 
@@ -49,12 +47,12 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
         Fut: Future<Output = ()> + 'a,
     {
         let Self {
-            tasks, id, entry, ..
+            tasks,
+            claimed,
+            id,
+            entry,
         } = self;
-        // SAFETY: `Fut: 'a`, where `'a` is the invariant lifetime of the `Context` this
-        // reservation was made from, so the task outlives every poll and drop as in
-        // `Context::spawn`.
-        unsafe { tasks.spawn_reserved(id, entry, future) };
+        tasks.spawn_reserved(claimed, id, entry, future);
         core::mem::forget(self);
         JoinHandle::new(tasks, id)
     }
@@ -78,88 +76,54 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> co
 
 #[cfg(test)]
 mod tests {
-    use core::{cell::RefCell, future::pending, time::Duration};
+    use core::{
+        future::{Future, pending},
+        pin::Pin,
+        sync::atomic::{AtomicBool, Ordering::Relaxed},
+        task::{Context, Poll, Waker},
+    };
 
     use crate::{
-        Selector,
-        testing::{EventLoopTestingExt, Log, TEST_TASKS, TestLoop, TestStorage},
+        tasks::{ReserveTask, TaskReservation, Tasks},
+        testing::{claimed_forever, spawn_static},
     };
 
     #[test]
     fn spawning_runs_the_task() {
-        let mut selector = Selector::new().unwrap();
-        let mut state = RefCell::new(Log::default());
-        let mut event_loop = TestLoop::new(
-            {
-                static STORAGE: TestStorage = TestStorage::new();
-                &STORAGE
-            },
-            &mut selector,
-            &mut state,
-            async |ctx| {
-                let task = ctx.reserve_task().await;
-                task.spawn(async move { ctx.dispatch(1) }).await;
-                ctx.dispatch(2);
-                pending::<()>().await;
-            },
-        )
-        .unwrap();
-        assert_eq!(event_loop.state_mut().events(), [1, 2]);
+        static TASKS: Tasks<1, 64, 0> = Tasks::new();
+        static RAN: AtomicBool = AtomicBool::new(false);
+        let (id, entry) = TASKS.reserve().unwrap();
+        let mut handle = TaskReservation::new(&TASKS, claimed_forever(), id, entry)
+            .spawn(async { RAN.store(true, Relaxed) });
+        TASKS.run_ready();
+        assert!(RAN.load(Relaxed));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert_eq!(Pin::new(&mut handle).poll(&mut cx), Poll::Ready(()));
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn dropping_frees_the_slot_and_wakes_the_waiter() {
-        let mut selector = Selector::new().unwrap();
-        let mut state = RefCell::new(Log::default());
-        let mut event_loop = TestLoop::new(
-            {
-                static STORAGE: TestStorage = TestStorage::new();
-                &STORAGE
-            },
-            &mut selector,
-            &mut state,
-            async |ctx| {
-                for _ in 0..TEST_TASKS - 3 {
-                    ctx.spawn(async |_| pending::<()>().await);
-                }
-                let task = ctx.reserve_task().await;
-                ctx.spawn(async |ctx| {
-                    let _task = ctx.reserve_task().await;
-                    ctx.dispatch(2);
-                    pending::<()>().await;
-                });
-                ctx.sleep(Duration::from_millis(1)).await;
-                ctx.dispatch(1);
-                drop(task);
-                pending::<()>().await;
-            },
-        )
-        .unwrap();
-        assert!(event_loop.state_mut().events().is_empty());
-        event_loop.run_until_events(2);
-        assert_eq!(event_loop.state_mut().events(), [1, 2]);
+        static TASKS: Tasks<2, 64, 0> = Tasks::new();
+        TASKS.queue.claim();
+        let waiter = spawn_static(&TASKS, pending());
+        TASKS.run_ready();
+        let (id, entry) = TASKS.reserve().unwrap();
+        let reservation = TaskReservation::new(&TASKS, claimed_forever(), id, entry);
+        let mut reserve = ReserveTask::new(&TASKS, claimed_forever());
+        let waker = TASKS.queue.waker(waiter.slot());
+        let mut cx = Context::from_waker(&waker);
+        assert!(Pin::new(&mut reserve).poll(&mut cx).is_pending());
+        drop(reservation);
+        assert!(TASKS.has_ready());
+        assert!(Pin::new(&mut reserve).poll(&mut cx).is_ready());
     }
 
     #[test]
-    #[should_panic(expected = "more than 16 concurrent tasks")]
+    #[should_panic(expected = "more than 1 concurrent tasks")]
     fn a_reserved_slot_is_not_handed_to_spawn() {
-        let mut selector = Selector::new().unwrap();
-        let mut state = RefCell::new(Log::default());
-        let _ = TestLoop::new(
-            {
-                static STORAGE: TestStorage = TestStorage::new();
-                &STORAGE
-            },
-            &mut selector,
-            &mut state,
-            async |ctx| {
-                for _ in 0..TEST_TASKS - 2 {
-                    ctx.spawn(async |_| pending::<()>().await);
-                }
-                let _task = ctx.reserve_task().await;
-                ctx.spawn(async |_| {});
-            },
-        );
+        static TASKS: Tasks<1, 64, 0> = Tasks::new();
+        let (id, entry) = TASKS.reserve().unwrap();
+        let _reservation = TaskReservation::new(&TASKS, claimed_forever(), id, entry);
+        spawn_static(&TASKS, async {});
     }
 }
