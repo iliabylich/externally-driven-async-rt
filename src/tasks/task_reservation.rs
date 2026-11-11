@@ -1,41 +1,39 @@
+use core::{cell::Cell, marker::PhantomData};
+
 use crate::{
     context::Context,
     state::State,
-    tasks::{JoinHandle, TaskEntry, TaskId},
+    tasks::{JoinHandle, TaskEntry, TaskId, Tasks},
 };
 
 /// A task reservation that can be used to spawn a task without waiting for a free slot.
 #[must_use = "a reservation holds a task slot until it is spawned into or dropped"]
 pub struct TaskReservation<
     'a,
-    S: State,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
-    const TIMERS: usize,
-    const FDS: usize,
 > {
-    ctx: Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
     id: TaskId<TASK_SIZE>,
     entry: &'static TaskEntry<TASK_SIZE>,
+    _invariant_not_send: PhantomData<(Cell<&'a ()>, *const ())>,
 }
 
-impl<
-    'a,
-    S: State,
-    const TASKS: usize,
-    const TASK_SIZE: usize,
-    const ROOT_TASK_SIZE: usize,
-    const TIMERS: usize,
-    const FDS: usize,
-> TaskReservation<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
+    TaskReservation<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
-    pub(crate) fn new(
+    pub(crate) fn new<S: State, const TIMERS: usize, const FDS: usize>(
         ctx: Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         id: TaskId<TASK_SIZE>,
         entry: &'static TaskEntry<TASK_SIZE>,
     ) -> Self {
-        Self { ctx, id, entry }
+        Self {
+            tasks: &ctx.storage.tasks,
+            id,
+            entry,
+            _invariant_not_send: PhantomData,
+        }
     }
 
     /// Spawns a task using a reserved slot that is held by this [`TaskReservation`].
@@ -46,44 +44,32 @@ impl<
     ///
     /// 1. the future is bigger than `TASK_SIZE` bytes
     /// 2. it is aligned to more than 16 bytes.
-    pub fn spawn<F, Fut>(self, f: F) -> JoinHandle<TASKS, TASK_SIZE, ROOT_TASK_SIZE>
+    pub fn spawn<Fut>(self, future: Fut) -> JoinHandle<TASKS, TASK_SIZE, ROOT_TASK_SIZE>
     where
-        F: FnOnce(Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
-        let Self { ctx, id, entry } = self;
-        let future = f(ctx);
-        // SAFETY: `Fut: 'a`, the invariant lifetime of `ctx`, so the task outlives every poll and
-        // drop as in `Context::spawn`.
-        unsafe { ctx.storage.tasks.spawn_reserved(id, entry, future) };
+        let Self {
+            tasks, id, entry, ..
+        } = self;
+        // SAFETY: `Fut: 'a`, where `'a` is the invariant lifetime of the `Context` this
+        // reservation was made from, so the task outlives every poll and drop as in
+        // `Context::spawn`.
+        unsafe { tasks.spawn_reserved(id, entry, future) };
         core::mem::forget(self);
-        JoinHandle::new(&ctx.storage.tasks, id)
+        JoinHandle::new(tasks, id)
     }
 }
 
-impl<
-    S: State,
-    const TASKS: usize,
-    const TASK_SIZE: usize,
-    const ROOT_TASK_SIZE: usize,
-    const TIMERS: usize,
-    const FDS: usize,
-> Drop for TaskReservation<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> Drop
+    for TaskReservation<'_, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
     fn drop(&mut self) {
-        self.ctx.storage.tasks.release(self.id);
+        self.tasks.release(self.id);
     }
 }
 
-impl<
-    'a,
-    S: State,
-    const TASKS: usize,
-    const TASK_SIZE: usize,
-    const ROOT_TASK_SIZE: usize,
-    const TIMERS: usize,
-    const FDS: usize,
-> core::fmt::Debug for TaskReservation<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> core::fmt::Debug
+    for TaskReservation<'_, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("TaskReservation")
@@ -112,7 +98,7 @@ mod tests {
             &mut state,
             async |ctx| {
                 let task = ctx.reserve_task().await;
-                task.spawn(async |ctx| ctx.dispatch(1)).await;
+                task.spawn(async move { ctx.dispatch(1) }).await;
                 ctx.dispatch(2);
                 pending::<()>().await;
             },

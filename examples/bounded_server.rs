@@ -128,7 +128,8 @@ async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
             }
         };
         ctx.dispatch(Event::Connected(peer));
-        task.spawn(async move |ctx| {
+        let ctx = *ctx;
+        task.spawn(async move {
             let event = serve(&ctx, stream, peer).await;
             ctx.dispatch(event);
         });

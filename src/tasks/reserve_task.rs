@@ -45,7 +45,7 @@ impl<
     const FDS: usize,
 > Future for ReserveTask<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
-    type Output = TaskReservation<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
+    type Output = TaskReservation<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
