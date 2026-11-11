@@ -1,6 +1,7 @@
 mod link;
 
 use core::{
+    mem::offset_of,
     sync::atomic::{AtomicU32, AtomicUsize, Ordering::Relaxed},
     task::{RawWaker, RawWakerVTable, Waker},
 };
@@ -20,7 +21,7 @@ pub(crate) struct WakeQueue<const N: usize> {
     owner: AtomicUsize,
     head: AtomicU32,
     tail: AtomicU32,
-    links: [Link<N>; N],
+    links: [Link; N],
 }
 
 impl<const N: usize> WakeQueue<N> {
@@ -57,16 +58,14 @@ impl<const N: usize> WakeQueue<N> {
     }
 
     pub(crate) fn waker(&'static self, slot: u32) -> Waker {
-        let link = &self.links[slot as usize];
-        link.set_queue(self);
+        assert!((slot as usize) < N, "slot {slot} is out of bounds");
+        let link = core::ptr::from_ref(self)
+            .wrapping_byte_add(offset_of!(Self, links))
+            .cast::<Link>()
+            .wrapping_add(slot as usize);
         // SAFETY: the vtable functions below uphold the `RawWaker` contract for a pointer to a
-        // link of a queue that is never freed, whose `queue` was just set.
-        unsafe {
-            Waker::from_raw(RawWaker::new(
-                core::ptr::from_ref(link).cast(),
-                vtable::<N>(),
-            ))
-        }
+        // link of a queue that is never freed, derived from a pointer to the whole queue.
+        unsafe { Waker::from_raw(RawWaker::new(link.cast(), vtable::<N>())) }
     }
 
     fn generation(&self, slot: u32) -> Option<u32> {
@@ -142,18 +141,24 @@ fn clone<const N: usize>(ptr: *const ()) -> RawWaker {
 }
 
 unsafe fn wake<const N: usize>(ptr: *const ()) {
-    // SAFETY: `ptr` comes from `WakeQueue::waker`: it points to a link of a queue that is never
-    // freed.
-    let link = unsafe { &*ptr.cast::<Link<N>>() };
-    let queue = link
-        .queue()
-        .expect("`WakeQueue::waker` sets the queue before creating the waker");
+    let link = ptr.cast::<Link>();
+    // SAFETY: `ptr` comes from `WakeQueue::waker`: it points to `links[slot]` of a queue that is
+    // never freed, and carries the provenance of the whole queue, so stepping back by `slot`
+    // links and by the offset of `links` lands on that queue.
+    let (slot, queue) = unsafe {
+        let slot = (*link).slot();
+        let queue = link
+            .sub(slot as usize)
+            .byte_sub(offset_of!(WakeQueue<N>, links))
+            .cast::<WakeQueue<N>>();
+        (slot, &*queue)
+    };
     assert_eq!(
         queue.owner.load(Relaxed),
         ThreadId::current().to_raw(),
         "a Waker must only be woken on the thread of its EventLoop"
     );
-    queue.push(link.slot());
+    queue.push(slot);
 }
 
 fn drop_waker(_: *const ()) {}
