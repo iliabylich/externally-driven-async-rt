@@ -1,7 +1,8 @@
 use core::cell::RefCell;
 
 use crate::{
-    context::Context, io::IoWaiters, selector::Selector, state::State, tasks::Tasks, time::Timers,
+    context::Context, io::IoWaiters, notify::Notification, selector::Selector, state::State,
+    tasks::Tasks, time::Timers,
 };
 
 /// The main pre-allocated storage that [`EventLoop`](crate::EventLoop) needs.
@@ -18,6 +19,7 @@ pub struct LoopStorage<
     pub(crate) timers: Timers<TIMERS>,
     pub(crate) io_waiters: IoWaiters<FDS>,
     pub(crate) tasks: Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
+    pub(crate) notification: Notification,
 }
 
 // SAFETY: a storage has no public methods, so other threads can only pass `&LoopStorage` around.
@@ -50,6 +52,7 @@ impl<
             timers: Timers::new(),
             io_waiters: IoWaiters::new(),
             tasks: Tasks::new(),
+            notification: Notification::new(),
         }
     }
 

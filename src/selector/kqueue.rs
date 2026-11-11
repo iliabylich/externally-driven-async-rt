@@ -1,7 +1,7 @@
 use core::{cell::RefCell, ffi::c_void, mem::MaybeUninit, time::Duration};
 
 use rustix::{
-    event::kqueue::{Event, EventFilter, EventFlags, kevent, kqueue},
+    event::kqueue::{Event, EventFilter, EventFlags, UserDefinedFlags, UserFlags, kevent, kqueue},
     fd::{AsFd, BorrowedFd, OwnedFd},
     io::{Errno, FdFlags, fcntl_setfd},
 };
@@ -15,6 +15,7 @@ use crate::{
 };
 
 const TIMER_IDENT: isize = 0;
+const NOTIFY_IDENT: isize = 0;
 const CHANGES_PER_CALL: usize = if cfg!(test) { 4 } else { 64 };
 
 #[must_use]
@@ -33,10 +34,19 @@ impl KqueueSelector {
         let result = fcntl_setfd(&kq, FdFlags::CLOEXEC);
         syscall_end!(result);
         result?;
-        Ok(Self {
+        let selector = Self {
             kq,
             timer: RefCell::new(KernelTimer::default()),
-        })
+        };
+        selector.submit([Self::notify_kevent(
+            UserFlags::empty(),
+            EventFlags::ADD | EventFlags::CLEAR,
+        )])?;
+        Ok(selector)
+    }
+
+    pub(crate) fn notify(&self) -> rustix::io::Result<()> {
+        self.submit([Self::notify_kevent(UserFlags::TRIGGER, EventFlags::empty())])
     }
 
     pub(crate) fn apply_now(&self, change: IoChange) -> rustix::io::Result<()> {
@@ -162,7 +172,8 @@ impl KqueueSelector {
                 self.timer.borrow_mut().fired();
                 SelectorEvent::Timer
             }
-            _ => unreachable!("only read, write and timer filters are registered"),
+            EventFilter::User { .. } => SelectorEvent::Notify,
+            _ => unreachable!("only read, write, timer and user filters are registered"),
         }
     }
 
@@ -180,6 +191,18 @@ impl KqueueSelector {
                 timer,
             },
             flags | EventFlags::RECEIPT,
+            core::ptr::null_mut(),
+        )
+    }
+
+    fn notify_kevent(flags: UserFlags, event_flags: EventFlags) -> Event {
+        Event::new(
+            EventFilter::User {
+                ident: NOTIFY_IDENT,
+                flags,
+                user_flags: UserDefinedFlags::new(0),
+            },
+            event_flags | EventFlags::RECEIPT,
             core::ptr::null_mut(),
         )
     }

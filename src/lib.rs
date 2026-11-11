@@ -18,6 +18,7 @@ mod event_loop;
 mod io;
 /// A module that implements TCP/UDP/Unix sockets.
 pub mod net;
+mod notify;
 mod pool;
 mod selector;
 mod state;
@@ -32,6 +33,7 @@ mod waker_slot;
 
 pub use context::Context;
 pub use event_loop::{Error, EventLoop};
+pub use notify::Notified;
 pub use selector::Selector;
 pub use state::State;
 pub use storage::LoopStorage;

@@ -1,3 +1,5 @@
+use core::cell::Cell;
+
 use rustix::fd::{AsFd, BorrowedFd};
 
 use crate::{
@@ -6,11 +8,20 @@ use crate::{
 };
 
 #[must_use]
-pub(crate) struct DummySelector;
+pub(crate) struct DummySelector {
+    notified: Cell<bool>,
+}
 
 impl DummySelector {
     pub(crate) fn new() -> rustix::io::Result<Self> {
-        Ok(Self)
+        Ok(Self {
+            notified: Cell::new(false),
+        })
+    }
+
+    pub(crate) fn notify(&self) -> rustix::io::Result<()> {
+        self.notified.set(true);
+        Ok(())
     }
 
     pub(crate) fn apply_now(&self, _: IoChange) -> rustix::io::Result<()> {
@@ -39,6 +50,11 @@ impl DummySelector {
         out: &mut [Option<SelectorEvent>; EVENTS_PER_CALL],
     ) -> rustix::io::Result<bool> {
         out.fill(None);
+        if self.notified.replace(false)
+            && let Some(first) = out.first_mut()
+        {
+            *first = Some(SelectorEvent::Notify);
+        }
         Ok(false)
     }
 }

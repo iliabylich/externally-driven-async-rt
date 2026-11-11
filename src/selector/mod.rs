@@ -60,6 +60,10 @@ impl Selector {
         self.backend.disarm_timer();
     }
 
+    pub(crate) fn notify(&self) -> rustix::io::Result<()> {
+        self.backend.notify()
+    }
+
     pub(crate) fn flush(
         &self,
         io_changes: impl IntoIterator<Item = IoChange>,

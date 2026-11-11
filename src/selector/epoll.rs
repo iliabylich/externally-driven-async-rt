@@ -2,8 +2,9 @@ use core::{cell::RefCell, time::Duration};
 
 use rustix::{
     event::{
-        Timespec,
+        EventfdFlags, Timespec,
         epoll::{self, CreateFlags, Event, EventData, EventFlags},
+        eventfd,
     },
     fd::{AsFd, BorrowedFd, OwnedFd},
     io::Errno,
@@ -20,6 +21,7 @@ use crate::{
 };
 
 const TIMER_DATA: usize = usize::MAX;
+const NOTIFY_DATA: usize = usize::MAX - 1;
 const ZERO: Timespec = Timespec {
     tv_sec: 0,
     tv_nsec: 0,
@@ -33,6 +35,7 @@ const NO_EVENT: Event = Event {
 pub(crate) struct EpollSelector {
     epoll: OwnedFd,
     timer_fd: OwnedFd,
+    notify_fd: OwnedFd,
     timer: RefCell<KernelTimer>,
 }
 
@@ -49,24 +52,32 @@ impl EpollSelector {
         syscall_end!(timer_fd);
         let timer_fd = timer_fd?;
 
-        let data = EventData::new_ptr(core::ptr::without_provenance_mut(TIMER_DATA));
-        let flags = EventFlags::IN;
-        syscall_start!(
-            "epoll_ctl",
-            epoll,
-            "EPOLL_CTL_ADD",
-            timer_fd,
-            Event { flags, data }
-        );
-        let result = epoll::add(&epoll, &timer_fd, data, flags);
-        syscall_end!(result);
-        result?;
+        let notify_flags = EventfdFlags::NONBLOCK | EventfdFlags::CLOEXEC;
+        syscall_start!("eventfd2", 0, notify_flags);
+        let notify_fd = eventfd(0, notify_flags);
+        syscall_end!(notify_fd);
+        let notify_fd = notify_fd?;
+
+        add_readable(&epoll, &timer_fd, TIMER_DATA)?;
+        add_readable(&epoll, &notify_fd, NOTIFY_DATA)?;
 
         Ok(Self {
             epoll,
             timer_fd,
+            notify_fd,
             timer: RefCell::new(KernelTimer::default()),
         })
+    }
+
+    pub(crate) fn notify(&self) -> rustix::io::Result<()> {
+        let increment = 1_u64.to_ne_bytes();
+        syscall_start!("write", self.notify_fd, &increment[..], increment.len());
+        let result = rustix::io::write(&self.notify_fd, &increment);
+        syscall_end!(result);
+        match result {
+            Ok(_) | Err(Errno::AGAIN) => Ok(()),
+            Err(errno) => Err(errno),
+        }
     }
 
     pub(crate) fn apply_now(&self, change: IoChange) -> rustix::io::Result<()> {
@@ -124,6 +135,7 @@ impl EpollSelector {
     fn consume(&self, event: Event) -> rustix::io::Result<Option<SelectorEvent>> {
         match event.data.ptr().addr() {
             TIMER_DATA => self.consume_timer(),
+            NOTIFY_DATA => self.consume_notify(),
             token => {
                 let ready = Self::ready(event.flags);
                 Ok((ready != Directions::Empty).then_some(SelectorEvent::Io { token, ready }))
@@ -153,6 +165,18 @@ impl EpollSelector {
                 self.timer.borrow_mut().fired();
                 Ok(Some(SelectorEvent::Timer))
             }
+            Err(Errno::AGAIN) => Ok(None),
+            Err(errno) => Err(errno),
+        }
+    }
+
+    fn consume_notify(&self) -> rustix::io::Result<Option<SelectorEvent>> {
+        let mut counter = [0; 8];
+        syscall_start!("read", self.notify_fd);
+        let result = rustix::io::read(&self.notify_fd, &mut counter);
+        syscall_end!(result; &counter[..result.unwrap_or(0)], counter.len());
+        match result {
+            Ok(_) => Ok(Some(SelectorEvent::Notify)),
             Err(Errno::AGAIN) => Ok(None),
             Err(errno) => Err(errno),
         }
@@ -232,7 +256,23 @@ impl Drop for EpollSelector {
     fn drop(&mut self) {
         syscall!("close", self.epoll);
         syscall!("close", self.timer_fd);
+        syscall!("close", self.notify_fd);
     }
+}
+
+fn add_readable(epoll: &OwnedFd, fd: &OwnedFd, token: usize) -> rustix::io::Result<()> {
+    let data = EventData::new_ptr(core::ptr::without_provenance_mut(token));
+    let flags = EventFlags::IN;
+    syscall_start!(
+        "epoll_ctl",
+        epoll,
+        "EPOLL_CTL_ADD",
+        fd,
+        Event { flags, data }
+    );
+    let result = epoll::add(epoll, fd, data, flags);
+    syscall_end!(result);
+    result
 }
 
 impl AsFd for EpollSelector {

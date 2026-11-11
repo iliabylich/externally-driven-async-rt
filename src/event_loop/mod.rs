@@ -102,6 +102,20 @@ impl<
         self.finish_drain(status)
     }
 
+    /// Makes the event loop's file descriptor readable and wakes up a task
+    /// that waits on [`Context::notified`](crate::Context::notified)
+    /// once you call [`drain_events_without_blocking`](Self::drain_events_without_blocking).
+    ///
+    /// This is the way to pass data from the external world into the event loop:
+    /// store the data somewhere the task can reach it, then call this method.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a syscall fails.
+    pub fn notify(&self) -> rustix::io::Result<()> {
+        self.ctx.selector.notify()
+    }
+
     /// Returns a mutable reference to the stored state.
     ///
     /// This is the only way to communicate with the external world.

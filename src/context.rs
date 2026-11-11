@@ -3,6 +3,7 @@ use core::{cell::RefCell, future::Future, time::Duration};
 use crate::{
     claimed::Claimed,
     io::IoIndex,
+    notify::Notified,
     selector::{EVENTS_PER_CALL, Selector, SelectorEvent},
     state::State,
     storage::LoopStorage,
@@ -106,10 +107,18 @@ impl<
         Timeout::new(future, self.sleep(duration))
     }
 
+    /// Waits until [`EventLoop::notify`](crate::EventLoop::notify) is called.
+    ///
+    /// See [`Notified`] for details.
+    pub const fn notified(&self) -> Notified<'_> {
+        Notified::new(&self.storage.notification)
+    }
+
     pub(crate) fn clear(&self) {
         self.storage.tasks.drop_all();
         self.storage.timers.clear();
         self.storage.io_waiters.clear();
+        self.storage.notification.clear();
     }
 
     pub(crate) fn process_selector_events(&self) -> rustix::io::Result<()> {
@@ -123,6 +132,7 @@ impl<
                             .io_waiters
                             .wake_ready(IoIndex::from_bits(token), ready);
                     }
+                    SelectorEvent::Notify => self.storage.notification.fire(),
                     SelectorEvent::Timer => {
                         let now = Instant::now();
                         while let Some(waker) = self.storage.timers.take_expired(now) {

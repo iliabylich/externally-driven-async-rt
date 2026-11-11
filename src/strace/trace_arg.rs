@@ -7,7 +7,7 @@ use core::{
 use rustix::event::kqueue::{self, EventFilter};
 #[cfg(target_os = "linux")]
 use rustix::{
-    event::{Timespec, epoll},
+    event::{EventfdFlags, Timespec, epoll},
     time::{Itimerspec, TimerfdClockId, TimerfdFlags, TimerfdTimerFlags},
 };
 use rustix::{
@@ -230,6 +230,7 @@ flags!(FdFlags, RecvFlags, SendFlags);
 flags!(
     epoll::CreateFlags,
     epoll::EventFlags,
+    EventfdFlags,
     TimerfdFlags,
     TimerfdTimerFlags
 );
@@ -293,6 +294,7 @@ impl TraceArg for kqueue::Event {
                 write!(out, "EVFILT_TIMER, ident={ident}, timer=")?;
                 timer.trace_arg(out)?;
             }
+            EventFilter::User { ident, .. } => write!(out, "EVFILT_USER, ident={ident}")?,
             _ => out.write_str("?")?,
         }
         out.write_str(", flags=")?;
