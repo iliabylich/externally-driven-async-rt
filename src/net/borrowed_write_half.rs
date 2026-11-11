@@ -1,4 +1,4 @@
-use crate::{context::Context, net::socket::Socket, state::State};
+use crate::{context::Context, io::AsyncWrite, net::socket::Socket, state::State};
 
 /// Write half of a TCP/Unix stream.
 #[must_use]
@@ -10,9 +10,10 @@ impl<'s> BorrowedWriteHalf<'s> {
     pub(crate) const fn new(socket: &'s Socket) -> Self {
         Self { socket }
     }
+}
 
-    /// Writes from a given buffer into the underlying socket.
-    pub fn write<
+impl AsyncWrite for BorrowedWriteHalf<'_> {
+    fn write<
         'a,
         S: State,
         const TASKS: usize,

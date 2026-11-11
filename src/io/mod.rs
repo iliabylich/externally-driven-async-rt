@@ -1,9 +1,15 @@
+mod async_write;
+mod async_write_ext;
 mod io_registration;
 mod io_waiter;
 mod io_waiters;
 mod wait;
 
 use self::io_waiter::IoWaiter;
+pub use self::{
+    async_write::AsyncWrite,
+    async_write_ext::{AsyncWriteExt, WriteAllError},
+};
 pub(crate) use self::{
     io_registration::IoRegistration, io_waiter::IoIndex, io_waiters::IoWaiters, wait::Wait,
 };

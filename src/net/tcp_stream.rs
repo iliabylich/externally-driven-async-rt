@@ -4,6 +4,7 @@ use rustix::{io::Errno, net::Shutdown};
 
 use crate::{
     context::Context,
+    io::AsyncWrite,
     net::{BorrowedReadHalf, BorrowedWriteHalf, socket::Socket},
     state::State,
 };
@@ -56,23 +57,6 @@ impl TcpStream {
         self.socket.read(ctx, buf)
     }
 
-    /// Writes from a given buffer into the underlying socket.
-    pub fn write<
-        'a,
-        S: State,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
-        &'a mut self,
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-        buf: &'a [u8],
-    ) -> impl Future<Output = rustix::io::Result<usize>> {
-        self.socket.write(ctx, buf)
-    }
-
     /// Shuts down the connection (which also impacts potentially existing read/write halves).
     ///
     /// The underlying file descriptor stays open until this value is dropped.
@@ -111,6 +95,24 @@ impl TcpStream {
             BorrowedReadHalf::new(&self.socket),
             BorrowedWriteHalf::new(&self.socket),
         )
+    }
+}
+
+impl AsyncWrite for TcpStream {
+    fn write<
+        'a,
+        S: State,
+        const TASKS: usize,
+        const TASK_SIZE: usize,
+        const ROOT_TASK_SIZE: usize,
+        const TIMERS: usize,
+        const FDS: usize,
+    >(
+        &'a mut self,
+        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        buf: &'a [u8],
+    ) -> impl Future<Output = rustix::io::Result<usize>> {
+        self.socket.write(ctx, buf)
     }
 }
 

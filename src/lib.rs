@@ -15,7 +15,8 @@ mod claimed;
 mod context;
 mod conversions;
 mod event_loop;
-mod io;
+/// IO traits, implemented by streams from [`net`].
+pub mod io;
 /// A module that implements TCP/UDP/Unix sockets.
 pub mod net;
 mod notify;
