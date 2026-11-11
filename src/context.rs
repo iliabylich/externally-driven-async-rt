@@ -72,10 +72,7 @@ impl<
     /// 3. if it is aligned to more than 16 bytes
     ///
     /// Use [`reserve_task`](Self::reserve_task) to wait for a free slot instead.
-    pub fn spawn<F, Fut>(
-        &self,
-        f: F,
-    ) -> JoinHandle<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+    pub fn spawn<F, Fut>(&self, f: F) -> JoinHandle<TASKS, TASK_SIZE, ROOT_TASK_SIZE>
     where
         F: FnOnce(Self) -> Fut,
         Fut: Future<Output = ()> + 'a,
@@ -87,7 +84,7 @@ impl<
         // same `'a`. They are polled and dropped only while that loop runs: `EventLoop` drops
         // them all before `'a` ends, and the storage can never be claimed again.
         let id = unsafe { self.storage.tasks.spawn(future) };
-        JoinHandle::new(*self, id)
+        JoinHandle::new(&self.storage.tasks, id)
     }
 
     /// Reserves a task slot.

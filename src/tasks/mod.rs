@@ -36,8 +36,8 @@ pub(crate) struct Tasks<const TASKS: usize, const TASK_SIZE: usize, const ROOT_T
 
 // SAFETY: `Tasks` is crate-private, so only the crate can reach it, and the crate uses each one
 // from a single thread: a loop's tasks only through its `Context`, which `Context::claim` creates
-// on the claiming thread and which is `!Send`, and a test's tasks only from that test. Wakers
-// only touch the atomic `WakeQueue`, which asserts that thread.
+// on the claiming thread, and the `JoinHandle`s it hands out, both `!Send`; a test's tasks only
+// from that test. Wakers only touch the atomic `WakeQueue`, which asserts that thread.
 unsafe impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> Sync
     for Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {

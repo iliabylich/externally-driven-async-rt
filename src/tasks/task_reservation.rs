@@ -46,10 +46,7 @@ impl<
     ///
     /// 1. the future is bigger than `TASK_SIZE` bytes
     /// 2. it is aligned to more than 16 bytes.
-    pub fn spawn<F, Fut>(
-        self,
-        f: F,
-    ) -> JoinHandle<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+    pub fn spawn<F, Fut>(self, f: F) -> JoinHandle<TASKS, TASK_SIZE, ROOT_TASK_SIZE>
     where
         F: FnOnce(Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>) -> Fut,
         Fut: Future<Output = ()> + 'a,
@@ -60,7 +57,7 @@ impl<
         // drop as in `Context::spawn`.
         unsafe { ctx.storage.tasks.spawn_reserved(id, entry, future) };
         core::mem::forget(self);
-        JoinHandle::new(ctx, id)
+        JoinHandle::new(&ctx.storage.tasks, id)
     }
 }
 
