@@ -8,19 +8,19 @@ use crate::{
     time::Instant,
 };
 
-fn arm(token: u64, fd: &OwnedFd, direction: Direction) -> IoChange {
+fn arm(token: usize, fd: &OwnedFd, direction: Direction) -> IoChange {
     IoChange::new(Token::from_bits(token), fd.as_raw_fd(), direction.into())
 }
 
-fn arm_both(token: u64, fd: &OwnedFd) -> IoChange {
+fn arm_both(token: usize, fd: &OwnedFd) -> IoChange {
     IoChange::new(Token::from_bits(token), fd.as_raw_fd(), Directions::Both)
 }
 
-fn disarm(token: u64, fd: &OwnedFd) -> IoChange {
+fn disarm(token: usize, fd: &OwnedFd) -> IoChange {
     IoChange::new(Token::from_bits(token), fd.as_raw_fd(), Directions::Empty)
 }
 
-fn ready(token: u64, direction: Direction) -> SelectorEvent {
+fn ready(token: usize, direction: Direction) -> SelectorEvent {
     SelectorEvent::Io {
         token: Token::from_bits(token),
         ready: direction.into(),
@@ -46,7 +46,7 @@ fn events(selector: &Selector) -> impl Iterator<Item = SelectorEvent> + '_ {
     })
 }
 
-fn ready_directions(selector: &Selector, token: u64) -> Directions {
+fn ready_directions(selector: &Selector, token: usize) -> Directions {
     events(selector).fold(Directions::Empty, |directions, event| match event {
         SelectorEvent::Io {
             token: event_token,
@@ -224,7 +224,7 @@ fn changes_and_events_beyond_one_batch_are_all_delivered() {
         fds[..count]
             .iter()
             .enumerate()
-            .map(|(i, fd)| arm(i as u64, fd, Direction::Write))
+            .map(|(i, fd)| arm(i, fd, Direction::Write))
     };
 
     selector.flush(arm_first(4)).unwrap();

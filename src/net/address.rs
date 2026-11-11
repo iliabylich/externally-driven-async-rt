@@ -1,5 +1,7 @@
 use core::net::SocketAddr;
 
+use crate::conversions::u32_to_usize;
+
 use rustix::{
     io::Errno,
     net::{AddressFamily, SocketAddrAny, SocketAddrUnix, addr::SocketAddrArg},
@@ -41,7 +43,7 @@ fn is_unnamed_unix(addr: &SocketAddrAny) -> bool {
     const SUN_PATH_OFFSET: usize = 2;
     // SAFETY: `as_ptr` points to the `addr_len()` initialized bytes of the address.
     let bytes = unsafe {
-        core::slice::from_raw_parts(addr.as_ptr().cast::<u8>(), addr.addr_len() as usize)
+        core::slice::from_raw_parts(addr.as_ptr().cast::<u8>(), u32_to_usize(addr.addr_len()))
     };
     bytes.get(SUN_PATH_OFFSET).is_none_or(|byte| *byte == 0)
 }

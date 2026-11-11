@@ -7,7 +7,7 @@ use core::{
 };
 
 use self::link::Link;
-use crate::sys::ThreadId;
+use crate::{conversions::u32_to_usize, sys::ThreadId};
 
 const NONE: u32 = u32::MAX;
 const UNCLAIMED: usize = 0;
@@ -28,14 +28,14 @@ impl<const N: usize> WakeQueue<N> {
         const {
             assert!(N > 0, "wake queue capacity must not be zero");
             assert!(
-                N < NONE as usize,
+                N < 0xFFFF_FFFF,
                 "wake queue capacity must be less than u32::MAX"
             );
         }
         let mut links = [const { Link::new(0) }; N];
-        let mut slot = 0;
-        while slot < N {
-            links[slot] = Link::new(slot as u32);
+        let mut slot: u32 = 0;
+        while u32_to_usize(slot) < N {
+            links[u32_to_usize(slot)] = Link::new(slot);
             slot = slot.wrapping_add(1);
         }
         Self {
@@ -57,25 +57,25 @@ impl<const N: usize> WakeQueue<N> {
     }
 
     pub(crate) fn waker(&'static self, slot: u32) -> Waker {
-        assert!((slot as usize) < N, "slot {slot} is out of bounds");
+        assert!(u32_to_usize(slot) < N, "slot {slot} is out of bounds");
         let link = core::ptr::from_ref(self)
             .wrapping_byte_add(offset_of!(Self, links))
             .cast::<Link>()
-            .wrapping_add(slot as usize);
+            .wrapping_add(u32_to_usize(slot));
         // SAFETY: the vtable functions below uphold the `RawWaker` contract for a pointer to a
         // link of a queue that is never freed, derived from a pointer to the whole queue.
         unsafe { Waker::from_raw(RawWaker::new(link.cast(), vtable::<N>())) }
     }
 
     pub(crate) fn push(&self, slot: u32) {
-        let link = &self.links[slot as usize];
+        let link = &self.links[u32_to_usize(slot)];
         if link.is_queued() {
             return;
         }
         link.set_queued(true);
         link.set_next(NONE);
         match decode(self.tail.load(Relaxed)) {
-            Some(tail) => self.links[tail as usize].set_next(slot),
+            Some(tail) => self.links[u32_to_usize(tail)].set_next(slot),
             None => self.head.store(slot, Relaxed),
         }
         self.tail.store(slot, Relaxed);
@@ -83,7 +83,7 @@ impl<const N: usize> WakeQueue<N> {
 
     pub(crate) fn pop(&self) -> Option<u32> {
         let slot = decode(self.head.load(Relaxed))?;
-        let link = &self.links[slot as usize];
+        let link = &self.links[u32_to_usize(slot)];
         let next = link.next();
         self.head.store(next, Relaxed);
         if decode(next).is_none() {
@@ -122,7 +122,7 @@ unsafe fn wake<const N: usize>(ptr: *const ()) {
     let (slot, queue) = unsafe {
         let slot = (*link).slot();
         let queue = link
-            .sub(slot as usize)
+            .sub(u32_to_usize(slot))
             .byte_sub(offset_of!(WakeQueue<N>, links))
             .cast::<WakeQueue<N>>();
         (slot, &*queue)

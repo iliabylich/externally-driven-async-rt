@@ -1,6 +1,9 @@
 use core::{cell::Cell, future::Future, marker::PhantomData, task::Waker};
 
-use crate::tasks::{JoinStatus, Root, RootStatus, Task, TaskEntry, TaskId, Tasks};
+use crate::{
+    conversions::u32_to_usize,
+    tasks::{JoinStatus, Root, RootStatus, Task, TaskEntry, TaskId, Tasks},
+};
 
 pub(crate) struct TasksGuard<
     'a,
@@ -111,7 +114,7 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
             align_of::<Fut>(),
         );
         assert!(!entry.has_task(), "a reserved slot holds no task yet");
-        let memory = self.tasks.slab[id.slot() as usize].as_ptr();
+        let memory = self.tasks.slab[u32_to_usize(id.slot())].as_ptr();
         // SAFETY: `Fut` fits the slab's blocks (checked above). The slot's block is unused: the
         // slot is reserved and holds no task (checked above), and a slot is only freed after its
         // future was dropped. The slot stays reserved until this future is dropped. `Tasks` keeps

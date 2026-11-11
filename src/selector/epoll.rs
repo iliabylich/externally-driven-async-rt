@@ -21,7 +21,7 @@ use crate::{
     time::Instant,
 };
 
-const TIMER_DATA: u64 = u64::MAX;
+const TIMER_DATA: usize = usize::MAX;
 const ZERO: Timespec = Timespec {
     tv_sec: 0,
     tv_nsec: 0,
@@ -50,7 +50,7 @@ impl EpollSelector {
         syscall_end!(timer_fd);
         let timer_fd = timer_fd?;
 
-        let data = EventData::new_u64(TIMER_DATA);
+        let data = EventData::new_ptr(core::ptr::without_provenance_mut(TIMER_DATA));
         let flags = EventFlags::IN;
         syscall_start!(
             "epoll_ctl",
@@ -123,7 +123,7 @@ impl EpollSelector {
     }
 
     fn consume(&self, event: Event) -> rustix::io::Result<Option<SelectorEvent>> {
-        match event.data.u64() {
+        match event.data.ptr().addr() {
             TIMER_DATA => self.consume_timer(),
             token => {
                 let ready = Self::ready(event.flags);
@@ -180,7 +180,7 @@ impl EpollSelector {
             Directions::Write => EventFlags::OUT,
             Directions::Both => EventFlags::IN | EventFlags::OUT,
         };
-        let data = EventData::new_u64(change.token().to_bits());
+        let data = EventData::new_ptr(core::ptr::without_provenance_mut(change.token().to_bits()));
         let flags = interest | EventFlags::ONESHOT;
         syscall_start!(
             "epoll_ctl",

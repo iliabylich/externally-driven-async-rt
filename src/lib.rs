@@ -10,9 +10,10 @@
     unused_lifetimes
 )]
 #![allow(clippy::new_without_default)]
-#![cfg_attr(test, allow(clippy::arithmetic_side_effects))]
+#![cfg_attr(test, allow(clippy::arithmetic_side_effects, clippy::as_conversions))]
 
 mod context;
+mod conversions;
 mod event_loop;
 mod io;
 /// A module that implements TCP/UDP/Unix sockets.

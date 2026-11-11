@@ -31,7 +31,8 @@ pub(crate) fn monotonic_nanos() -> u64 {
     };
     let result = clock_gettime(MONOTONIC_CLOCK, &mut time);
     assert_eq!(result, 0, "clock_gettime failed");
-    (time.tv_sec as u64)
+    time.tv_sec
+        .cast_unsigned()
         .saturating_mul(1_000_000_000)
-        .saturating_add(time.tv_nsec as u64)
+        .saturating_add(time.tv_nsec.cast_unsigned())
 }

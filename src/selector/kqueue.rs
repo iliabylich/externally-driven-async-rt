@@ -136,14 +136,16 @@ impl KqueueSelector {
             match receipt.data() {
                 0 => {}
                 errno if errno == i64::from(Errno::NOENT.raw_os_error()) => {}
-                errno => return Err(Errno::from_raw_os_error(errno as i32)),
+                errno => {
+                    return Err(i32::try_from(errno).map_or(Errno::INVAL, Errno::from_raw_os_error));
+                }
             }
         }
         Ok(())
     }
 
     fn consume(&self, event: &Event) -> SelectorEvent {
-        let token = Token::from_bits(event.udata().addr() as u64);
+        let token = Token::from_bits(event.udata().addr());
         match event.filter() {
             EventFilter::Read(_) => SelectorEvent::Io {
                 token,
@@ -180,7 +182,7 @@ impl KqueueSelector {
     }
 
     fn io_kevents(change: IoChange) -> [Event; 2] {
-        let udata = core::ptr::without_provenance_mut(change.token().to_bits() as usize);
+        let udata = core::ptr::without_provenance_mut(change.token().to_bits());
         [
             Self::io_kevent(
                 EventFilter::Read(change.fd()),

@@ -1,7 +1,8 @@
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
-    clippy::arithmetic_side_effects
+    clippy::arithmetic_side_effects,
+    clippy::as_conversions
 )]
 
 use core::{cell::RefCell, net::SocketAddr, time::Duration};
