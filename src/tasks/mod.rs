@@ -8,7 +8,6 @@ mod task;
 mod task_entry;
 mod task_reservation;
 mod task_slot;
-mod tasks_guard;
 mod wake_queue;
 
 use core::cell::Cell;
@@ -23,17 +22,16 @@ pub(crate) use self::{
     root_status::RootStatus,
     task::Task,
     task_entry::{TaskEntry, TaskId},
-    tasks_guard::TasksGuard,
     wake_queue::WakeQueue,
 };
 use crate::{pool::ObjectPool, waker_slot::WakerSlot};
 
 pub(crate) struct Tasks<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> {
-    pool: ObjectPool<TaskEntry<TASK_SIZE>, TASKS>,
-    queue: WakeQueue<TASKS>,
-    root_region: Aligned16<ROOT_TASK_SIZE>,
-    root: Cell<Root<TASK_SIZE>>,
-    slot_waiter: WakerSlot,
+    pub(crate) pool: ObjectPool<TaskEntry<TASK_SIZE>, TASKS>,
+    pub(crate) queue: WakeQueue<TASKS>,
+    pub(crate) root_region: Aligned16<ROOT_TASK_SIZE>,
+    pub(crate) root: Cell<Root<TASK_SIZE>>,
+    pub(crate) slot_waiter: WakerSlot,
 }
 
 impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>

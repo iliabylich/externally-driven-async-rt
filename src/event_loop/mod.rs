@@ -1,16 +1,18 @@
 mod error;
+mod guard;
 
 use core::cell::{RefCell, RefMut};
 
 use rustix::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
 pub use self::error::Error;
+pub(crate) use self::guard::EventLoopGuard;
 
 use crate::{
     context::Context,
     selector::Selector,
     state::State,
-    storage::{LoopStorage, LoopStorageGuard},
+    storage::LoopStorage,
     tasks::{Root, RootStatus},
 };
 
@@ -24,7 +26,7 @@ pub struct EventLoop<
     const TIMERS: usize,
     const FDS: usize,
 > {
-    storage: LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    guard: EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
 }
 
 impl<
@@ -56,10 +58,10 @@ impl<
         F: FnOnce(Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
-        let storage = storage.claim(selector, state);
-        let event_loop = Self { storage };
-        Context::spawn_root(storage, f);
-        match storage.tasks.run_ready() {
+        let guard = storage.claim(selector, state);
+        let event_loop = Self { guard };
+        Context::spawn_root(guard, f);
+        match guard.run_ready() {
             RootStatus::Running => {}
             RootStatus::Finished => return Err(Error::RootFinished),
         }
@@ -71,16 +73,16 @@ impl<
     /// polls woken futures until none is ready,
     /// submits them back to epoll/kqueue.
     pub fn drain_events_without_blocking(&mut self) -> Result<(), Error> {
-        let storage = self.storage;
-        if let Root::Finished = storage.tasks.root() {
+        let guard = self.guard;
+        if let Root::Finished = guard.root() {
             return Err(Error::RootFinished);
         }
         let status = loop {
-            storage.process_selector_events().map_err(Error::Io)?;
-            if !storage.tasks.has_ready() {
+            guard.process_selector_events().map_err(Error::Io)?;
+            if !guard.has_ready() {
                 break RootStatus::Running;
             }
-            if storage.tasks.run_ready() == RootStatus::Finished {
+            if guard.run_ready() == RootStatus::Finished {
                 break RootStatus::Finished;
             }
         };
@@ -91,14 +93,14 @@ impl<
     ///
     /// This is the only way to communicate with the external world.
     pub fn state_mut(&mut self) -> RefMut<'_, S> {
-        self.storage.state.borrow_mut()
+        self.guard.state.borrow_mut()
     }
 
     fn finish_drain(&self, status: RootStatus) -> Result<(), Error> {
         if status == RootStatus::Finished {
-            self.storage.tasks.drop_all();
+            self.guard.drop_all();
         }
-        self.storage.flush().map_err(Error::Io)?;
+        self.guard.flush().map_err(Error::Io)?;
         match status {
             RootStatus::Running => Ok(()),
             RootStatus::Finished => Err(Error::RootFinished),
@@ -106,10 +108,10 @@ impl<
     }
 
     #[cfg(test)]
-    pub(crate) fn storage(
+    pub(crate) fn guard(
         &self,
-    ) -> LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
-        self.storage
+    ) -> EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
+        self.guard
     }
 }
 
@@ -124,7 +126,7 @@ impl<
 > Drop for EventLoop<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn drop(&mut self) {
-        self.storage.clear();
+        self.guard.clear();
     }
 }
 
@@ -139,7 +141,7 @@ impl<
 > AsFd for EventLoop<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn as_fd(&self) -> BorrowedFd<'_> {
-        self.storage.selector.as_fd()
+        self.guard.selector.as_fd()
     }
 }
 

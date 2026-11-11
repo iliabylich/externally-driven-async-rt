@@ -1,7 +1,6 @@
 use core::cell::RefCell;
 
-pub(crate) use self::guard::LoopStorageGuard;
-use crate::{io::IoWaiters, tasks::Tasks, time::Timers};
+use crate::{event_loop::EventLoopGuard, io::IoWaiters, tasks::Tasks, time::Timers};
 
 /// The main pre-allocated storage that [`EventLoop`](crate::EventLoop) needs.
 ///
@@ -13,13 +12,13 @@ pub struct LoopStorage<
     const TIMERS: usize,
     const FDS: usize,
 > {
-    timers: Timers<TIMERS>,
-    io_waiters: IoWaiters<FDS>,
-    tasks: Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
+    pub(crate) timers: Timers<TIMERS>,
+    pub(crate) io_waiters: IoWaiters<FDS>,
+    pub(crate) tasks: Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
 }
 
 // SAFETY: a storage has no public methods, so other threads can only pass `&LoopStorage` around.
-// The crate touches it only through a `LoopStorageGuard`, which only `LoopStorageGuard::claim`
+// The crate touches it only through an `EventLoopGuard`, which only `EventLoopGuard::claim`
 // creates, and that succeeds once ever, on the thread that runs the claiming loop (claiming the
 // tasks claims their `WakeQueue`, which panics the second time); `EventLoop` and `Context` are
 // `!Send`, so everything but the wakers stays on that thread, and wakers only touch the atomic
@@ -55,8 +54,8 @@ impl<
         &'static self,
         selector: &'a Sel,
         state: &'a RefCell<S>,
-    ) -> LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, Sel> {
-        LoopStorageGuard::claim(self, selector, state)
+    ) -> EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, Sel> {
+        EventLoopGuard::claim(self, selector, state)
     }
 }
 
@@ -72,8 +71,6 @@ impl<
         f.write_str("LoopStorage")
     }
 }
-
-mod guard;
 
 #[cfg(test)]
 mod tests;

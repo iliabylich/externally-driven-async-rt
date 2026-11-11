@@ -8,21 +8,19 @@ type SmallStorage = LoopStorage<1, 64, 0, 2, 2>;
 fn clearing_drops_live_wakers() {
     let drops = Cell::new(0);
     let state = RefCell::new(());
-    let storage = {
+    let guard = {
         static STORAGE: SmallStorage = SmallStorage::new();
         STORAGE.claim(&(), &state)
     };
-    storage
-        .timers()
-        .alloc(Instant::now(), counting_waker(&drops));
-    let (_, io) = storage
-        .io_waiters()
+    guard.timers.alloc(Instant::now(), counting_waker(&drops));
+    let (_, io) = guard
+        .io_waiters
         .register(&Cell::new(None), 3, Direction::Read);
     let io_waker = counting_waker(&drops);
     io.waker(Direction::Read).store(&io_waker);
     drop(io_waker);
     assert_eq!(drops.get(), 1);
-    storage.clear();
+    guard.clear();
     assert_eq!(drops.get(), 3);
 }
 

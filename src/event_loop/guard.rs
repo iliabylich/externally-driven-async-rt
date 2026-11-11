@@ -1,24 +1,59 @@
-use core::{cell::Cell, future::Future, marker::PhantomData, task::Waker};
+use core::{
+    cell::{Cell, RefCell},
+    future::Future,
+    marker::PhantomData,
+    task::Waker,
+};
 
-use crate::tasks::{JoinStatus, Root, RootStatus, Task, TaskEntry, TaskId, Tasks};
+use crate::{
+    io::{IoIndex, IoWaiters},
+    selector::{EVENTS_PER_CALL, Selector, SelectorEvent},
+    storage::LoopStorage,
+    tasks::{JoinStatus, Root, RootStatus, Task, TaskEntry, TaskId, Tasks},
+    time::{Instant, Timers},
+};
 
-pub(crate) struct TasksGuard<
+pub(crate) struct EventLoopGuard<
     'a,
+    S: 'static,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+    Sel = Selector,
 > {
     tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
+    pub(crate) timers: &'static Timers<TIMERS>,
+    pub(crate) io_waiters: &'static IoWaiters<FDS>,
+    pub(crate) selector: &'a Sel,
+    pub(crate) state: &'a RefCell<S>,
     futures: PhantomData<(Cell<&'a ()>, *const ())>,
 }
 
-impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
-    TasksGuard<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
+impl<
+    'a,
+    S: 'static,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+    Sel,
+> EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, Sel>
 {
-    pub(crate) fn claim(tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>) -> Self {
-        tasks.queue.claim();
+    pub(crate) fn claim(
+        storage: &'static LoopStorage<TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        selector: &'a Sel,
+        state: &'a RefCell<S>,
+    ) -> Self {
+        storage.tasks.queue.claim();
         Self {
-            tasks,
+            tasks: &storage.tasks,
+            timers: &storage.timers,
+            io_waiters: &storage.io_waiters,
+            selector,
+            state,
             futures: PhantomData,
         }
     }
@@ -118,8 +153,8 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
         // SAFETY: `Fut` fits the entry's memory (checked above). The entry's memory is unused:
         // the slot is reserved and holds no task (checked above), and a slot is only freed after
         // its future was dropped. Entries live in a `'static` pool and never move. The slot stays
-        // reserved until this future is dropped. `Tasks` keeps its futures in fields private to
-        // the `tasks` module, where only `TasksGuard` touches them, and `TasksGuard::claim` creates a guard once per `Tasks` (it claims the
+        // reserved until this future is dropped. Only `EventLoopGuard` touches the futures in
+        // `Tasks`, and `EventLoopGuard::claim` creates a guard once per storage (it claims the
         // `WakeQueue`, which panics the second time; copies share the guard's invariant `'a`), so
         // every future in it was written through a guard with this same `'a` (which `Fut`
         // outlives), and is polled and dropped only through one, before `'a` ends.
@@ -214,17 +249,80 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
     pub(crate) fn waker(self, id: TaskId<TASK_SIZE>) -> Waker {
         self.tasks.queue.waker(id.slot())
     }
+
+    pub(crate) fn clear(self) {
+        self.drop_all();
+        self.timers.clear();
+        self.io_waiters.clear();
+    }
 }
 
-impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> Clone
-    for TasksGuard<'_, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
+impl<
+    S: 'static,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+> EventLoopGuard<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, Selector>
+{
+    pub(crate) fn process_selector_events(&self) -> rustix::io::Result<()> {
+        let mut events = [None; EVENTS_PER_CALL];
+        loop {
+            let full = self.selector.poll_nonblocking(&mut events)?;
+            for event in events.iter().map_while(|event| *event) {
+                match event {
+                    SelectorEvent::Io { token, ready } => {
+                        self.io_waiters.wake_ready(IoIndex::from_bits(token), ready);
+                    }
+                    SelectorEvent::Timer => {
+                        let now = Instant::now();
+                        while let Some(waker) = self.timers.take_expired(now) {
+                            waker.wake();
+                        }
+                    }
+                }
+            }
+            if !full {
+                return Ok(());
+            }
+        }
+    }
+
+    pub(crate) fn flush(&self) -> rustix::io::Result<()> {
+        match self.timers.next_deadline() {
+            Some(deadline) => self.selector.arm_timer(deadline),
+            None => self.selector.disarm_timer(),
+        }
+        self.selector.flush(self.io_waiters.pending_changes())?;
+        self.io_waiters.mark_flushed();
+        Ok(())
+    }
+}
+
+impl<
+    S: 'static,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+    Sel,
+> Clone for EventLoopGuard<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, Sel>
 {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> Copy
-    for TasksGuard<'_, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
+impl<
+    S: 'static,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+    Sel,
+> Copy for EventLoopGuard<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, Sel>
 {
 }

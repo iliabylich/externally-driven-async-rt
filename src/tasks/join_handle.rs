@@ -1,39 +1,70 @@
 use core::{future::Future, pin::Pin, task::Poll};
 
-use crate::tasks::{JoinStatus, TaskId, TasksGuard};
+use crate::{
+    event_loop::EventLoopGuard,
+    state::State,
+    tasks::{JoinStatus, TaskId},
+};
 
 /// A join handle of the spawned task, resolves once the task is finished.
-pub struct JoinHandle<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> {
-    tasks: TasksGuard<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
+pub struct JoinHandle<
+    'a,
+    S: State,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+> {
+    guard: EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     id: TaskId<TASK_SIZE>,
 }
 
-impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
-    JoinHandle<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
+impl<
+    'a,
+    S: State,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+> JoinHandle<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     pub(crate) fn new(
-        tasks: TasksGuard<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
+        guard: EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         id: TaskId<TASK_SIZE>,
     ) -> Self {
-        Self { tasks, id }
+        Self { guard, id }
     }
 }
 
-impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> Future
-    for JoinHandle<'_, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
+impl<
+    S: State,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+> Future for JoinHandle<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {
-        match self.tasks.set_join_waiter(self.id, cx.waker()) {
+        match self.guard.set_join_waiter(self.id, cx.waker()) {
             JoinStatus::Running => Poll::Pending,
             JoinStatus::Finished => Poll::Ready(()),
         }
     }
 }
 
-impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> core::fmt::Debug
-    for JoinHandle<'_, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
+impl<
+    S: State,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+> core::fmt::Debug for JoinHandle<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("JoinHandle")

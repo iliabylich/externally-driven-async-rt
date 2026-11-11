@@ -1,7 +1,7 @@
 use crate::{
     context::Context,
+    event_loop::EventLoopGuard,
     state::State,
-    storage::LoopStorageGuard,
     tasks::{JoinHandle, TaskEntry, TaskId},
 };
 
@@ -16,7 +16,7 @@ pub struct TaskReservation<
     const TIMERS: usize,
     const FDS: usize,
 > {
-    storage: LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    guard: EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     id: TaskId<TASK_SIZE>,
     entry: &'static TaskEntry<TASK_SIZE>,
 }
@@ -32,11 +32,11 @@ impl<
 > TaskReservation<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     pub(crate) fn new(
-        storage: LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        guard: EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         id: TaskId<TASK_SIZE>,
         entry: &'static TaskEntry<TASK_SIZE>,
     ) -> Self {
-        Self { storage, id, entry }
+        Self { guard, id, entry }
     }
 
     /// Spawns a task using a reserved slot that is held by this [`TaskReservation`].
@@ -47,17 +47,18 @@ impl<
     ///
     /// 1. the future is bigger than `TASK_SIZE` bytes
     /// 2. it is aligned to more than 16 bytes.
-    pub fn spawn<F, Fut>(self, f: F) -> JoinHandle<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
+    pub fn spawn<F, Fut>(
+        self,
+        f: F,
+    ) -> JoinHandle<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
     where
         F: FnOnce(Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
-        let Self { storage, id, entry } = self;
-        storage
-            .tasks
-            .spawn_reserved(id, entry, f(Context::new(storage)));
+        let Self { guard, id, entry } = self;
+        guard.spawn_reserved(id, entry, f(Context::new(guard)));
         core::mem::forget(self);
-        JoinHandle::new(storage.tasks, id)
+        JoinHandle::new(guard, id)
     }
 }
 
@@ -71,7 +72,7 @@ impl<
 > Drop for TaskReservation<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn drop(&mut self) {
-        self.storage.tasks.release(self.id);
+        self.guard.release(self.id);
     }
 }
 

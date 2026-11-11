@@ -87,7 +87,7 @@ impl<
         let this = self.get_mut();
         let registration = this.registration.get_or_insert_with(|| {
             IoRegistration::new(
-                this.ctx.storage(),
+                this.ctx.guard(),
                 this.fd.as_fd(),
                 this.cached,
                 this.direction,

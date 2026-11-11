@@ -1,8 +1,8 @@
 use core::{future::Future, time::Duration};
 
 use crate::{
+    event_loop::EventLoopGuard,
     state::State,
-    storage::LoopStorageGuard,
     tasks::{JoinHandle, ReserveTask},
     time::{Instant, Sleep, Timeout},
 };
@@ -19,7 +19,7 @@ pub struct Context<
     const TIMERS: usize,
     const FDS: usize,
 > {
-    storage: LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    guard: EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
 }
 
 impl<
@@ -33,20 +33,20 @@ impl<
 > Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     pub(crate) fn new(
-        storage: LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        guard: EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     ) -> Self {
-        Self { storage }
+        Self { guard }
     }
 
-    pub(crate) fn storage(
+    pub(crate) fn guard(
         &self,
-    ) -> &LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
-        &self.storage
+    ) -> &EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
+        &self.guard
     }
 
     /// Dispatches given `event` on a state that was given to [`EventLoop`](crate::EventLoop).
     pub fn dispatch(&self, event: S::Event) {
-        self.storage.state.borrow_mut().apply(event);
+        self.guard.state.borrow_mut().apply(event);
     }
 
     /// Spawns a task with a given async closure.
@@ -60,13 +60,16 @@ impl<
     /// 3. if it is aligned to more than 16 bytes
     ///
     /// Use [`reserve_task`](Self::reserve_task) to wait for a free slot instead.
-    pub fn spawn<F, Fut>(&self, f: F) -> JoinHandle<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
+    pub fn spawn<F, Fut>(
+        &self,
+        f: F,
+    ) -> JoinHandle<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
     where
         F: FnOnce(Self) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
-        let id = self.storage.tasks.spawn(f(*self));
-        JoinHandle::new(self.storage.tasks, id)
+        let id = self.guard.spawn(f(*self));
+        JoinHandle::new(self.guard, id)
     }
 
     /// Reserves a task slot.
@@ -78,25 +81,22 @@ impl<
     pub fn reserve_task(
         &self,
     ) -> ReserveTask<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
-        ReserveTask::new(self.storage)
+        ReserveTask::new(self.guard)
     }
 
     pub(crate) fn spawn_root<F, Fut>(
-        storage: LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        guard: EventLoopGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         f: F,
     ) where
         F: FnOnce(Self) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
-        storage.tasks.spawn_root(f(Self::new(storage)));
+        guard.spawn_root(f(Self::new(guard)));
     }
 
     /// Sleeps for `duration`.
     pub fn sleep(&self, duration: Duration) -> Sleep<'_, TIMERS> {
-        Sleep::new(
-            self.storage.timers(),
-            Instant::now().saturating_add(duration),
-        )
+        Sleep::new(self.guard.timers, Instant::now().saturating_add(duration))
     }
 
     /// Runs `future` with a timeout of `duration`, resolves to `None` in case of a timeout.

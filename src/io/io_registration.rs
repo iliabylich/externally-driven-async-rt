@@ -6,10 +6,10 @@ use core::{
 use rustix::fd::{AsRawFd, BorrowedFd};
 
 use crate::{
+    event_loop::EventLoopGuard,
     io::{IoIndex, IoWaiter, IoWaiters, Wait},
     selector::{Direction, Selector},
     state::State,
-    storage::LoopStorageGuard,
 };
 
 pub(crate) struct IoRegistration<'a, const FDS: usize> {
@@ -28,17 +28,15 @@ impl<'a, const FDS: usize> IoRegistration<'a, FDS> {
         const ROOT_TASK_SIZE: usize,
         const TIMERS: usize,
     >(
-        storage: &'a LoopStorageGuard<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        guard: &'a EventLoopGuard<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         fd: BorrowedFd<'a>,
         cached: &Cell<Option<IoIndex>>,
         direction: Direction,
     ) -> Self {
-        let (index, io) = storage
-            .io_waiters()
-            .register(cached, fd.as_raw_fd(), direction);
+        let (index, io) = guard.io_waiters.register(cached, fd.as_raw_fd(), direction);
         Self {
-            io_waiters: storage.io_waiters(),
-            selector: storage.selector,
+            io_waiters: guard.io_waiters,
+            selector: guard.selector,
             index,
             io,
             direction,
