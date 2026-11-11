@@ -1,25 +1,32 @@
 use core::{
     cell::Cell,
+    ptr::NonNull,
     task::{Context, Poll, Waker},
 };
 
 use crate::{
     pool::Index,
-    tasks::{Task, TaskSlot},
+    tasks::{Aligned16, Task, TaskSlot},
     waker_slot::WakerSlot,
 };
 
-pub(crate) struct TaskEntry {
+pub(crate) struct TaskEntry<const SIZE: usize> {
     task: Cell<TaskSlot>,
     join_waiter: WakerSlot,
+    memory: Aligned16<SIZE>,
 }
 
-impl TaskEntry {
+impl<const SIZE: usize> TaskEntry<SIZE> {
     pub(crate) const fn new() -> Self {
         Self {
             task: Cell::new(TaskSlot::Empty),
             join_waiter: WakerSlot::new(),
+            memory: Aligned16::new(),
         }
+    }
+
+    pub(crate) fn memory(&self) -> NonNull<u8> {
+        self.memory.as_ptr()
     }
 
     fn peek<R>(&self, f: impl FnOnce(&TaskSlot) -> R) -> R {
@@ -69,4 +76,4 @@ impl TaskEntry {
     }
 }
 
-pub(crate) type TaskId = Index<TaskEntry>;
+pub(crate) type TaskId<const SIZE: usize> = Index<TaskEntry<SIZE>>;

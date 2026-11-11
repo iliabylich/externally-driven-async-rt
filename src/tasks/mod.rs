@@ -29,11 +29,10 @@ pub(crate) use self::{
 use crate::{pool::ObjectPool, waker_slot::WakerSlot};
 
 pub(crate) struct Tasks<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> {
-    pool: ObjectPool<TaskEntry, TASKS>,
+    pool: ObjectPool<TaskEntry<TASK_SIZE>, TASKS>,
     queue: WakeQueue<TASKS>,
-    slab: [Aligned16<TASK_SIZE>; TASKS],
     root_region: Aligned16<ROOT_TASK_SIZE>,
-    root: Cell<Root>,
+    root: Cell<Root<TASK_SIZE>>,
     slot_waiter: WakerSlot,
 }
 
@@ -44,7 +43,6 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         Self {
             pool: ObjectPool::new([const { TaskEntry::new() }; TASKS]),
             queue: WakeQueue::new(),
-            slab: [const { Aligned16::new() }; TASKS],
             root_region: Aligned16::new(),
             root: Cell::new(Root::Unset),
             slot_waiter: WakerSlot::new(),

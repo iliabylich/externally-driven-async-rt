@@ -1,9 +1,6 @@
 use core::{cell::Cell, future::Future, marker::PhantomData, task::Waker};
 
-use crate::{
-    conversions::u32_to_usize,
-    tasks::{JoinStatus, Root, RootStatus, Task, TaskEntry, TaskId, Tasks},
-};
+use crate::tasks::{JoinStatus, Root, RootStatus, Task, TaskEntry, TaskId, Tasks};
 
 pub(crate) struct TasksGuard<
     'a,
@@ -26,21 +23,21 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
         }
     }
 
-    pub(crate) fn root(self) -> Root {
+    pub(crate) fn root(self) -> Root<TASK_SIZE> {
         self.tasks.root.get()
     }
 
     #[cfg(test)]
-    pub(crate) fn set_root(self, root: Root) {
+    pub(crate) fn set_root(self, root: Root<TASK_SIZE>) {
         self.tasks.root.set(root);
     }
 
     #[cfg(test)]
-    pub(crate) fn contains(self, id: TaskId) -> bool {
+    pub(crate) fn contains(self, id: TaskId<TASK_SIZE>) -> bool {
         self.tasks.pool.get(id).is_some_and(TaskEntry::has_task)
     }
 
-    pub(crate) fn set_join_waiter(self, id: TaskId, waker: &Waker) -> JoinStatus {
+    pub(crate) fn set_join_waiter(self, id: TaskId<TASK_SIZE>, waker: &Waker) -> JoinStatus {
         match self.tasks.pool.get(id) {
             Some(entry) if entry.has_task() => {
                 entry.set_join_waiter(waker);
@@ -59,22 +56,22 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
         self.tasks.pool.iter().count()
     }
 
-    pub(crate) fn insert<Fut>(self, future: Fut) -> TaskId
+    pub(crate) fn insert<Fut>(self, future: Fut) -> TaskId<TASK_SIZE>
     where
         Fut: Future<Output = ()> + 'a,
     {
         let Some((id, entry)) = self.reserve() else {
             panic!("more than {TASKS} concurrent tasks");
         };
-        self.write(id, entry, future);
+        self.write(entry, future);
         id
     }
 
-    pub(crate) fn reserve(self) -> Option<(TaskId, &'static TaskEntry)> {
+    pub(crate) fn reserve(self) -> Option<(TaskId<TASK_SIZE>, &'static TaskEntry<TASK_SIZE>)> {
         self.tasks.pool.alloc()
     }
 
-    pub(crate) fn release(self, id: TaskId) {
+    pub(crate) fn release(self, id: TaskId<TASK_SIZE>) {
         self.tasks.pool.free(id);
         self.tasks.slot_waiter.wake_by_ref();
     }
@@ -91,15 +88,19 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
         self.tasks.slot_waiter.take();
     }
 
-    pub(crate) fn spawn_reserved<Fut>(self, id: TaskId, entry: &TaskEntry, future: Fut)
-    where
+    pub(crate) fn spawn_reserved<Fut>(
+        self,
+        id: TaskId<TASK_SIZE>,
+        entry: &TaskEntry<TASK_SIZE>,
+        future: Fut,
+    ) where
         Fut: Future<Output = ()> + 'a,
     {
-        self.write(id, entry, future);
+        self.write(entry, future);
         self.tasks.queue.push(id.slot());
     }
 
-    fn write<Fut>(self, id: TaskId, entry: &TaskEntry, future: Fut)
+    fn write<Fut>(self, entry: &TaskEntry<TASK_SIZE>, future: Fut)
     where
         Fut: Future<Output = ()> + 'a,
     {
@@ -114,20 +115,19 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
             align_of::<Fut>(),
         );
         assert!(!entry.has_task(), "a reserved slot holds no task yet");
-        let memory = self.tasks.slab[u32_to_usize(id.slot())].as_ptr();
-        // SAFETY: `Fut` fits the slab's blocks (checked above). The slot's block is unused: the
-        // slot is reserved and holds no task (checked above), and a slot is only freed after its
-        // future was dropped. The slot stays reserved until this future is dropped. `Tasks` keeps
-        // its futures in fields private to the `tasks` module, where only `TasksGuard` touches
-        // them, and `TasksGuard::claim` creates a guard once per `Tasks` (it claims the
+        // SAFETY: `Fut` fits the entry's memory (checked above). The entry's memory is unused:
+        // the slot is reserved and holds no task (checked above), and a slot is only freed after
+        // its future was dropped. Entries live in a `'static` pool and never move. The slot stays
+        // reserved until this future is dropped. `Tasks` keeps its futures in fields private to
+        // the `tasks` module, where only `TasksGuard` touches them, and `TasksGuard::claim` creates a guard once per `Tasks` (it claims the
         // `WakeQueue`, which panics the second time; copies share the guard's invariant `'a`), so
         // every future in it was written through a guard with this same `'a` (which `Fut`
         // outlives), and is polled and dropped only through one, before `'a` ends.
-        let future = unsafe { Task::write(memory, future) };
+        let future = unsafe { Task::write(entry.memory(), future) };
         entry.occupy(future);
     }
 
-    pub(crate) fn spawn<Fut>(self, future: Fut) -> TaskId
+    pub(crate) fn spawn<Fut>(self, future: Fut) -> TaskId<TASK_SIZE>
     where
         Fut: Future<Output = ()> + 'a,
     {
@@ -168,7 +168,7 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
         tasks.root.set(Root::Running(id));
     }
 
-    fn free(self, id: TaskId, entry: &TaskEntry) -> Option<Waker> {
+    fn free(self, id: TaskId<TASK_SIZE>, entry: &TaskEntry<TASK_SIZE>) -> Option<Waker> {
         let join_waiter = entry.take_join_waiter();
         entry.drop_task();
         self.release(id);
@@ -211,7 +211,7 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
     }
 
     #[cfg(test)]
-    pub(crate) fn waker(self, id: TaskId) -> Waker {
+    pub(crate) fn waker(self, id: TaskId<TASK_SIZE>) -> Waker {
         self.tasks.queue.waker(id.slot())
     }
 }

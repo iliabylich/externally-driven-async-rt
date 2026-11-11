@@ -104,7 +104,10 @@ impl KqueueSelector {
             if len == 0 {
                 return Ok(());
             }
-            self.submit_list(&list[..len], &mut receipts)?;
+            let Some(filled) = list.get(..len) else {
+                unreachable!("at most {CHANGES_PER_CALL} changes are filled");
+            };
+            self.submit_list(filled, &mut receipts)?;
             if len < CHANGES_PER_CALL {
                 return Ok(());
             }

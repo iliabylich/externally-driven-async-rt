@@ -5,13 +5,16 @@ use crate::tasks::{JoinStatus, TaskId, TasksGuard};
 /// A join handle of the spawned task, resolves once the task is finished.
 pub struct JoinHandle<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> {
     tasks: TasksGuard<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
-    id: TaskId,
+    id: TaskId<TASK_SIZE>,
 }
 
 impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
     JoinHandle<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
-    pub(crate) fn new(tasks: TasksGuard<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>, id: TaskId) -> Self {
+    pub(crate) fn new(
+        tasks: TasksGuard<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
+        id: TaskId<TASK_SIZE>,
+    ) -> Self {
         Self { tasks, id }
     }
 }

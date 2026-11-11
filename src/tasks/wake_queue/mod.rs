@@ -33,10 +33,12 @@ impl<const N: usize> WakeQueue<N> {
             );
         }
         let mut links = [const { Link::new(0) }; N];
+        let mut rest: &mut [Link] = &mut links;
         let mut slot: u32 = 0;
-        while u32_to_usize(slot) < N {
-            links[u32_to_usize(slot)] = Link::new(slot);
+        while let [first, tail @ ..] = rest {
+            *first = Link::new(slot);
             slot = slot.wrapping_add(1);
+            rest = tail;
         }
         Self {
             owner: AtomicUsize::new(UNCLAIMED),
@@ -67,15 +69,22 @@ impl<const N: usize> WakeQueue<N> {
         unsafe { Waker::from_raw(RawWaker::new(link.cast(), vtable::<N>())) }
     }
 
+    fn link(&self, slot: u32) -> &Link {
+        let Some(link) = self.links.get(u32_to_usize(slot)) else {
+            panic!("slot {slot} is out of bounds");
+        };
+        link
+    }
+
     pub(crate) fn push(&self, slot: u32) {
-        let link = &self.links[u32_to_usize(slot)];
+        let link = self.link(slot);
         if link.is_queued() {
             return;
         }
         link.set_queued(true);
         link.set_next(NONE);
         match decode(self.tail.load(Relaxed)) {
-            Some(tail) => self.links[u32_to_usize(tail)].set_next(slot),
+            Some(tail) => self.link(tail).set_next(slot),
             None => self.head.store(slot, Relaxed),
         }
         self.tail.store(slot, Relaxed);
@@ -83,7 +92,7 @@ impl<const N: usize> WakeQueue<N> {
 
     pub(crate) fn pop(&self) -> Option<u32> {
         let slot = decode(self.head.load(Relaxed))?;
-        let link = &self.links[u32_to_usize(slot)];
+        let link = self.link(slot);
         let next = link.next();
         self.head.store(next, Relaxed);
         if decode(next).is_none() {

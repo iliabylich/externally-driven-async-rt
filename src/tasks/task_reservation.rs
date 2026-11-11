@@ -17,8 +17,8 @@ pub struct TaskReservation<
     const FDS: usize,
 > {
     storage: LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    id: TaskId,
-    entry: &'static TaskEntry,
+    id: TaskId<TASK_SIZE>,
+    entry: &'static TaskEntry<TASK_SIZE>,
 }
 
 impl<
@@ -33,8 +33,8 @@ impl<
 {
     pub(crate) fn new(
         storage: LoopStorageGuard<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-        id: TaskId,
-        entry: &'static TaskEntry,
+        id: TaskId<TASK_SIZE>,
+        entry: &'static TaskEntry<TASK_SIZE>,
     ) -> Self {
         Self { storage, id, entry }
     }

@@ -75,8 +75,8 @@ fn full_task_pool_panics() {
 fn a_task_spawned_while_one_is_dropped_gets_another_slot() {
     struct SpawnOnDrop<'a> {
         storage: LoopStorageGuard<'a, (), 2, TASK_SIZE, 0, 1, 1, ()>,
-        id: &'a Cell<Option<TaskId>>,
-        spawned: &'a Cell<Option<TaskId>>,
+        id: &'a Cell<Option<TaskId<TASK_SIZE>>>,
+        spawned: &'a Cell<Option<TaskId<TASK_SIZE>>>,
     }
 
     impl Drop for SpawnOnDrop<'_> {

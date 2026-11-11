@@ -2,7 +2,8 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::arithmetic_side_effects,
-    clippy::as_conversions
+    clippy::as_conversions,
+    clippy::indexing_slicing
 )]
 
 use core::{cell::RefCell, net::SocketAddr, time::Duration};

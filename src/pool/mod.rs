@@ -22,12 +22,14 @@ impl<T, const N: usize> ObjectPool<T, N> {
             assert!(N <= 0xFFFF_FFFF, "object pool capacity must fit in u32");
         }
         let mut meta = [const { Meta::new(None) }; N];
-        let mut slot = 0;
+        let mut rest: &mut [Meta] = &mut meta;
         let mut next: u32 = 1;
-        while u32_to_usize(next) < N {
-            meta[slot] = Meta::new(Some(next));
-            slot = u32_to_usize(next);
+        while let [first, tail @ ..] = rest
+            && !tail.is_empty()
+        {
+            *first = Meta::new(Some(next));
             next = next.wrapping_add(1);
+            rest = tail;
         }
         Self {
             free_head: Cell::new(Some(0)),
@@ -39,7 +41,9 @@ impl<T, const N: usize> ObjectPool<T, N> {
 
     pub(crate) fn alloc(&self) -> Option<(Index<T>, &T)> {
         let slot = self.free_head.get()?;
-        let meta = &self.meta[u32_to_usize(slot)];
+        let Some((meta, value)) = self.entry(slot) else {
+            unreachable!("the free list points outside the pool");
+        };
         let Links::Vacant { next_free } = meta.links() else {
             unreachable!("the free list points at an occupied slot");
         };
@@ -53,14 +57,11 @@ impl<T, const N: usize> ObjectPool<T, N> {
             self.set_prev(head, Some(slot));
         }
         self.occupied_head.set(Some(slot));
-        Some((
-            Index::from_parts(slot, meta.generation()),
-            &self.values[u32_to_usize(slot)],
-        ))
+        Some((Index::from_parts(slot, meta.generation()), value))
     }
 
     pub(crate) fn free(&self, index: Index<T>) {
-        let Some(meta) = self.occupied(index) else {
+        let Some((meta, _)) = self.occupied(index) else {
             return;
         };
         let Links::Occupied { prev, next } = meta.links() else {
@@ -80,18 +81,25 @@ impl<T, const N: usize> ObjectPool<T, N> {
         self.free_head.set(Some(index.slot()));
     }
 
-    fn occupied(&self, index: Index<T>) -> Option<&Meta> {
-        let meta = self.meta.get(u32_to_usize(index.slot()))?;
+    fn entry(&self, slot: u32) -> Option<(&Meta, &T)> {
+        let slot = u32_to_usize(slot);
+        self.meta.get(slot).zip(self.values.get(slot))
+    }
+
+    fn occupied(&self, index: Index<T>) -> Option<(&Meta, &T)> {
+        let (meta, value) = self.entry(index.slot())?;
         let occupied = matches!(meta.links(), Links::Occupied { .. });
         if occupied && meta.generation() == index.generation() {
-            Some(meta)
+            Some((meta, value))
         } else {
             None
         }
     }
 
     fn set_prev(&self, slot: u32, link: Option<u32>) {
-        let meta = &self.meta[u32_to_usize(slot)];
+        let Some((meta, _)) = self.entry(slot) else {
+            unreachable!("the occupied list points outside the pool");
+        };
         let Links::Occupied { next, .. } = meta.links() else {
             unreachable!("the occupied list points at a vacant slot");
         };
@@ -99,7 +107,9 @@ impl<T, const N: usize> ObjectPool<T, N> {
     }
 
     fn set_next(&self, slot: u32, link: Option<u32>) {
-        let meta = &self.meta[u32_to_usize(slot)];
+        let Some((meta, _)) = self.entry(slot) else {
+            unreachable!("the occupied list points outside the pool");
+        };
         let Links::Occupied { prev, .. } = meta.links() else {
             unreachable!("the occupied list points at a vacant slot");
         };
@@ -107,34 +117,29 @@ impl<T, const N: usize> ObjectPool<T, N> {
     }
 
     pub(crate) fn get(&self, index: Index<T>) -> Option<&T> {
-        self.occupied(index)
-            .map(|_| &self.values[u32_to_usize(index.slot())])
+        self.occupied(index).map(|(_, value)| value)
     }
 
     pub(crate) fn get_at(&self, slot: u32) -> Option<(Index<T>, &T)> {
-        let meta = self.meta.get(u32_to_usize(slot))?;
+        let (meta, value) = self.entry(slot)?;
         if !matches!(meta.links(), Links::Occupied { .. }) {
             return None;
         }
-        Some((
-            Index::from_parts(slot, meta.generation()),
-            &self.values[u32_to_usize(slot)],
-        ))
+        Some((Index::from_parts(slot, meta.generation()), value))
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (Index<T>, &T)> {
         let mut cursor = self.occupied_head.get();
         core::iter::from_fn(move || {
             let slot = cursor?;
-            let meta = &self.meta[u32_to_usize(slot)];
+            let Some((meta, value)) = self.entry(slot) else {
+                unreachable!("the occupied list points outside the pool");
+            };
             let Links::Occupied { next, .. } = meta.links() else {
                 unreachable!("the occupied list points at a vacant slot");
             };
             cursor = next;
-            Some((
-                Index::from_parts(slot, meta.generation()),
-                &self.values[u32_to_usize(slot)],
-            ))
+            Some((Index::from_parts(slot, meta.generation()), value))
         })
     }
 }
