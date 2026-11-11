@@ -14,7 +14,7 @@ use rustix::{
 
 use crate::{
     Selector,
-    io::AsyncWrite,
+    io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpStream},
     testing::{self, EventLoopTestingExt, Log, TestLoop, TestStorage, is_writable, raw_accept},
 };

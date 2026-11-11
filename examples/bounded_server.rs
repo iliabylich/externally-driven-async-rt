@@ -10,7 +10,7 @@ use core::{cell::RefCell, net::SocketAddr, time::Duration};
 
 use externally_driven_async_rt::{
     Context, Error, EventLoop, LoopStorage, Selector, State,
-    io::AsyncWrite,
+    io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpStream},
 };
 

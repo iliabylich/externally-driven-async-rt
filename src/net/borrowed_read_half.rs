@@ -1,4 +1,4 @@
-use crate::{context::Context, net::socket::Socket, state::State};
+use crate::{context::Context, io::AsyncRead, net::socket::Socket, state::State};
 
 /// Read half of a TCP/Unix stream.
 #[must_use]
@@ -10,9 +10,10 @@ impl<'s> BorrowedReadHalf<'s> {
     pub(crate) const fn new(socket: &'s Socket) -> Self {
         Self { socket }
     }
+}
 
-    /// Reads from the underlying socket into a given buffer.
-    pub fn read<
+impl AsyncRead for BorrowedReadHalf<'_> {
+    fn read<
         'a,
         S: State,
         const TASKS: usize,

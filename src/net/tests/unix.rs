@@ -7,7 +7,7 @@ use rustix::{
 
 use crate::{
     Selector,
-    io::AsyncWrite,
+    io::{AsyncRead, AsyncWrite},
     net::{UnixDatagram, UnixListener, UnixStream},
     testing::{EventLoopTestingExt, Log, TestLoop, TestStorage, raw_accept, raw_socket},
 };

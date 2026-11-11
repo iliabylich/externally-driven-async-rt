@@ -1,3 +1,5 @@
+mod async_read;
+mod async_read_ext;
 mod async_write;
 mod async_write_ext;
 mod io_registration;
@@ -7,6 +9,8 @@ mod wait;
 
 use self::io_waiter::IoWaiter;
 pub use self::{
+    async_read::AsyncRead,
+    async_read_ext::{AsyncReadExt, ReadExactError},
     async_write::AsyncWrite,
     async_write_ext::{AsyncWriteExt, WriteAllError},
 };

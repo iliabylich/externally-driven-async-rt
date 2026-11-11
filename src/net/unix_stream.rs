@@ -2,7 +2,7 @@ use rustix::net::{Shutdown, SocketAddrUnix};
 
 use crate::{
     context::Context,
-    io::AsyncWrite,
+    io::{AsyncRead, AsyncWrite},
     net::{BorrowedReadHalf, BorrowedWriteHalf, socket::Socket},
     state::State,
 };
@@ -36,27 +36,6 @@ impl UnixStream {
     ) -> rustix::io::Result<Self> {
         let socket = Socket::connect_stream(ctx, addr).await?;
         Ok(Self { socket })
-    }
-
-    /// Reads from the underlying socket into a given buffer.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if a syscall fails.
-    pub fn read<
-        'a,
-        S: State,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
-        &'a mut self,
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-        buf: &'a mut [u8],
-    ) -> impl Future<Output = rustix::io::Result<usize>> {
-        self.socket.read(ctx, buf)
     }
 
     /// Shuts down the connection (which also impacts potentially existing read/write halves).
@@ -96,6 +75,24 @@ impl UnixStream {
             BorrowedReadHalf::new(&self.socket),
             BorrowedWriteHalf::new(&self.socket),
         )
+    }
+}
+
+impl AsyncRead for UnixStream {
+    fn read<
+        'a,
+        S: State,
+        const TASKS: usize,
+        const TASK_SIZE: usize,
+        const ROOT_TASK_SIZE: usize,
+        const TIMERS: usize,
+        const FDS: usize,
+    >(
+        &'a mut self,
+        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        buf: &'a mut [u8],
+    ) -> impl Future<Output = rustix::io::Result<usize>> {
+        self.socket.read(ctx, buf)
     }
 }
 
