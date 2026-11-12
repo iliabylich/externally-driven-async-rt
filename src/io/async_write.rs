@@ -26,4 +26,26 @@ pub trait AsyncWrite {
         ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>>;
+
+    /// Makes sure that everything accepted by [`write`](Self::write) is sent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a syscall fails.
+    ///
+    /// # Cancel safety
+    ///
+    /// Implementations in this crate are cancel safe.
+    fn flush<
+        'a,
+        S: State,
+        const TASKS: usize,
+        const TASK_SIZE: usize,
+        const ROOT_TASK_SIZE: usize,
+        const TIMERS: usize,
+        const FDS: usize,
+    >(
+        &'a mut self,
+        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    ) -> impl Future<Output = rustix::io::Result<()>>;
 }

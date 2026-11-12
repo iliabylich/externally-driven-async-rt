@@ -136,6 +136,21 @@ mod tests {
             self.len += len;
             ready(Ok(len))
         }
+
+        fn flush<
+            'a,
+            S: State,
+            const TASKS: usize,
+            const TASK_SIZE: usize,
+            const ROOT_TASK_SIZE: usize,
+            const TIMERS: usize,
+            const FDS: usize,
+        >(
+            &'a mut self,
+            _ctx: &'a crate::Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ) -> impl Future<Output = rustix::io::Result<()>> {
+            ready(Ok(()))
+        }
     }
 
     fn write_all(

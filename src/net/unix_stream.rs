@@ -116,6 +116,21 @@ impl AsyncWrite for UnixStream {
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.socket.write(ctx, buf)
     }
+
+    fn flush<
+        'a,
+        S: State,
+        const TASKS: usize,
+        const TASK_SIZE: usize,
+        const ROOT_TASK_SIZE: usize,
+        const TIMERS: usize,
+        const FDS: usize,
+    >(
+        &'a mut self,
+        _ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    ) -> impl Future<Output = rustix::io::Result<()>> {
+        core::future::ready(Ok(()))
+    }
 }
 
 impl core::fmt::Debug for UnixStream {
