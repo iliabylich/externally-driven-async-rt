@@ -316,6 +316,44 @@ impl Socket {
         Ok(())
     }
 
+    pub(crate) async fn ready<
+        S: State,
+        const TASKS: usize,
+        const TASK_SIZE: usize,
+        const ROOT_TASK_SIZE: usize,
+        const TIMERS: usize,
+        const FDS: usize,
+    >(
+        &self,
+        ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        direction: Direction,
+    ) {
+        let mut registration = IoRegistration::new(ctx, self.0.as_fd(), &self.1, direction);
+        registration.wait().await;
+    }
+
+    pub(crate) fn try_read(&self, buf: &mut [u8]) -> rustix::io::Result<usize> {
+        loop {
+            syscall_start!("read", self.0);
+            let result = rustix::io::read(&self.0, &mut *buf);
+            syscall_end!(result; &buf[..result.unwrap_or(0)], buf.len());
+            if result != Err(Errno::INTR) {
+                return result;
+            }
+        }
+    }
+
+    pub(crate) fn try_write(&self, buf: &[u8]) -> rustix::io::Result<usize> {
+        loop {
+            syscall_start!("send", self.0, buf, buf.len(), STREAM_SEND_FLAGS);
+            let result = rustix::net::send(&self.0, buf, STREAM_SEND_FLAGS);
+            syscall_end!(result);
+            if result != Err(Errno::INTR) {
+                return result;
+            }
+        }
+    }
+
     const fn retry<
         'a,
         'ctx,

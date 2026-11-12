@@ -232,3 +232,41 @@ fn listener_binds_to_ipv6() {
     let listener = TcpListener::bind(localhost).unwrap();
     assert!(listener.local_addr().unwrap().is_ipv6());
 }
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn split_halves_wait_for_readiness_and_try_io() {
+    let (listener, addr) = raw_listener();
+    let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
+    let mut event_loop = TestLoop::new(
+        {
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
+        },
+        &mut selector,
+        &mut state,
+        async move |ctx| {
+            let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
+            let (rx, tx) = stream.split();
+            let mut buf = [0; 5];
+            assert_eq!(rx.try_read(&mut buf), Err(Errno::AGAIN));
+
+            tx.writable(&ctx).await;
+            assert_eq!(tx.try_write(b"hello").unwrap(), 5);
+
+            rx.readable(&ctx).await;
+            assert_eq!(rx.try_read(&mut buf).unwrap(), 5);
+            assert_eq!(&buf, b"world");
+            ctx.dispatch(1);
+            pending::<()>().await;
+        },
+    )
+    .unwrap();
+    let peer = raw_accept(&listener);
+    let mut buf = [0; 5];
+    event_loop.peer_read_exact(&peer, &mut buf);
+    assert_eq!(&buf, b"hello");
+    assert_eq!(rustix::io::write(&peer, b"world").unwrap(), 5);
+    event_loop.run_until_events(1);
+}
