@@ -36,7 +36,7 @@ mod waker_slot;
 pub use context::Context;
 pub use event_loop::{Error, EventLoop};
 pub use notify::Notified;
-pub use select::{Either, select};
+pub use select::{Either2, Either3, select2, select3};
 pub use selector::Selector;
 pub use state::State;
 pub use storage::LoopStorage;
