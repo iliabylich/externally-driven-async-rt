@@ -4,7 +4,7 @@ use core::mem::MaybeUninit;
 
 #[cfg(target_os = "macos")]
 use rustix::event::kqueue;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 use rustix::time::Itimerspec;
 use rustix::{
     fd::{AsRawFd, OwnedFd},
@@ -70,7 +70,7 @@ impl TraceResult for Result<(), Errno> {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 impl TraceResult for Itimerspec {
     fn trace_result(&self, out: &mut dyn Write) -> fmt::Result {
         out.write_str("0")

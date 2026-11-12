@@ -16,7 +16,7 @@ rustix = { version = "1", default-features = false, features = [
     "net",
 ] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
 rustix = { version = "1", default-features = false, features = ["time"] }
 
 [dev-dependencies]

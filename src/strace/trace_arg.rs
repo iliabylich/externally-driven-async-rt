@@ -5,7 +5,7 @@ use core::{
 
 #[cfg(target_os = "macos")]
 use rustix::event::kqueue::{self, EventFilter};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 use rustix::{
     event::{EventfdFlags, Timespec, epoll},
     time::{Itimerspec, TimerfdClockId, TimerfdFlags, TimerfdTimerFlags},
@@ -232,7 +232,7 @@ macro_rules! flags {
 }
 
 flags!(FdFlags, RecvFlags, SendFlags);
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 flags!(
     epoll::CreateFlags,
     epoll::EventFlags,
@@ -243,7 +243,7 @@ flags!(
 #[cfg(target_os = "macos")]
 flags!(kqueue::EventFlags);
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 impl TraceArg for TimerfdClockId {
     fn trace_arg(&self, out: &mut dyn Write) -> fmt::Result {
         match self {
@@ -253,14 +253,14 @@ impl TraceArg for TimerfdClockId {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 impl TraceArg for Timespec {
     fn trace_arg(&self, out: &mut dyn Write) -> fmt::Result {
         write!(out, "{{tv_sec={}, tv_nsec={}}}", self.tv_sec, self.tv_nsec)
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 impl TraceArg for Itimerspec {
     fn trace_arg(&self, out: &mut dyn Write) -> fmt::Result {
         out.write_str("{it_interval=")?;
@@ -271,7 +271,7 @@ impl TraceArg for Itimerspec {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 impl TraceArg for epoll::Event {
     fn trace_arg(&self, out: &mut dyn Write) -> fmt::Result {
         let event = *self;
@@ -282,7 +282,7 @@ impl TraceArg for epoll::Event {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 impl TraceArg for [epoll::Event] {
     fn trace_arg(&self, out: &mut dyn Write) -> fmt::Result {
         list(self, out)

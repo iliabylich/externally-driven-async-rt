@@ -1,7 +1,7 @@
 mod direction;
 #[cfg(miri)]
 mod dummy;
-#[cfg(all(target_os = "linux", not(miri)))]
+#[cfg(all(any(target_os = "linux", target_os = "android"), not(miri)))]
 mod epoll;
 mod io_change;
 mod kernel_timer;
@@ -10,14 +10,14 @@ mod kqueue;
 mod selector_event;
 mod timer_change;
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-compile_error!("externally-driven-async-rt supports only macOS and Linux");
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
+compile_error!("externally-driven-async-rt supports only macOS, Linux and Android");
 
 use rustix::fd::{AsFd, BorrowedFd};
 
 #[cfg(miri)]
 use self::dummy::DummySelector as Backend;
-#[cfg(all(target_os = "linux", not(miri)))]
+#[cfg(all(any(target_os = "linux", target_os = "android"), not(miri)))]
 use self::epoll::EpollSelector as Backend;
 #[cfg(all(target_os = "macos", not(miri)))]
 use self::kqueue::KqueueSelector as Backend;

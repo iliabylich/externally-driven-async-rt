@@ -25,7 +25,7 @@ use crate::{
 const LISTEN_BACKLOG: i32 = 1024;
 #[cfg(target_os = "macos")]
 const STREAM_SEND_FLAGS: SendFlags = SendFlags::empty();
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 const STREAM_SEND_FLAGS: SendFlags = SendFlags::NOSIGNAL;
 
 #[must_use]
@@ -94,7 +94,7 @@ impl Socket {
         syscall_end!(result);
         result?;
 
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             let timeout = interval
                 .checked_mul(count)
@@ -353,7 +353,11 @@ impl Socket {
 
     fn configure(
         &self,
-        #[cfg_attr(target_os = "linux", expect(unused_variables))] ty: SocketType,
+        #[cfg_attr(
+            any(target_os = "linux", target_os = "android"),
+            expect(unused_variables)
+        )]
+        ty: SocketType,
     ) -> rustix::io::Result<()> {
         syscall_start!("fcntl", self.0, "F_SETFD", FdFlags::CLOEXEC);
         let result = fcntl_setfd(&self.0, FdFlags::CLOEXEC);
