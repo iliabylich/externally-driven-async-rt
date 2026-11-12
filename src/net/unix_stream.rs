@@ -83,6 +83,8 @@ impl UnixStream {
 }
 
 impl AsyncRead for UnixStream {
+    type Error = rustix::io::Errno;
+
     fn read<
         'a,
         S: State,
@@ -101,6 +103,8 @@ impl AsyncRead for UnixStream {
 }
 
 impl AsyncWrite for UnixStream {
+    type Error = rustix::io::Errno;
+
     fn write<
         'a,
         S: State,

@@ -1,7 +1,5 @@
 use core::future::Future;
 
-use rustix::io::Errno;
-
 use crate::{Context, State, io::AsyncWrite};
 
 /// Helper methods on top of [`AsyncWrite`], implemented for every [`AsyncWrite`].
@@ -10,7 +8,7 @@ pub trait AsyncWriteExt: AsyncWrite {
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails or if the stream accepts zero bytes.
+    /// Returns an error if writing fails or if the stream accepts zero bytes.
     ///
     /// # Cancel safety
     ///
@@ -27,13 +25,13 @@ pub trait AsyncWriteExt: AsyncWrite {
         &'a mut self,
         ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         mut buf: &'a [u8],
-    ) -> impl Future<Output = Result<(), WriteAllError>> {
+    ) -> impl Future<Output = Result<(), WriteAllError<Self::Error>>> {
         async move {
             while !buf.is_empty() {
                 let len = match self.write(ctx, buf).await {
                     Ok(0) => return Err(WriteAllError::WriteZero),
                     Ok(len) => len,
-                    Err(errno) => return Err(WriteAllError::Io(errno)),
+                    Err(err) => return Err(WriteAllError::Io(err)),
                 };
                 let Some(rest) = buf.get(len..) else {
                     unreachable!("write() reported {len} written bytes out of {}", buf.len());
@@ -49,23 +47,23 @@ impl<T: AsyncWrite + ?Sized> AsyncWriteExt for T {}
 
 /// An error returned from [`AsyncWriteExt::write_all`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WriteAllError {
-    /// A syscall failed.
-    Io(Errno),
+pub enum WriteAllError<E> {
+    /// Writing failed.
+    Io(E),
     /// The stream accepted zero bytes.
     WriteZero,
 }
 
-impl core::fmt::Display for WriteAllError {
+impl<E: core::fmt::Display> core::fmt::Display for WriteAllError<E> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Io(errno) => write!(f, "write failed: {errno}"),
+            Self::Io(err) => write!(f, "write failed: {err}"),
             Self::WriteZero => f.write_str("stream accepted zero bytes"),
         }
     }
 }
 
-impl core::error::Error for WriteAllError {}
+impl<E: core::error::Error> core::error::Error for WriteAllError<E> {}
 
 #[cfg(test)]
 mod tests {
@@ -114,6 +112,8 @@ mod tests {
     }
 
     impl AsyncWrite for Scripted {
+        type Error = Errno;
+
         fn write<
             'a,
             S: State,
@@ -157,7 +157,7 @@ mod tests {
         storage: &'static TestStorage,
         writer: &mut Scripted,
         buf: &[u8],
-    ) -> Poll<Result<(), WriteAllError>> {
+    ) -> Poll<Result<(), WriteAllError<Errno>>> {
         let selector = Selector::new().unwrap();
         let state = RefCell::new(Log::default());
         let ctx: TestContext<'_> = storage.claim(&selector, &state);

@@ -1,5 +1,3 @@
-use rustix::io::Errno;
-
 use crate::{Context, State, io::AsyncWrite};
 
 /// Writes frames of exactly `N` bytes to an [`AsyncWrite`].
@@ -34,7 +32,7 @@ impl<W: AsyncWrite, const N: usize> FrameWriter<W, N> {
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails or if the stream accepts zero bytes.
+    /// Returns an error if writing fails or if the stream accepts zero bytes.
     ///
     /// # Cancel safety
     ///
@@ -50,7 +48,7 @@ impl<W: AsyncWrite, const N: usize> FrameWriter<W, N> {
         &mut self,
         ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         frame: &[u8; N],
-    ) -> Result<(), FrameWriterError> {
+    ) -> Result<(), FrameWriterError<W::Error>> {
         self.flush(ctx).await?;
         self.buf = *frame;
         self.written = 0;
@@ -61,7 +59,7 @@ impl<W: AsyncWrite, const N: usize> FrameWriter<W, N> {
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails or if the stream accepts zero bytes.
+    /// Returns an error if writing fails or if the stream accepts zero bytes.
     ///
     /// # Cancel safety
     ///
@@ -76,7 +74,7 @@ impl<W: AsyncWrite, const N: usize> FrameWriter<W, N> {
     >(
         &mut self,
         ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    ) -> Result<(), FrameWriterError> {
+    ) -> Result<(), FrameWriterError<W::Error>> {
         while self.written < N {
             let Some(rest) = self.buf.get(self.written..) else {
                 unreachable!("written is below N");
@@ -84,7 +82,7 @@ impl<W: AsyncWrite, const N: usize> FrameWriter<W, N> {
             let len = match self.inner.write(ctx, rest).await {
                 Ok(0) => return Err(FrameWriterError::WriteZero),
                 Ok(len) => len,
-                Err(errno) => return Err(FrameWriterError::Io(errno)),
+                Err(err) => return Err(FrameWriterError::Io(err)),
             };
             let Some(written) = self
                 .written
@@ -107,23 +105,23 @@ impl<W, const N: usize> core::fmt::Debug for FrameWriter<W, N> {
 
 /// An error returned from [`FrameWriter::write_all`] and [`FrameWriter::flush`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FrameWriterError {
-    /// A syscall failed.
-    Io(Errno),
+pub enum FrameWriterError<E> {
+    /// Writing failed.
+    Io(E),
     /// The stream accepted zero bytes.
     WriteZero,
 }
 
-impl core::fmt::Display for FrameWriterError {
+impl<E: core::fmt::Display> core::fmt::Display for FrameWriterError<E> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Io(errno) => write!(f, "write failed: {errno}"),
+            Self::Io(err) => write!(f, "write failed: {err}"),
             Self::WriteZero => f.write_str("stream accepted zero bytes"),
         }
     }
 }
 
-impl core::error::Error for FrameWriterError {}
+impl<E: core::error::Error> core::error::Error for FrameWriterError<E> {}
 
 #[cfg(test)]
 mod tests {
@@ -169,6 +167,8 @@ mod tests {
     }
 
     impl AsyncWrite for Sink {
+        type Error = Errno;
+
         fn write<
             'a,
             S: State,

@@ -1,7 +1,5 @@
 use core::future::Future;
 
-use rustix::io::Errno;
-
 use crate::{Context, State, io::AsyncRead};
 
 /// Helper methods on top of [`AsyncRead`], implemented for every [`AsyncRead`].
@@ -12,7 +10,7 @@ pub trait AsyncReadExt: AsyncRead {
     ///
     /// Returns an error if:
     ///
-    /// 1. a syscall fails
+    /// 1. reading fails
     /// 2. or if the stream is closed before the buffer is filled.
     ///
     /// # Cancel safety
@@ -30,13 +28,13 @@ pub trait AsyncReadExt: AsyncRead {
         &'a mut self,
         ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         mut buf: &'a mut [u8],
-    ) -> impl Future<Output = Result<(), ReadExactError>> {
+    ) -> impl Future<Output = Result<(), ReadExactError<Self::Error>>> {
         async move {
             while !buf.is_empty() {
                 let len = match self.read(ctx, buf).await {
                     Ok(0) => return Err(ReadExactError::UnexpectedEof),
                     Ok(len) => len,
-                    Err(errno) => return Err(ReadExactError::Io(errno)),
+                    Err(err) => return Err(ReadExactError::Io(err)),
                 };
                 let Some(rest) = core::mem::take(&mut buf).get_mut(len..) else {
                     unreachable!("read() reported more read bytes than the buffer has");
@@ -52,23 +50,23 @@ impl<T: AsyncRead + ?Sized> AsyncReadExt for T {}
 
 /// An error returned from [`AsyncReadExt::read_exact`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReadExactError {
-    /// A syscall failed.
-    Io(Errno),
+pub enum ReadExactError<E> {
+    /// Reading failed.
+    Io(E),
     /// The stream was closed before the buffer was filled.
     UnexpectedEof,
 }
 
-impl core::fmt::Display for ReadExactError {
+impl<E: core::fmt::Display> core::fmt::Display for ReadExactError<E> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Io(errno) => write!(f, "read failed: {errno}"),
+            Self::Io(err) => write!(f, "read failed: {err}"),
             Self::UnexpectedEof => f.write_str("stream closed before the buffer was filled"),
         }
     }
 }
 
-impl core::error::Error for ReadExactError {}
+impl<E: core::error::Error> core::error::Error for ReadExactError<E> {}
 
 #[cfg(test)]
 mod tests {
@@ -113,6 +111,8 @@ mod tests {
     }
 
     impl AsyncRead for Scripted {
+        type Error = Errno;
+
         fn read<
             'a,
             S: State,
@@ -141,7 +141,7 @@ mod tests {
         storage: &'static TestStorage,
         reader: &mut Scripted,
         buf: &mut [u8],
-    ) -> Poll<Result<(), ReadExactError>> {
+    ) -> Poll<Result<(), ReadExactError<Errno>>> {
         let selector = Selector::new().unwrap();
         let state = RefCell::new(Log::default());
         let ctx: TestContext<'_> = storage.claim(&selector, &state);

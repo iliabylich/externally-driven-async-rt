@@ -13,6 +13,8 @@ impl<'s> BorrowedReadHalf<'s> {
 }
 
 impl AsyncRead for BorrowedReadHalf<'_> {
+    type Error = rustix::io::Errno;
+
     fn read<
         'a,
         S: State,

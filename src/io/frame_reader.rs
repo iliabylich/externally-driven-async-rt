@@ -1,5 +1,3 @@
-use rustix::io::Errno;
-
 use crate::{Context, State, io::AsyncRead};
 
 /// Reads frames of exactly `N` bytes from an [`AsyncRead`].
@@ -31,7 +29,7 @@ impl<R: AsyncRead, const N: usize> FrameReader<R, N> {
     ///
     /// Returns an error if:
     ///
-    /// 1. a syscall fails
+    /// 1. reading fails
     /// 2. or if the stream is closed in the middle of the frame.
     ///
     /// # Cancel safety
@@ -47,7 +45,7 @@ impl<R: AsyncRead, const N: usize> FrameReader<R, N> {
     >(
         &mut self,
         ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    ) -> Result<Option<[u8; N]>, FrameReaderError> {
+    ) -> Result<Option<[u8; N]>, FrameReaderError<R::Error>> {
         while self.filled < N {
             let Some(rest) = self.buf.get_mut(self.filled..) else {
                 unreachable!("filled is below N");
@@ -56,7 +54,7 @@ impl<R: AsyncRead, const N: usize> FrameReader<R, N> {
                 Ok(0) if self.filled == 0 => return Ok(None),
                 Ok(0) => return Err(FrameReaderError::UnexpectedEof),
                 Ok(len) => len,
-                Err(errno) => return Err(FrameReaderError::Io(errno)),
+                Err(err) => return Err(FrameReaderError::Io(err)),
             };
             let Some(filled) = self.filled.checked_add(len).filter(|&filled| filled <= N) else {
                 unreachable!("read() reported more read bytes than the buffer has");
@@ -83,23 +81,23 @@ impl<R, const N: usize> core::fmt::Debug for FrameReader<R, N> {
 
 /// An error returned from [`FrameReader::read_exact`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FrameReaderError {
-    /// A syscall failed.
-    Io(Errno),
+pub enum FrameReaderError<E> {
+    /// Reading failed.
+    Io(E),
     /// The stream was closed in the middle of the frame.
     UnexpectedEof,
 }
 
-impl core::fmt::Display for FrameReaderError {
+impl<E: core::fmt::Display> core::fmt::Display for FrameReaderError<E> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Io(errno) => write!(f, "read failed: {errno}"),
+            Self::Io(err) => write!(f, "read failed: {err}"),
             Self::UnexpectedEof => f.write_str("stream closed in the middle of the frame"),
         }
     }
 }
 
-impl core::error::Error for FrameReaderError {}
+impl<E: core::error::Error> core::error::Error for FrameReaderError<E> {}
 
 #[cfg(test)]
 mod tests {
@@ -124,6 +122,8 @@ mod tests {
     }
 
     impl AsyncRead for Chunks {
+        type Error = Errno;
+
         fn read<
             'a,
             S: State,

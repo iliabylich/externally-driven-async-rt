@@ -4,13 +4,16 @@ use crate::{Context, State};
 
 /// A stream that can be read from asynchronously.
 pub trait AsyncRead {
+    /// The error returned by [`read`](Self::read).
+    type Error;
+
     /// Reads into a given buffer, returns the number of read bytes.
     ///
     /// Returns `0` if the stream is closed (or if the buffer is empty).
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails.
+    /// Returns an error if reading fails.
     ///
     /// # Cancel safety
     ///
@@ -27,5 +30,5 @@ pub trait AsyncRead {
         &'a mut self,
         ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
-    ) -> impl Future<Output = rustix::io::Result<usize>>;
+    ) -> impl Future<Output = Result<usize, Self::Error>>;
 }

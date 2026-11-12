@@ -86,6 +86,8 @@ impl TcpStream {
 }
 
 impl AsyncRead for TcpStream {
+    type Error = Errno;
+
     fn read<
         'a,
         S: State,
@@ -104,6 +106,8 @@ impl AsyncRead for TcpStream {
 }
 
 impl AsyncWrite for TcpStream {
+    type Error = Errno;
+
     fn write<
         'a,
         S: State,

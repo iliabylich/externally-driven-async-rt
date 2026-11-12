@@ -13,6 +13,8 @@ impl<'s> BorrowedWriteHalf<'s> {
 }
 
 impl AsyncWrite for BorrowedWriteHalf<'_> {
+    type Error = rustix::io::Errno;
+
     fn write<
         'a,
         S: State,
