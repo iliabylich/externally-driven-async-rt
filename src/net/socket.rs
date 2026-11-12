@@ -1,4 +1,4 @@
-use core::cell::Cell;
+use core::{cell::Cell, time::Duration};
 
 use rustix::{
     fd::{AsFd, OwnedFd},
@@ -6,7 +6,10 @@ use rustix::{
     net::{
         AddressFamily, RecvFlags, SendFlags, Shutdown, SocketAddrAny, SocketType,
         addr::SocketAddrArg,
-        sockopt::{set_socket_reuseaddr, socket_error},
+        sockopt::{
+            set_socket_keepalive, set_socket_reuseaddr, set_tcp_keepcnt, set_tcp_keepidle,
+            set_tcp_keepintvl, socket_error,
+        },
     },
 };
 
@@ -57,6 +60,60 @@ impl Socket {
         let result = set_socket_reuseaddr(&self.0, true);
         syscall_end!(result);
         result
+    }
+
+    pub(crate) fn set_keepalive(
+        &self,
+        idle: Duration,
+        interval: Duration,
+        count: u32,
+    ) -> rustix::io::Result<()> {
+        syscall_start!("setsockopt", self.0, "SOL_SOCKET", "SO_KEEPALIVE", true);
+        let result = set_socket_keepalive(&self.0, true);
+        syscall_end!(result);
+        result?;
+
+        syscall_start!("setsockopt", self.0, "IPPROTO_TCP", "TCP_KEEPIDLE", idle);
+        let result = set_tcp_keepidle(&self.0, idle);
+        syscall_end!(result);
+        result?;
+
+        syscall_start!(
+            "setsockopt",
+            self.0,
+            "IPPROTO_TCP",
+            "TCP_KEEPINTVL",
+            interval
+        );
+        let result = set_tcp_keepintvl(&self.0, interval);
+        syscall_end!(result);
+        result?;
+
+        syscall_start!("setsockopt", self.0, "IPPROTO_TCP", "TCP_KEEPCNT", count);
+        let result = set_tcp_keepcnt(&self.0, count);
+        syscall_end!(result);
+        result?;
+
+        #[cfg(target_os = "linux")]
+        {
+            let timeout = interval
+                .checked_mul(count)
+                .and_then(|probes| probes.checked_add(idle))
+                .ok_or(Errno::INVAL)?;
+            let timeout = u32::try_from(timeout.as_millis()).map_err(|_| Errno::INVAL)?;
+            syscall_start!(
+                "setsockopt",
+                self.0,
+                "IPPROTO_TCP",
+                "TCP_USER_TIMEOUT",
+                timeout
+            );
+            let result = rustix::net::sockopt::set_tcp_user_timeout(&self.0, timeout);
+            syscall_end!(result);
+            result?;
+        }
+
+        Ok(())
     }
 
     pub(crate) fn connect<A: SocketAddrArg>(&self, addr: &A) -> rustix::io::Result<()> {

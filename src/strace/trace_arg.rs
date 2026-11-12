@@ -109,6 +109,12 @@ impl TraceArg for i32 {
     }
 }
 
+impl TraceArg for u32 {
+    fn trace_arg(&self, out: &mut dyn Write) -> fmt::Result {
+        write!(out, "{self}")
+    }
+}
+
 impl TraceArg for usize {
     fn trace_arg(&self, out: &mut dyn Write) -> fmt::Result {
         write!(out, "{self}")

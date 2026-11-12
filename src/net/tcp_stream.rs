@@ -1,4 +1,4 @@
-use core::net::SocketAddr;
+use core::{net::SocketAddr, time::Duration};
 
 use rustix::{io::Errno, net::Shutdown};
 
@@ -53,6 +53,25 @@ impl TcpStream {
     /// Returns an error if a syscall fails.
     pub fn shutdown(&self, how: Shutdown) -> rustix::io::Result<()> {
         self.socket.shutdown(how)
+    }
+
+    /// Enables TCP keepalive.
+    ///
+    /// Once the connection is idle for `idle`, a probe is sent every `interval`, and the
+    /// connection is considered dead after `count` unanswered probes. On Linux the same total
+    /// (`idle + interval * count`) also limits how long sent data may stay unacknowledged
+    /// (`TCP_USER_TIMEOUT`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a syscall fails, or if the total doesn't fit into `TCP_USER_TIMEOUT`.
+    pub fn set_keepalive(
+        &self,
+        idle: Duration,
+        interval: Duration,
+        count: u32,
+    ) -> rustix::io::Result<()> {
+        self.socket.set_keepalive(idle, interval, count)
     }
 
     /// Returns local address.

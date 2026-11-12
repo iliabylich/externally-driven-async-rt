@@ -4,6 +4,7 @@ use core::{
     net::SocketAddr,
     pin::pin,
     task::Poll,
+    time::Duration,
 };
 
 use rustix::{
@@ -268,5 +269,32 @@ fn split_halves_wait_for_readiness_and_try_io() {
     event_loop.peer_read_exact(&peer, &mut buf);
     assert_eq!(&buf, b"hello");
     assert_eq!(rustix::io::write(&peer, b"world").unwrap(), 5);
+    event_loop.run_until_events(1);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn set_keepalive_on_a_connected_stream() {
+    let (listener, addr) = raw_listener();
+    let mut selector = Selector::new().unwrap();
+    let mut state = RefCell::new(Log::default());
+    let mut event_loop = TestLoop::new(
+        {
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
+        },
+        &mut selector,
+        &mut state,
+        async move |ctx| {
+            let stream = TcpStream::connect(&ctx, addr).await.unwrap();
+            stream
+                .set_keepalive(Duration::from_secs(1), Duration::from_secs(1), 2)
+                .unwrap();
+            ctx.dispatch(1);
+            pending::<()>().await;
+        },
+    )
+    .unwrap();
+    let _peer = raw_accept(&listener);
     event_loop.run_until_events(1);
 }
