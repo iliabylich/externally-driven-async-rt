@@ -23,6 +23,10 @@ impl UnixStream {
     /// # Errors
     ///
     /// Returns an error if a syscall fails.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe.
     pub async fn connect<
         S: State,
         const TASKS: usize,

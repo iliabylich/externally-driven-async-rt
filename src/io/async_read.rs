@@ -11,6 +11,10 @@ pub trait AsyncRead {
     /// # Errors
     ///
     /// Returns an error if a syscall fails.
+    ///
+    /// # Cancel safety
+    ///
+    /// Implementations in this crate are cancel safe.
     fn read<
         'a,
         S: State,

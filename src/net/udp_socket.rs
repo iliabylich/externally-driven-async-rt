@@ -30,6 +30,10 @@ impl UdpSocket {
     /// # Errors
     ///
     /// Returns an error if a syscall fails.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe.
     pub async fn send_to<
         S: State,
         const TASKS: usize,
@@ -51,6 +55,10 @@ impl UdpSocket {
     /// # Errors
     ///
     /// Returns an error if a syscall fails.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe.
     pub fn recv_from<
         'a,
         S: State,
@@ -85,6 +93,10 @@ impl UdpSocket {
     /// # Errors
     ///
     /// Returns an error if a syscall fails.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe.
     pub fn send<
         'a,
         S: State,
@@ -106,6 +118,10 @@ impl UdpSocket {
     /// # Errors
     ///
     /// Returns an error if a syscall fails.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe.
     pub fn recv<
         'a,
         S: State,

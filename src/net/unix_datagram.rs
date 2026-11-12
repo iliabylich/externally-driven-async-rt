@@ -35,6 +35,10 @@ impl UnixDatagram {
     /// # Errors
     ///
     /// Returns an error if a syscall fails.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe.
     pub fn send_to<
         'a,
         S: State,
@@ -58,6 +62,10 @@ impl UnixDatagram {
     /// # Errors
     ///
     /// Returns an error if a syscall fails.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe.
     pub fn recv_from<
         'a,
         S: State,
@@ -96,6 +104,10 @@ impl UnixDatagram {
     /// # Errors
     ///
     /// Returns an error if a syscall fails.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe.
     pub fn send<
         'a,
         S: State,
@@ -117,6 +129,10 @@ impl UnixDatagram {
     /// # Errors
     ///
     /// Returns an error if a syscall fails.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe.
     pub fn recv<
         'a,
         S: State,

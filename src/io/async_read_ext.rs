@@ -14,6 +14,10 @@ pub trait AsyncReadExt: AsyncRead {
     ///
     /// 1. a syscall fails
     /// 2. or if the stream is closed before the buffer is filled.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is not cancel safe: an unknown number of bytes may already be read into `buf`.
     fn read_exact<
         'a,
         S: State,

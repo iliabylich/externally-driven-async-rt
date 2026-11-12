@@ -16,6 +16,10 @@ pub enum Either<L, R> {
 /// Polls two futures concurrently, resolves the one that completes first.
 ///
 /// If both complete at the same time, the left one wins, the other one is dropped.
+///
+/// # Cancel safety
+///
+/// This function is cancel safe if both `left` and `right` are.
 pub async fn select<L: Future, R: Future>(left: L, right: R) -> Either<L::Output, R::Output> {
     let mut left = pin!(left);
     let mut right = pin!(right);

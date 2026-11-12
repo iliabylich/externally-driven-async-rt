@@ -90,11 +90,19 @@ impl<
     /// pool of tasks is available.
     ///
     /// The future stays pending until some other task finishes and frees a slot.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe.
     pub const fn reserve_task(&self) -> ReserveTask<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE> {
         ReserveTask::new(&self.storage.tasks, self.claimed)
     }
 
     /// Sleeps for `duration`.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe.
     pub fn sleep(&self, duration: Duration) -> Sleep<'_, TIMERS> {
         Sleep::new(
             &self.storage.timers,
@@ -103,6 +111,10 @@ impl<
     }
 
     /// Runs `future` with a timeout of `duration`, resolves to `None` in case of a timeout.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe if `future` is.
     pub fn timeout<F: Future>(&self, duration: Duration, future: F) -> Timeout<'_, F, TIMERS> {
         Timeout::new(future, self.sleep(duration))
     }
@@ -110,6 +122,10 @@ impl<
     /// Waits until [`EventLoop::notify`](crate::EventLoop::notify) is called.
     ///
     /// See [`Notified`] for details.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe.
     pub const fn notified(&self) -> Notified<'_> {
         Notified::new(&self.storage.notification)
     }

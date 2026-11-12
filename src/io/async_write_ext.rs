@@ -11,6 +11,10 @@ pub trait AsyncWriteExt: AsyncWrite {
     /// # Errors
     ///
     /// Returns an error if a syscall fails or if the stream accepts zero bytes.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is not cancel safe: an unknown number of bytes from `buf` may already be written.
     fn write_all<
         'a,
         S: State,

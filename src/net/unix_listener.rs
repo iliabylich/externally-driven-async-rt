@@ -30,6 +30,10 @@ impl UnixListener {
     /// # Errors
     ///
     /// Returns an error if a syscall fails.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe.
     pub async fn accept<
         S: State,
         const TASKS: usize,

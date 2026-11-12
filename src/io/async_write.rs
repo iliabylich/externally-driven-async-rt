@@ -9,6 +9,10 @@ pub trait AsyncWrite {
     /// # Errors
     ///
     /// Returns an error if a syscall fails.
+    ///
+    /// # Cancel safety
+    ///
+    /// Implementations in this crate are cancel safe.
     fn write<
         'a,
         S: State,
