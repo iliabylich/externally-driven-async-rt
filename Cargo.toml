@@ -14,10 +14,8 @@ strace-like = []
 rustix = { version = "1", default-features = false, features = [
     "event",
     "net",
+    "time",
 ] }
-
-[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
-rustix = { version = "1", default-features = false, features = ["time"] }
 
 [dev-dependencies]
 rustix = { version = "1", default-features = false, features = [
