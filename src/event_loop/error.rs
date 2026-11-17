@@ -18,3 +18,9 @@ impl core::fmt::Display for Error {
 }
 
 impl core::error::Error for Error {}
+
+impl From<rustix::io::Errno> for Error {
+    fn from(errno: rustix::io::Errno) -> Self {
+        Self::Io(errno)
+    }
+}

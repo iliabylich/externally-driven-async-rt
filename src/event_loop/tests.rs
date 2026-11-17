@@ -222,8 +222,8 @@ fn dispatching_into_a_full_queue_panics() {
         },
         &mut selector,
         async |ctx| {
-            for i in 0..=TEST_EVENTS {
-                ctx.dispatch(i as u32);
+            for _ in 0..=TEST_EVENTS {
+                ctx.dispatch(0);
             }
             pending::<()>().await;
         },

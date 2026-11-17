@@ -70,7 +70,7 @@ impl<
             RootStatus::Running => {}
             RootStatus::Finished => return Err(Error::RootFinished),
         }
-        event_loop.finish_drain(RootStatus::Running)?;
+        ctx.flush()?;
         Ok(event_loop)
     }
 
@@ -89,16 +89,19 @@ impl<
         if matches!(ctx.storage.tasks.root(), Root::Finished) {
             return Err(Error::RootFinished);
         }
-        let status = loop {
-            ctx.process_selector_events().map_err(Error::Io)?;
+        loop {
+            ctx.process_selector_events()?;
             if !ctx.storage.tasks.has_ready() {
-                break RootStatus::Running;
+                break;
             }
             if ctx.storage.tasks.run_ready() == RootStatus::Finished {
-                break RootStatus::Finished;
+                ctx.storage.tasks.drop_all();
+                ctx.flush()?;
+                return Err(Error::RootFinished);
             }
-        };
-        self.finish_drain(status)
+        }
+        ctx.flush()?;
+        Ok(())
     }
 
     /// Makes the event loop's file descriptor readable and wakes up a task
@@ -120,17 +123,6 @@ impl<
     /// This is the way to pass data from the event loop to the external world.
     pub const fn events(&mut self) -> EventsIter<'_, E, EVENTS> {
         EventsIter::new(&self.ctx.storage.events)
-    }
-
-    fn finish_drain(&self, status: RootStatus) -> Result<(), Error> {
-        if status == RootStatus::Finished {
-            self.ctx.storage.tasks.drop_all();
-        }
-        self.ctx.flush().map_err(Error::Io)?;
-        match status {
-            RootStatus::Running => Ok(()),
-            RootStatus::Finished => Err(Error::RootFinished),
-        }
     }
 }
 
