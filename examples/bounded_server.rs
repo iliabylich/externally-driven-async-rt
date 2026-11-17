@@ -6,11 +6,11 @@
     clippy::indexing_slicing
 )]
 
-use core::{cell::RefCell, net::SocketAddr, time::Duration};
+use core::{net::SocketAddr, time::Duration};
 
 use externally_driven_async_rt::{
-    Context, Error, EventLoop, LoopStorage, Selector, State,
-    io::{AsyncRead, AsyncWrite},
+    Context, Error, EventLoop, LoopStorage, Selector,
+    io::{AsyncRead, AsyncWriteExt, WriteAllError},
     net::{TcpListener, TcpStream},
 };
 
@@ -23,24 +23,25 @@ const MAX_CLIENTS: usize = 3;
 const MAX_REQUEST_LEN: usize = 64;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
+const EVENTS: usize = 256;
 const TASKS: usize = MAX_CLIENTS + 2;
 const TASK_SIZE: usize = 1024;
 const ROOT_TASK_SIZE: usize = 1024;
 const TIMERS: usize = MAX_CLIENTS + 2;
 const FDS: usize = MAX_CLIENTS + 1;
 
-type ServerLoop<'a> = EventLoop<'a, Server, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
-type ServerContext<'a> = Context<'a, Server, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
-type ServerStorage = LoopStorage<TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
+type ServerLoop<'a> = EventLoop<'a, Event, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
+type ServerContext<'a> = Context<'a, Event, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
+type ServerStorage = LoopStorage<Event, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
 
 #[derive(Default)]
 struct Server {
     active: usize,
     served: usize,
     kicked: usize,
-    log: Vec<String>,
 }
 
+#[derive(Clone, Copy)]
 enum Event {
     Listening(SocketAddr),
     Connected(SocketAddr),
@@ -58,47 +59,44 @@ enum Event {
     Tick,
 }
 
-impl State for Server {
-    type Event = Event;
-
-    fn apply(&mut self, event: Event) {
-        let line = match event {
-            Event::Listening(addr) => format!(
+impl Server {
+    fn on_event(&mut self, event: Event) {
+        match event {
+            Event::Listening(addr) => println!(
                 "listening on {addr}, at most {MAX_CLIENTS} clients, \
                  {REQUEST_TIMEOUT:?} per request"
             ),
             Event::Connected(peer) => {
                 self.active += 1;
-                format!("{peer} connected")
+                println!("{peer} connected");
             }
             Event::Served { peer, len } => {
                 self.served += 1;
-                format!("{peer}: served {len} bytes")
+                println!("{peer}: served {len} bytes");
             }
             Event::TimedOut(peer) => {
                 self.active -= 1;
                 self.kicked += 1;
-                format!("{peer} kicked out: no full exchange within {REQUEST_TIMEOUT:?}")
+                println!("{peer} kicked out: no full exchange within {REQUEST_TIMEOUT:?}");
             }
             Event::RequestTooLong(peer) => {
                 self.active -= 1;
                 self.kicked += 1;
-                format!("{peer} kicked out: request longer than {MAX_REQUEST_LEN} bytes")
+                println!("{peer} kicked out: request longer than {MAX_REQUEST_LEN} bytes");
             }
             Event::Disconnected { peer, error } => {
                 self.active -= 1;
                 match error {
-                    Some(errno) => format!("{peer} disconnected: {errno}"),
-                    None => format!("{peer} disconnected"),
+                    Some(errno) => println!("{peer} disconnected: {errno}"),
+                    None => println!("{peer} disconnected"),
                 }
             }
-            Event::AcceptFailed(errno) => format!("accept failed: {errno}"),
-            Event::Tick => format!(
+            Event::AcceptFailed(errno) => println!("accept failed: {errno}"),
+            Event::Tick => println!(
                 "{} active, {} requests served, {} clients kicked out",
                 self.active, self.served, self.kicked
             ),
-        };
-        self.log.push(line);
+        }
     }
 }
 
@@ -176,9 +174,10 @@ async fn exchange(
         }
         *len += read;
     };
-    let mut written = 0;
-    while written < end {
-        written += stream.write(ctx, &buf[written..end]).await?;
+    match stream.write_all(ctx, &buf[..end]).await {
+        Ok(()) => {}
+        Err(WriteAllError::Io(errno)) => return Err(errno),
+        Err(WriteAllError::WriteZero) => return Ok(Exchange::Closed),
     }
     buf.copy_within(end..*len, 0);
     *len -= end;
@@ -195,11 +194,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     static STORAGE: ServerStorage = ServerStorage::new();
     let mut selector = Selector::new()?;
-    let mut state = RefCell::new(Server::default());
-    let mut event_loop = ServerLoop::new(&STORAGE, &mut selector, &mut state, root)?;
+    let mut server = Server::default();
+    let mut event_loop = ServerLoop::new(&STORAGE, &mut selector, root)?;
     loop {
-        for line in core::mem::take(&mut event_loop.state_mut().log) {
-            println!("{line}");
+        for event in event_loop.events() {
+            server.on_event(event);
         }
         match poll(&mut [PollFd::new(&event_loop, PollFlags::IN)], None) {
             Ok(_) | Err(Errno::INTR) => {}

@@ -1,6 +1,4 @@
-use crate::{
-    context::Context, io::AsyncWrite, net::socket::Socket, selector::Direction, state::State,
-};
+use crate::{context::Context, io::AsyncWrite, net::socket::Socket, selector::Direction};
 
 /// Write half of a TCP/Unix stream.
 #[must_use]
@@ -22,7 +20,8 @@ impl<'s> BorrowedWriteHalf<'s> {
     ///
     /// This method is cancel safe.
     pub async fn writable<
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -30,7 +29,7 @@ impl<'s> BorrowedWriteHalf<'s> {
         const FDS: usize,
     >(
         &self,
-        ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     ) {
         self.socket.ready(ctx, Direction::Write).await;
     }
@@ -51,7 +50,8 @@ impl AsyncWrite for BorrowedWriteHalf<'_> {
 
     fn write<
         'a,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -59,7 +59,7 @@ impl AsyncWrite for BorrowedWriteHalf<'_> {
         const FDS: usize,
     >(
         &'a mut self,
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.socket.write(ctx, buf)
@@ -67,7 +67,8 @@ impl AsyncWrite for BorrowedWriteHalf<'_> {
 
     fn flush<
         'a,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -75,7 +76,7 @@ impl AsyncWrite for BorrowedWriteHalf<'_> {
         const FDS: usize,
     >(
         &'a mut self,
-        _ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        _ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     ) -> impl Future<Output = rustix::io::Result<()>> {
         core::future::ready(Ok(()))
     }

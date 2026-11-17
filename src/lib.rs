@@ -15,6 +15,8 @@ mod claimed;
 mod context;
 mod conversions;
 mod event_loop;
+mod event_queue;
+mod events_iter;
 /// IO traits, implemented by streams from [`net`].
 pub mod io;
 /// A module that implements TCP/UDP/Unix sockets.
@@ -23,7 +25,6 @@ mod notify;
 mod pool;
 mod select;
 mod selector;
-mod state;
 mod storage;
 mod strace;
 mod sys;
@@ -35,10 +36,10 @@ mod waker_slot;
 
 pub use context::Context;
 pub use event_loop::{Error, EventLoop};
+pub use events_iter::EventsIter;
 pub use notify::Notified;
 pub use select::{Either2, Either3, select2, select3};
 pub use selector::Selector;
-pub use state::State;
 pub use storage::LoopStorage;
 pub use tasks::{JoinHandle, ReserveTask, TaskReservation};
 pub use time::{Sleep, Timeout};

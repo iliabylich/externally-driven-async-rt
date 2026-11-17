@@ -3,7 +3,6 @@ use rustix::net::{AddressFamily, SocketAddrUnix, SocketType};
 use crate::{
     context::Context,
     net::{UnixStream, socket::Socket},
-    state::State,
 };
 
 /// A Unix stream listener.
@@ -35,7 +34,8 @@ impl UnixListener {
     ///
     /// This method is cancel safe.
     pub async fn accept<
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -43,7 +43,7 @@ impl UnixListener {
         const FDS: usize,
     >(
         &mut self,
-        ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     ) -> rustix::io::Result<(UnixStream, SocketAddrUnix)> {
         let (socket, addr) = self.socket.accept(ctx).await?;
         let addr = match addr {

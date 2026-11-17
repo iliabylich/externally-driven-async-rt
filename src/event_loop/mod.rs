@@ -1,15 +1,13 @@
 mod error;
 
-use core::cell::{RefCell, RefMut};
-
 use rustix::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
 pub use self::error::Error;
 
 use crate::{
     context::Context,
+    events_iter::EventsIter,
     selector::Selector,
-    state::State,
     storage::LoopStorage,
     tasks::{Root, RootStatus},
 };
@@ -18,25 +16,27 @@ use crate::{
 #[must_use]
 pub struct EventLoop<
     'a,
-    S: State,
+    E: 'static,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
 > {
-    ctx: Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    pub(crate) ctx: Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
 }
 
 impl<
     'a,
-    S: State,
+    E: 'static,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
-> EventLoop<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+> EventLoop<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     /// Creates an event loop and polls given future once.
     ///
@@ -55,16 +55,15 @@ impl<
     /// 1. epoll/kqueue returned an error during initial poll
     /// 2. given future completed during initial poll.
     pub fn new<F, Fut>(
-        storage: &'static LoopStorage<TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        storage: &'static LoopStorage<E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         selector: &'a mut Selector,
-        state: &'a mut RefCell<S>,
         f: F,
     ) -> Result<Self, Error>
     where
-        F: FnOnce(Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>) -> Fut,
+        F: FnOnce(Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
-        let ctx = storage.claim(selector, state);
+        let ctx = storage.claim(selector);
         let event_loop = Self { ctx };
         ctx.storage.tasks.spawn_root(ctx.claimed, f(ctx));
         match ctx.storage.tasks.run_ready() {
@@ -116,11 +115,11 @@ impl<
         self.ctx.selector.notify()
     }
 
-    /// Returns a mutable reference to the stored state.
+    /// Returns an iterator that pops events pushed by [`Context::dispatch`](crate::Context::dispatch).
     ///
-    /// This is the only way to communicate with the external world.
-    pub fn state_mut(&mut self) -> RefMut<'_, S> {
-        self.ctx.state.borrow_mut()
+    /// This is the way to pass data from the event loop to the external world.
+    pub const fn events(&mut self) -> EventsIter<'_, E, EVENTS> {
+        EventsIter::new(&self.ctx.storage.events)
     }
 
     fn finish_drain(&self, status: RootStatus) -> Result<(), Error> {
@@ -133,21 +132,17 @@ impl<
             RootStatus::Finished => Err(Error::RootFinished),
         }
     }
-
-    #[cfg(test)]
-    pub(crate) fn ctx(&self) -> Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
-        self.ctx
-    }
 }
 
 impl<
-    S: State,
+    E: 'static,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
-> Drop for EventLoop<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+> Drop for EventLoop<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn drop(&mut self) {
         self.ctx.clear();
@@ -155,13 +150,14 @@ impl<
 }
 
 impl<
-    S: State,
+    E: 'static,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
-> AsFd for EventLoop<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+> AsFd for EventLoop<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn as_fd(&self) -> BorrowedFd<'_> {
         self.ctx.selector.as_fd()
@@ -169,13 +165,14 @@ impl<
 }
 
 impl<
-    S: State,
+    E: 'static,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
-> AsRawFd for EventLoop<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+> AsRawFd for EventLoop<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn as_raw_fd(&self) -> RawFd {
         self.as_fd().as_raw_fd()
@@ -183,13 +180,14 @@ impl<
 }
 
 impl<
-    S: State,
+    E: 'static,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
-> core::fmt::Debug for EventLoop<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+> core::fmt::Debug for EventLoop<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("EventLoop")

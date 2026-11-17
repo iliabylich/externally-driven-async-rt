@@ -6,7 +6,6 @@ use crate::{
     context::Context,
     io::{IoIndex, IoWaiter, IoWaiters, Wait},
     selector::{Direction, Selector},
-    state::State,
 };
 
 #[must_use]
@@ -20,13 +19,14 @@ pub(crate) struct IoRegistration<'a, const FDS: usize> {
 
 impl<'a, const FDS: usize> IoRegistration<'a, FDS> {
     pub(crate) fn new<
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
         const TIMERS: usize,
     >(
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         fd: BorrowedFd<'a>,
         cached: &Cell<Option<IoIndex>>,
         direction: Direction,

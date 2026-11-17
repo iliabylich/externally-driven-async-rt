@@ -1,6 +1,6 @@
 use rustix::net::{AddressFamily, SocketAddrUnix, SocketType};
 
-use crate::{context::Context, net::socket::Socket, state::State};
+use crate::{context::Context, net::socket::Socket};
 
 /// A Unix datagram socket.
 #[must_use]
@@ -41,7 +41,8 @@ impl UnixDatagram {
     /// This method is cancel safe.
     pub fn send_to<
         'a,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -49,7 +50,7 @@ impl UnixDatagram {
         const FDS: usize,
     >(
         &'a mut self,
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
         addr: &'a SocketAddrUnix,
     ) -> impl Future<Output = rustix::io::Result<usize>> {
@@ -68,7 +69,8 @@ impl UnixDatagram {
     /// This method is cancel safe.
     pub fn recv_from<
         'a,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -76,7 +78,7 @@ impl UnixDatagram {
         const FDS: usize,
     >(
         &'a mut self,
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = rustix::io::Result<(usize, SocketAddrUnix)>> {
         let recv = self.socket.recv_from(ctx, buf);
@@ -110,7 +112,8 @@ impl UnixDatagram {
     /// This method is cancel safe.
     pub fn send<
         'a,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -118,7 +121,7 @@ impl UnixDatagram {
         const FDS: usize,
     >(
         &'a mut self,
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.socket.send(ctx, buf)
@@ -135,7 +138,8 @@ impl UnixDatagram {
     /// This method is cancel safe.
     pub fn recv<
         'a,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -143,7 +147,7 @@ impl UnixDatagram {
         const FDS: usize,
     >(
         &'a mut self,
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.socket.recv(ctx, buf)

@@ -42,7 +42,6 @@ impl<F, const TIMERS: usize> core::fmt::Debug for Timeout<'_, F, TIMERS> {
 #[cfg(test)]
 mod tests {
     use core::{
-        cell::RefCell,
         future::{Future, pending},
         pin::pin,
         task::{Context, Poll, Waker},
@@ -51,16 +50,18 @@ mod tests {
 
     use crate::{
         Selector,
-        testing::{EventLoopTestingExt, Log, TestLoop, TestStorage, socketpair, wait_readable},
+        testing::{
+            EventLoopTestingExt, TestLoop, TestStorage, assert_yields, socketpair, wait_readable,
+        },
         time::{Instant, Sleep, Timeout, Timers},
     };
 
-    fn registrations(event_loop: &TestLoop<Log>) -> usize {
-        event_loop.ctx().storage.io_waiters.count()
+    fn registrations(event_loop: &TestLoop) -> usize {
+        event_loop.ctx.storage.io_waiters.count()
     }
 
-    fn has_timers(event_loop: &TestLoop<Log>) -> bool {
-        event_loop.ctx().storage.timers.next_deadline().is_some()
+    fn has_timers(event_loop: &TestLoop) -> bool {
+        event_loop.ctx.storage.timers.next_deadline().is_some()
     }
 
     #[test]
@@ -68,14 +69,12 @@ mod tests {
     fn future_finishing_first_wins() {
         let (rx, tx) = socketpair();
         let mut selector = Selector::new().unwrap();
-        let mut state = RefCell::new(Log::default());
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            &mut state,
             async move |ctx| {
                 let result = ctx
                     .timeout(Duration::from_secs(60), wait_readable(&ctx, &rx))
@@ -89,7 +88,7 @@ mod tests {
         assert_eq!(registrations(&event_loop), 1);
         event_loop.wake_by_writing(&tx);
         assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
-        assert_eq!(event_loop.state_mut().events(), [1]);
+        assert_yields!(event_loop.events(), [1]);
         assert!(!has_timers(&event_loop));
         assert_eq!(registrations(&event_loop), 0);
     }
@@ -99,14 +98,12 @@ mod tests {
     fn elapsing_drops_the_future() {
         let (rx, _tx) = socketpair();
         let mut selector = Selector::new().unwrap();
-        let mut state = RefCell::new(Log::default());
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            &mut state,
             async move |ctx| {
                 let result = ctx
                     .timeout(Duration::from_millis(10), wait_readable(&ctx, &rx))
@@ -116,8 +113,7 @@ mod tests {
             },
         )
         .unwrap();
-        event_loop.run_until_events(1);
-        assert_eq!(event_loop.state_mut().events(), [0]);
+        assert_eq!(event_loop.run_until_events(), [0]);
         assert!(!has_timers(&event_loop));
         assert_eq!(registrations(&event_loop), 0);
     }
@@ -128,14 +124,12 @@ mod tests {
         let (rx, tx) = socketpair();
         rustix::io::write(&tx, b"x").unwrap();
         let mut selector = Selector::new().unwrap();
-        let mut state = RefCell::new(Log::default());
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            &mut state,
             async move |ctx| {
                 let result = ctx.timeout(Duration::ZERO, wait_readable(&ctx, &rx)).await;
                 ctx.dispatch(result.map_or(0, |()| 1));
@@ -143,7 +137,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(event_loop.state_mut().events(), [1]);
+        assert_yields!(event_loop.events(), [1]);
         assert!(!has_timers(&event_loop));
     }
 

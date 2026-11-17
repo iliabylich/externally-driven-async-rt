@@ -1,5 +1,5 @@
 use core::{
-    cell::{Cell, RefCell},
+    cell::Cell,
     future::{Future, pending},
     pin::Pin,
     task::{Context, Poll, Waker},
@@ -9,21 +9,21 @@ use core::{
 use crate::{
     Selector,
     notify::{Notification, Notified},
-    testing::{EventLoopTestingExt, Log, TestLoop, TestStorage, counting_waker, is_readable},
+    testing::{
+        EventLoopTestingExt, TestLoop, TestStorage, assert_yields, counting_waker, is_readable,
+    },
 };
 
 #[test]
 #[cfg_attr(miri, ignore)]
 fn notify_makes_the_loop_readable_and_wakes_the_waiter() {
     let mut selector = Selector::new().unwrap();
-    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        &mut state,
         async |ctx| {
             for i in 1.. {
                 ctx.notified().await;
@@ -35,13 +35,11 @@ fn notify_makes_the_loop_readable_and_wakes_the_waiter() {
     assert!(!is_readable(&event_loop, 0));
 
     event_loop.notify().unwrap();
-    event_loop.run_until_events(1);
-    assert_eq!(event_loop.state_mut().events(), [1]);
+    assert_eq!(event_loop.run_until_events(), [1]);
     assert!(!is_readable(&event_loop, 0));
 
     event_loop.notify().unwrap();
-    event_loop.run_until_events(2);
-    assert_eq!(event_loop.state_mut().events(), [1, 2]);
+    assert_eq!(event_loop.run_until_events(), [2]);
     assert!(!is_readable(&event_loop, 0));
 }
 
@@ -49,14 +47,12 @@ fn notify_makes_the_loop_readable_and_wakes_the_waiter() {
 #[cfg_attr(miri, ignore)]
 fn notifications_coalesce() {
     let mut selector = Selector::new().unwrap();
-    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        &mut state,
         async |ctx| {
             for i in 1.. {
                 ctx.notified().await;
@@ -69,23 +65,20 @@ fn notifications_coalesce() {
     event_loop.notify().unwrap();
     event_loop.notify().unwrap();
     event_loop.notify().unwrap();
-    event_loop.run_until_events(1);
+    assert_eq!(event_loop.run_until_events(), [1]);
     assert!(!is_readable(&event_loop, 0));
-    assert_eq!(event_loop.state_mut().events(), [1]);
 }
 
 #[test]
 #[cfg_attr(miri, ignore)]
 fn notification_without_a_waiter_is_kept() {
     let mut selector = Selector::new().unwrap();
-    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        &mut state,
         async |ctx| {
             ctx.sleep(Duration::from_millis(10)).await;
             ctx.dispatch(1);
@@ -99,10 +92,9 @@ fn notification_without_a_waiter_is_kept() {
     event_loop.notify().unwrap();
     assert!(is_readable(&event_loop, 0));
     assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
-    assert!(event_loop.state_mut().events().is_empty());
+    assert_yields!(event_loop.events(), []);
 
-    event_loop.run_until_events(2);
-    assert_eq!(event_loop.state_mut().events(), [1, 2]);
+    assert_eq!(event_loop.run_until_events(), [1, 2]);
 }
 
 #[test]

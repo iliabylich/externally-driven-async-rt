@@ -6,7 +6,6 @@ use crate::{
     context::Context,
     io::{AsyncRead, AsyncWrite},
     net::{BorrowedReadHalf, BorrowedWriteHalf, socket::Socket},
-    state::State,
 };
 
 /// A TCP stream.
@@ -30,14 +29,15 @@ impl TcpStream {
     ///
     /// This method is cancel safe.
     pub async fn connect<
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
         const TIMERS: usize,
         const FDS: usize,
     >(
-        ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         addr: SocketAddr,
     ) -> rustix::io::Result<Self> {
         let socket = Socket::connect_stream(ctx, &addr).await?;
@@ -109,7 +109,8 @@ impl AsyncRead for TcpStream {
 
     fn read<
         'a,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -117,7 +118,7 @@ impl AsyncRead for TcpStream {
         const FDS: usize,
     >(
         &'a mut self,
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.socket.read(ctx, buf)
@@ -129,7 +130,8 @@ impl AsyncWrite for TcpStream {
 
     fn write<
         'a,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -137,7 +139,7 @@ impl AsyncWrite for TcpStream {
         const FDS: usize,
     >(
         &'a mut self,
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.socket.write(ctx, buf)
@@ -145,7 +147,8 @@ impl AsyncWrite for TcpStream {
 
     fn flush<
         'a,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -153,7 +156,7 @@ impl AsyncWrite for TcpStream {
         const FDS: usize,
     >(
         &'a mut self,
-        _ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        _ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     ) -> impl Future<Output = rustix::io::Result<()>> {
         core::future::ready(Ok(()))
     }

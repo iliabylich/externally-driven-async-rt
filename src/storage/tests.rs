@@ -1,17 +1,16 @@
-use core::cell::{Cell, RefCell};
+use core::cell::Cell;
 
 use crate::{LoopStorage, Selector, selector::Direction, testing::counting_waker, time::Instant};
 
-type SmallStorage = LoopStorage<1, 64, 0, 2, 2>;
+type SmallStorage = LoopStorage<(), 1, 1, 64, 0, 2, 2>;
 
 #[test]
 fn clearing_drops_live_wakers() {
     let drops = Cell::new(0);
     let selector = Selector::new().unwrap();
-    let state = RefCell::new(());
     let ctx = {
         static STORAGE: SmallStorage = SmallStorage::new();
-        STORAGE.claim(&selector, &state)
+        STORAGE.claim(&selector)
     };
     let _ = ctx
         .storage
@@ -34,9 +33,8 @@ fn clearing_drops_live_wakers() {
 fn a_storage_can_only_be_claimed_once() {
     static STORAGE: SmallStorage = SmallStorage::new();
     let selector = Selector::new().unwrap();
-    let state = RefCell::new(());
-    let _ctx1 = STORAGE.claim(&selector, &state);
-    let _ctx2 = STORAGE.claim(&selector, &state);
+    let _ctx1 = STORAGE.claim(&selector);
+    let _ctx2 = STORAGE.claim(&selector);
 }
 
 #[test]

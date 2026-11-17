@@ -19,10 +19,9 @@ The whole concept of the library is to define an async closure, wrap it with the
 
 + [`EventLoop`] - the main type
     + takes an async closure in [`EventLoop::new`]
-    + borrows user-defined state (see [`State`]) for its whole lifetime
     + implements [`rustix::fd::AsFd`]
     + can be driven with [`EventLoop::drain_events_without_blocking`]
-    + the state can be accessed between drains with [`EventLoop::state_mut`]
+    + events dispatched by tasks can be popped between drains with [`EventLoop::events`]
 + [`LoopStorage`] - the storage
     + must be static
     + can be used by only one [`EventLoop`] ever, creating a second one with the same storage panics, even after the first one is dropped
@@ -33,39 +32,43 @@ The whole concept of the library is to define an async closure, wrap it with the
 + [`Context`] - a shared handle to interact with the event loop
     + provides methods like [`Context::spawn`], [`Context::sleep`]
     + is an argument of most network related operations like [`net::TcpStream::connect`]
-+ [`State`] trait - a way to inject your own state management
-    + define your own state and event types, make it implement [`State`] by specifying how it consumes events
-    + call [`Context::dispatch`] to trigger state transition
-    + between drains read what the tasks produced via [`EventLoop::state_mut`]
++ events - a way to pass data from tasks to the external world
+    + define your own event type, choose maximum events queue capacity and pass them to [`LoopStorage`]
+    + call [`Context::dispatch`] to push an event into the queue
+    + between drains pop what the tasks produced with [`EventLoop::events`]
 + [`net`] module with some types to work with TCP/UDP/Unix sockets
 
 ### Example
 
 ```rust,no_run
-use core::{cell::RefCell, time::Duration};
+use core::time::Duration;
 
 use externally_driven_async_rt::{EventLoop, LoopStorage, Selector};
 use rustix::event::{PollFd, PollFlags, poll};
 
+const EVENTS: usize = 1;
 const TASKS: usize = 1;
 const TASK_SIZE: usize = 64;
 const ROOT_TASK_SIZE: usize = 256;
 const TIMERS: usize = 1;
 const FDS: usize = 1;
 
-type Storage = LoopStorage<TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
+type Event = &'static str;
+type Storage = LoopStorage<Event, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     static STORAGE: Storage = Storage::new();
     let mut selector = Selector::new()?;
-    let mut state = RefCell::new(());
-    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, &mut state, async |ctx| loop {
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| loop {
         ctx.sleep(Duration::from_secs(1)).await;
-        println!("hello");
+        ctx.dispatch("hello");
     })?;
     loop {
         poll(&mut [PollFd::new(&event_loop, PollFlags::IN)], None)?;
         event_loop.drain_events_without_blocking()?;
+        for event in event_loop.events() {
+            println!("{event}");
+        }
     }
 }
 ```
@@ -77,3 +80,4 @@ As you can see, everything has an upper bound:
 3. maximum size of the root task (stored separately, it's usually bigger than sub-tasks, exceeding it panics at runtime)
 4. maximum number of co-existing timers (`ctx.sleep(<duration>)` or `ctx.timeout()` API, exceeding it panics at runtime)
 5. maximum number of co-existing file descriptors that runtime operates on (exceeding it panics at runtime)
+6. maximum number of dispatched events that are not yet popped via `event_loop.events()` (exceeding it panics at runtime)

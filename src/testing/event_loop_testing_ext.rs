@@ -1,16 +1,11 @@
-use core::borrow::Borrow;
-
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     fd::AsFd,
 };
 
-use crate::{
-    Error, EventLoop, State,
-    testing::{Log, is_readable},
-};
+use crate::{Error, EventLoop, testing::is_readable};
 
-pub(crate) trait EventLoopTestingExt<S> {
+pub(crate) trait EventLoopTestingExt<E> {
     fn wake_by_writing(&self, peer: impl AsFd);
 
     fn run_until_root_finishes(&mut self);
@@ -19,19 +14,19 @@ pub(crate) trait EventLoopTestingExt<S> {
 
     fn peer_read_exact(&mut self, peer: impl AsFd, buf: &mut [u8]);
 
-    fn run_until_events(&mut self, count: usize)
-    where
-        S: Borrow<Log>;
+    fn run_until_events<const N: usize>(&mut self) -> [E; N];
 }
 
 impl<
-    S: State,
+    E: 'static,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
-> EventLoopTestingExt<S> for EventLoop<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+> EventLoopTestingExt<E>
+    for EventLoop<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn wake_by_writing(&self, peer: impl AsFd) {
         rustix::io::write(peer, b"x").unwrap();
@@ -81,13 +76,15 @@ impl<
         }
     }
 
-    fn run_until_events(&mut self, count: usize)
-    where
-        S: Borrow<Log>,
-    {
-        while (*self.state_mut()).borrow().events().len() < count {
-            assert!(is_readable(&*self, 2000), "the loop never became ready");
-            assert_eq!(self.drain_events_without_blocking(), Ok(()));
-        }
+    fn run_until_events<const N: usize>(&mut self) -> [E; N] {
+        core::array::from_fn(|_| {
+            loop {
+                if let Some(event) = self.events().next() {
+                    return event;
+                }
+                assert!(is_readable(&*self, 2000), "the loop never became ready");
+                assert_eq!(self.drain_events_without_blocking(), Ok(()));
+            }
+        })
     }
 }

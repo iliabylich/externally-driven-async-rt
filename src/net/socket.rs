@@ -18,7 +18,6 @@ use crate::{
     io::{IoIndex, IoRegistration},
     net::retry::Retry,
     selector::Direction,
-    state::State,
     strace::{syscall, syscall_end, syscall_start},
 };
 
@@ -124,7 +123,8 @@ impl Socket {
     }
 
     pub(crate) async fn connect_stream<
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -132,7 +132,7 @@ impl Socket {
         const FDS: usize,
         A: SocketAddrArg,
     >(
-        ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         addr: &A,
     ) -> rustix::io::Result<Self> {
         let socket = Self::new(addr.as_any().address_family(), SocketType::STREAM)?;
@@ -155,7 +155,8 @@ impl Socket {
     }
 
     pub(crate) async fn accept<
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -163,7 +164,7 @@ impl Socket {
         const FDS: usize,
     >(
         &self,
-        ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     ) -> rustix::io::Result<(Self, Option<SocketAddrAny>)> {
         let (fd, addr) = self
             .retry(ctx, Direction::Read, |fd| {
@@ -180,7 +181,8 @@ impl Socket {
 
     pub(crate) fn read<
         'a,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -188,7 +190,7 @@ impl Socket {
         const FDS: usize,
     >(
         &'a self,
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.retry(ctx, Direction::Read, move |fd| {
@@ -201,7 +203,8 @@ impl Socket {
 
     pub(crate) fn write<
         'a,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -209,7 +212,7 @@ impl Socket {
         const FDS: usize,
     >(
         &'a self,
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.retry(ctx, Direction::Write, move |fd| {
@@ -222,7 +225,8 @@ impl Socket {
 
     pub(crate) fn send<
         'a,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -230,7 +234,7 @@ impl Socket {
         const FDS: usize,
     >(
         &'a self,
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.retry(ctx, Direction::Write, move |fd| {
@@ -242,7 +246,8 @@ impl Socket {
     }
 
     pub(crate) async fn recv<
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -250,7 +255,7 @@ impl Socket {
         const FDS: usize,
     >(
         &self,
-        ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &mut [u8],
     ) -> rustix::io::Result<usize> {
         let (len, _) = self
@@ -271,7 +276,8 @@ impl Socket {
 
     pub(crate) fn send_to<
         'a,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -280,7 +286,7 @@ impl Socket {
         A: SocketAddrArg,
     >(
         &'a self,
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
         addr: &'a A,
     ) -> impl Future<Output = rustix::io::Result<usize>> {
@@ -300,7 +306,8 @@ impl Socket {
     }
 
     pub(crate) async fn recv_from<
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -308,7 +315,7 @@ impl Socket {
         const FDS: usize,
     >(
         &self,
-        ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &mut [u8],
     ) -> rustix::io::Result<(usize, Option<SocketAddrAny>)> {
         let (len, _, addr) = self
@@ -378,7 +385,8 @@ impl Socket {
     }
 
     pub(crate) async fn ready<
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -386,7 +394,7 @@ impl Socket {
         const FDS: usize,
     >(
         &self,
-        ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         direction: Direction,
     ) {
         let mut registration = IoRegistration::new(ctx, self.0.as_fd(), &self.1, direction);
@@ -418,7 +426,8 @@ impl Socket {
     const fn retry<
         'a,
         'ctx,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -428,10 +437,10 @@ impl Socket {
         F: FnMut(&OwnedFd) -> rustix::io::Result<T> + Unpin,
     >(
         &'a self,
-        ctx: &'a Context<'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'ctx, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         direction: Direction,
         op: F,
-    ) -> Retry<'a, 'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, F> {
+    ) -> Retry<'a, 'ctx, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, F> {
         Retry::new(ctx, &self.0, &self.1, direction, op)
     }
 }

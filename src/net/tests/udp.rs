@@ -1,5 +1,4 @@
 use core::{
-    cell::RefCell,
     future::pending,
     net::{IpAddr, Ipv4Addr, SocketAddr},
 };
@@ -13,7 +12,7 @@ use rustix::{
 use crate::{
     Selector,
     net::UdpSocket,
-    testing::{EventLoopTestingExt, Log, TestLoop, TestStorage, raw_socket},
+    testing::{EventLoopTestingExt, TestLoop, TestStorage, raw_socket},
 };
 
 const LOCALHOST: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
@@ -30,14 +29,12 @@ fn raw_peer() -> (OwnedFd, SocketAddr) {
 fn round_trip_with_a_raw_peer() {
     let (peer, peer_addr) = raw_peer();
     let mut selector = Selector::new().unwrap();
-    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        &mut state,
         async move |ctx| {
             let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
             assert!(socket.local_addr().unwrap().port() != 0);
@@ -68,7 +65,7 @@ fn round_trip_with_a_raw_peer() {
             len
         );
     }
-    event_loop.run_until_events(1);
+    event_loop.run_until_events::<1>();
 }
 
 #[test]
@@ -76,14 +73,12 @@ fn round_trip_with_a_raw_peer() {
 fn connected_socket_reports_a_refused_peer() {
     let closed = raw_peer().1;
     let mut selector = Selector::new().unwrap();
-    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        &mut state,
         async move |ctx| {
             let mut buf = [0; 8];
             let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
@@ -101,7 +96,6 @@ fn connected_socket_reports_a_refused_peer() {
         },
     )
     .unwrap();
-    event_loop.run_until_events(2);
     let refused = Errno::CONNREFUSED.raw_os_error() as u32;
-    assert_eq!(event_loop.state_mut().events(), [refused, refused]);
+    assert_eq!(event_loop.run_until_events(), [refused, refused]);
 }

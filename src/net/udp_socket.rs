@@ -5,7 +5,7 @@ use rustix::{
     net::{SocketType, addr::SocketAddrArg},
 };
 
-use crate::{context::Context, net::socket::Socket, state::State};
+use crate::{context::Context, net::socket::Socket};
 
 /// A UDP socket.
 #[must_use]
@@ -35,7 +35,8 @@ impl UdpSocket {
     ///
     /// This method is cancel safe.
     pub async fn send_to<
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -43,7 +44,7 @@ impl UdpSocket {
         const FDS: usize,
     >(
         &mut self,
-        ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &[u8],
         addr: SocketAddr,
     ) -> rustix::io::Result<usize> {
@@ -61,7 +62,8 @@ impl UdpSocket {
     /// This method is cancel safe.
     pub fn recv_from<
         'a,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -69,7 +71,7 @@ impl UdpSocket {
         const FDS: usize,
     >(
         &'a mut self,
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = rustix::io::Result<(usize, SocketAddr)>> {
         let recv = self.socket.recv_from(ctx, buf);
@@ -99,7 +101,8 @@ impl UdpSocket {
     /// This method is cancel safe.
     pub fn send<
         'a,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -107,7 +110,7 @@ impl UdpSocket {
         const FDS: usize,
     >(
         &'a mut self,
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.socket.send(ctx, buf)
@@ -124,7 +127,8 @@ impl UdpSocket {
     /// This method is cancel safe.
     pub fn recv<
         'a,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -132,7 +136,7 @@ impl UdpSocket {
         const FDS: usize,
     >(
         &'a mut self,
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = rustix::io::Result<usize>> {
         self.socket.recv(ctx, buf)

@@ -14,14 +14,14 @@ use crate::{
     context::Context,
     io::{IoIndex, IoRegistration},
     selector::Direction,
-    state::State,
 };
 
 #[must_use]
 pub(crate) struct Retry<
     'a,
     'ctx,
-    S: State,
+    E: 'static,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
@@ -29,7 +29,7 @@ pub(crate) struct Retry<
     const FDS: usize,
     F,
 > {
-    ctx: &'a Context<'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    ctx: &'a Context<'ctx, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     fd: &'a OwnedFd,
     cached: &'a Cell<Option<IoIndex>>,
     direction: Direction,
@@ -41,17 +41,18 @@ pub(crate) struct Retry<
 impl<
     'a,
     'ctx,
-    S: State,
+    E: 'static,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
     F,
-> Retry<'a, 'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, F>
+> Retry<'a, 'ctx, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, F>
 {
     pub(crate) const fn new(
-        ctx: &'a Context<'ctx, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'ctx, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         fd: &'a OwnedFd,
         cached: &'a Cell<Option<IoIndex>>,
         direction: Direction,
@@ -70,7 +71,8 @@ impl<
 }
 
 impl<
-    S: State,
+    E: 'static,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
@@ -78,7 +80,7 @@ impl<
     const FDS: usize,
     T,
     F: FnMut(&OwnedFd) -> rustix::io::Result<T> + Unpin,
-> Future for Retry<'_, '_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, F>
+> Future for Retry<'_, '_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, F>
 {
     type Output = rustix::io::Result<T>;
 
@@ -105,14 +107,15 @@ impl<
 }
 
 impl<
-    S: State,
+    E: 'static,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
     F,
-> Drop for Retry<'_, '_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, F>
+> Drop for Retry<'_, '_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, F>
 {
     fn drop(&mut self) {
         if let Some(registration) = &self.registration {

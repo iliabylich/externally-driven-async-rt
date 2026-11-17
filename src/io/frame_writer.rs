@@ -1,4 +1,4 @@
-use crate::{Context, State, io::AsyncWrite};
+use crate::{Context, io::AsyncWrite};
 
 /// Writes frames of exactly `N` bytes to an [`AsyncWrite`].
 ///
@@ -38,7 +38,8 @@ impl<W: AsyncWrite, const N: usize> FrameWriter<W, N> {
     ///
     /// This method is cancel safe.
     pub async fn write_all<
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -46,7 +47,7 @@ impl<W: AsyncWrite, const N: usize> FrameWriter<W, N> {
         const FDS: usize,
     >(
         &mut self,
-        ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         frame: &[u8; N],
     ) -> Result<(), FrameWriterError<W::Error>> {
         self.flush(ctx).await?;
@@ -65,7 +66,8 @@ impl<W: AsyncWrite, const N: usize> FrameWriter<W, N> {
     ///
     /// This method is cancel safe.
     pub async fn flush<
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -73,7 +75,7 @@ impl<W: AsyncWrite, const N: usize> FrameWriter<W, N> {
         const FDS: usize,
     >(
         &mut self,
-        ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     ) -> Result<(), FrameWriterError<W::Error>> {
         while self.written < N {
             let Some(rest) = self.buf.get(self.written..) else {
@@ -126,7 +128,6 @@ impl<E: core::error::Error> core::error::Error for FrameWriterError<E> {}
 #[cfg(test)]
 mod tests {
     use core::{
-        cell::RefCell,
         future::{Future, poll_fn},
         pin::pin,
         task::{Context, Poll, Waker},
@@ -135,9 +136,9 @@ mod tests {
     use rustix::io::Errno;
 
     use crate::{
-        Selector, State,
+        Selector,
         io::{AsyncWrite, FrameWriter, FrameWriterError},
-        testing::{Log, TestContext, TestStorage},
+        testing::{TestContext, TestStorage},
     };
 
     struct Sink {
@@ -171,7 +172,8 @@ mod tests {
 
         fn write<
             'a,
-            S: State,
+            E: 'static,
+            const EVENTS: usize,
             const TASKS: usize,
             const TASK_SIZE: usize,
             const ROOT_TASK_SIZE: usize,
@@ -179,7 +181,7 @@ mod tests {
             const FDS: usize,
         >(
             &'a mut self,
-            _ctx: &'a crate::Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+            _ctx: &'a crate::Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
             buf: &'a [u8],
         ) -> impl Future<Output = rustix::io::Result<usize>> {
             poll_fn(move |_| {
@@ -199,7 +201,8 @@ mod tests {
 
         fn flush<
             'a,
-            S: State,
+            E: 'static,
+            const EVENTS: usize,
             const TASKS: usize,
             const TASK_SIZE: usize,
             const ROOT_TASK_SIZE: usize,
@@ -207,7 +210,7 @@ mod tests {
             const FDS: usize,
         >(
             &'a mut self,
-            _ctx: &'a crate::Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+            _ctx: &'a crate::Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         ) -> impl Future<Output = rustix::io::Result<()>> {
             self.flushed = self.len;
             core::future::ready(Ok(()))
@@ -222,8 +225,7 @@ mod tests {
     fn writes_frames_on_the_next_write_and_flush() {
         static STORAGE: TestStorage = TestStorage::new();
         let selector = Selector::new().unwrap();
-        let state = RefCell::new(Log::default());
-        let ctx: TestContext<'_> = STORAGE.claim(&selector, &state);
+        let ctx: TestContext<'_> = STORAGE.claim(&selector);
         let mut writer = FrameWriter::<_, 5>::new(Sink::new(2, 16, None));
 
         assert_eq!(
@@ -246,8 +248,7 @@ mod tests {
     fn resumes_a_cancelled_write() {
         static STORAGE: TestStorage = TestStorage::new();
         let selector = Selector::new().unwrap();
-        let state = RefCell::new(Log::default());
-        let ctx: TestContext<'_> = STORAGE.claim(&selector, &state);
+        let ctx: TestContext<'_> = STORAGE.claim(&selector);
         let mut writer = FrameWriter::<_, 5>::new(Sink::new(2, 3, None));
 
         assert_eq!(
@@ -272,8 +273,7 @@ mod tests {
     fn fails_when_zero_bytes_are_accepted() {
         static STORAGE: TestStorage = TestStorage::new();
         let selector = Selector::new().unwrap();
-        let state = RefCell::new(Log::default());
-        let ctx: TestContext<'_> = STORAGE.claim(&selector, &state);
+        let ctx: TestContext<'_> = STORAGE.claim(&selector);
         let mut writer = FrameWriter::<_, 5>::new(Sink::new(0, 16, None));
 
         assert_eq!(
@@ -290,8 +290,7 @@ mod tests {
     fn returns_syscall_errors() {
         static STORAGE: TestStorage = TestStorage::new();
         let selector = Selector::new().unwrap();
-        let state = RefCell::new(Log::default());
-        let ctx: TestContext<'_> = STORAGE.claim(&selector, &state);
+        let ctx: TestContext<'_> = STORAGE.claim(&selector);
         let mut writer = FrameWriter::<_, 5>::new(Sink::new(2, 16, Some(Errno::PIPE)));
 
         assert_eq!(

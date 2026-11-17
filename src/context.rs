@@ -1,11 +1,10 @@
-use core::{cell::RefCell, future::Future, time::Duration};
+use core::{future::Future, time::Duration};
 
 use crate::{
     claimed::Claimed,
     io::IoIndex,
     notify::Notified,
     selector::{EVENTS_PER_CALL, Selector, SelectorEvent},
-    state::State,
     storage::LoopStorage,
     tasks::{JoinHandle, ReserveTask},
     time::{Instant, Sleep, Timeout},
@@ -13,43 +12,43 @@ use crate::{
 
 /// A handle of the event loop that you are currently in.
 ///
-/// Used to spawn tasks, sleep, dispatch events to the state and start IO operations.
+/// Used to spawn tasks, sleep, dispatch events to the external world and start IO operations.
 #[must_use]
 pub struct Context<
     'a,
-    S: State,
+    E: 'static,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
 > {
-    pub(crate) storage: &'static LoopStorage<TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    pub(crate) storage:
+        &'static LoopStorage<E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     pub(crate) selector: &'a Selector,
-    pub(crate) state: &'a RefCell<S>,
     pub(crate) claimed: Claimed<'a>,
 }
 
 impl<
     'a,
-    S: State,
+    E: 'static,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
-> Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+> Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     pub(crate) fn claim(
-        storage: &'static LoopStorage<TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        storage: &'static LoopStorage<E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         selector: &'a Selector,
-        state: &'a RefCell<S>,
     ) -> Self {
         storage.tasks.queue.claim();
         Self {
             storage,
             selector,
-            state,
             // SAFETY: claiming the queue above panics unless this is the storage's first claim, so
             // these tasks belong to this loop alone. Only the `EventLoop<'a>` that owns this claim
             // polls and drops them, and it drops them all before `'a` ends or, if leaked, never
@@ -58,9 +57,17 @@ impl<
         }
     }
 
-    /// Dispatches given `event` on a state that was given to [`EventLoop`](crate::EventLoop).
-    pub fn dispatch(&self, event: S::Event) {
-        self.state.borrow_mut().apply(event);
+    /// Pushes given `event` into the queue that [`EventLoop::events`](crate::EventLoop::events)
+    /// pops from.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the queue already holds `EVENTS` events.
+    pub fn dispatch(&self, event: E) {
+        assert!(
+            self.storage.events.push(event).is_ok(),
+            "more than {EVENTS} undrained events"
+        );
     }
 
     /// Spawns a task with a given async closure.
@@ -135,6 +142,7 @@ impl<
         self.storage.timers.clear();
         self.storage.io_waiters.clear();
         self.storage.notification.clear();
+        self.storage.events.clear();
     }
 
     pub(crate) fn process_selector_events(&self) -> rustix::io::Result<()> {
@@ -176,13 +184,14 @@ impl<
 }
 
 impl<
-    S: State,
+    E: 'static,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
-> Clone for Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+> Clone for Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn clone(&self) -> Self {
         *self
@@ -190,24 +199,26 @@ impl<
 }
 
 impl<
-    S: State,
+    E: 'static,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
-> Copy for Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+> Copy for Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
 }
 
 impl<
-    S: State,
+    E: 'static,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
-> core::fmt::Debug for Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+> core::fmt::Debug for Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("Context")

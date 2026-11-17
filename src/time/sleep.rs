@@ -55,7 +55,6 @@ impl<const TIMERS: usize> core::fmt::Debug for Sleep<'_, TIMERS> {
 #[cfg(test)]
 mod tests {
     use core::{
-        cell::RefCell,
         pin::Pin,
         task::{Context, Poll, Waker},
         time::Duration,
@@ -64,7 +63,9 @@ mod tests {
     use crate::{
         Selector,
         tasks::WakeQueue,
-        testing::{EventLoopTestingExt, Log, TestLoop, TestStorage, is_readable, sleep_blocking},
+        testing::{
+            EventLoopTestingExt, TestLoop, TestStorage, assert_yields, is_readable, sleep_blocking,
+        },
         time::{Instant, Sleep, Timers},
     };
 
@@ -73,38 +74,34 @@ mod tests {
     fn sleep_waits_at_least_its_duration() {
         let start = Instant::now();
         let mut selector = Selector::new().unwrap();
-        let mut state = RefCell::new(Log::default());
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            &mut state,
             async |ctx| {
                 ctx.sleep(Duration::from_millis(20)).await;
                 ctx.dispatch(1);
             },
         )
         .unwrap();
-        assert!(event_loop.state_mut().events().is_empty());
+        assert_yields!(event_loop.events(), []);
         event_loop.run_until_root_finishes();
         assert!(Instant::now().saturating_duration_since(start) >= Duration::from_millis(20));
-        assert_eq!(event_loop.state_mut().events(), [1]);
+        assert_yields!(event_loop.events(), [1]);
     }
 
     #[test]
     #[cfg_attr(miri, ignore)]
     fn sleeps_complete_in_deadline_order() {
         let mut selector = Selector::new().unwrap();
-        let mut state = RefCell::new(Log::default());
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            &mut state,
             async |ctx| {
                 let handles = [30, 10, 20].map(|ms| {
                     ctx.spawn(async move |ctx| {
@@ -119,7 +116,7 @@ mod tests {
         )
         .unwrap();
         event_loop.run_until_root_finishes();
-        assert_eq!(event_loop.state_mut().events(), [10, 20, 30]);
+        assert_yields!(event_loop.events(), [10, 20, 30]);
         assert!(!is_readable(&event_loop, 0));
     }
 
@@ -129,14 +126,12 @@ mod tests {
         let period = Duration::from_millis(10);
         let start = Instant::now();
         let mut selector = Selector::new().unwrap();
-        let mut state = RefCell::new(Log::default());
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            &mut state,
             async move |ctx| {
                 let mut next = Instant::now();
                 for i in 0..5 {
@@ -149,7 +144,7 @@ mod tests {
         )
         .unwrap();
         event_loop.run_until_root_finishes();
-        assert_eq!(event_loop.state_mut().events(), [0, 1, 2, 3, 4]);
+        assert_yields!(event_loop.events(), [0, 1, 2, 3, 4]);
         assert!(Instant::now().saturating_duration_since(start) >= period * 5);
     }
 

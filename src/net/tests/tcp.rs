@@ -1,5 +1,4 @@
 use core::{
-    cell::RefCell,
     future::{pending, poll_fn},
     net::SocketAddr,
     pin::pin,
@@ -17,7 +16,7 @@ use crate::{
     Selector,
     io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpStream},
-    testing::{self, EventLoopTestingExt, Log, TestLoop, TestStorage, is_writable, raw_accept},
+    testing::{self, EventLoopTestingExt, TestLoop, TestStorage, is_writable, raw_accept},
 };
 
 const LOCALHOST: SocketAddr =
@@ -40,14 +39,12 @@ fn raw_listener() -> (OwnedFd, SocketAddr) {
 fn echo_with_a_raw_peer() {
     let (listener, addr) = raw_listener();
     let mut selector = Selector::new().unwrap();
-    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        &mut state,
         async move |ctx| {
             let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
             assert_eq!(stream.peer_addr().unwrap(), addr);
@@ -74,7 +71,7 @@ fn echo_with_a_raw_peer() {
     event_loop.drain_until_readable(&peer);
     assert_eq!(rustix::io::read(&peer, &mut buf).unwrap(), 0, "no EOF");
     drop(peer);
-    event_loop.run_until_events(1);
+    event_loop.run_until_events::<1>();
 }
 
 #[test]
@@ -83,14 +80,12 @@ fn listener_accepts_a_raw_client() {
     let mut listener = TcpListener::bind(LOCALHOST).unwrap();
     let addr = listener.local_addr().unwrap();
     let mut selector = Selector::new().unwrap();
-    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        &mut state,
         async move |ctx| {
             let (mut stream, peer) = listener.accept(&ctx).await.unwrap();
             assert_eq!(stream.peer_addr().unwrap(), peer);
@@ -113,7 +108,7 @@ fn listener_accepts_a_raw_client() {
     }
     assert!(is_writable(&client, 2000), "never connected");
     assert_eq!(rustix::io::write(&client, b"ping").unwrap(), 4);
-    event_loop.run_until_events(1);
+    event_loop.run_until_events::<1>();
     let mut buf = [0; 4];
     event_loop.peer_read_exact(&client, &mut buf);
     assert_eq!(&buf, b"pong");
@@ -124,14 +119,12 @@ fn listener_accepts_a_raw_client() {
 fn connect_to_a_closed_port_fails() {
     let addr = TcpListener::bind(LOCALHOST).unwrap().local_addr().unwrap();
     let mut selector = Selector::new().unwrap();
-    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        &mut state,
         async move |ctx| {
             let errno = TcpStream::connect(&ctx, addr).await.err().unwrap();
             ctx.dispatch(errno.raw_os_error() as u32);
@@ -139,9 +132,8 @@ fn connect_to_a_closed_port_fails() {
         },
     )
     .unwrap();
-    event_loop.run_until_events(1);
     assert_eq!(
-        event_loop.state_mut().events(),
+        event_loop.run_until_events(),
         [Errno::CONNREFUSED.raw_os_error() as u32]
     );
 }
@@ -154,14 +146,12 @@ fn borrowed_halves_read_and_write_concurrently_in_one_task() {
     let mut listener = TcpListener::bind(LOCALHOST).unwrap();
     let addr = listener.local_addr().unwrap();
     let mut selector = Selector::new().unwrap();
-    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        &mut state,
         async move |ctx| {
             let _ = ctx.spawn(async move |ctx| {
                 let (mut stream, _) = listener.accept(&ctx).await.unwrap();
@@ -222,8 +212,7 @@ fn borrowed_halves_read_and_write_concurrently_in_one_task() {
         },
     )
     .unwrap();
-    event_loop.run_until_events(1);
-    assert_eq!(event_loop.state_mut().events(), [LEN as u32]);
+    assert_eq!(event_loop.run_until_events(), [LEN as u32]);
 }
 
 #[test]
@@ -239,14 +228,12 @@ fn listener_binds_to_ipv6() {
 fn split_halves_wait_for_readiness_and_try_io() {
     let (listener, addr) = raw_listener();
     let mut selector = Selector::new().unwrap();
-    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        &mut state,
         async move |ctx| {
             let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
             let (rx, tx) = stream.split();
@@ -269,7 +256,7 @@ fn split_halves_wait_for_readiness_and_try_io() {
     event_loop.peer_read_exact(&peer, &mut buf);
     assert_eq!(&buf, b"hello");
     assert_eq!(rustix::io::write(&peer, b"world").unwrap(), 5);
-    event_loop.run_until_events(1);
+    event_loop.run_until_events::<1>();
 }
 
 #[test]
@@ -277,14 +264,12 @@ fn split_halves_wait_for_readiness_and_try_io() {
 fn set_keepalive_on_a_connected_stream() {
     let (listener, addr) = raw_listener();
     let mut selector = Selector::new().unwrap();
-    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        &mut state,
         async move |ctx| {
             let stream = TcpStream::connect(&ctx, addr).await.unwrap();
             stream
@@ -296,5 +281,5 @@ fn set_keepalive_on_a_connected_stream() {
     )
     .unwrap();
     let _peer = raw_accept(&listener);
-    event_loop.run_until_events(1);
+    event_loop.run_until_events::<1>();
 }

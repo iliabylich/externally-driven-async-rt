@@ -1,6 +1,6 @@
 use core::future::Future;
 
-use crate::{Context, State};
+use crate::Context;
 
 /// A stream that can be written to asynchronously.
 pub trait AsyncWrite {
@@ -18,7 +18,8 @@ pub trait AsyncWrite {
     /// Implementations in this crate are cancel safe.
     fn write<
         'a,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -26,7 +27,7 @@ pub trait AsyncWrite {
         const FDS: usize,
     >(
         &'a mut self,
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
     ) -> impl Future<Output = Result<usize, Self::Error>>;
 
@@ -41,7 +42,8 @@ pub trait AsyncWrite {
     /// Implementations in this crate are cancel safe.
     fn flush<
         'a,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -49,6 +51,6 @@ pub trait AsyncWrite {
         const FDS: usize,
     >(
         &'a mut self,
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     ) -> impl Future<Output = Result<(), Self::Error>>;
 }

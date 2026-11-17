@@ -1,6 +1,6 @@
 use core::future::Future;
 
-use crate::{Context, State, io::AsyncRead};
+use crate::{Context, io::AsyncRead};
 
 /// Helper methods on top of [`AsyncRead`], implemented for every [`AsyncRead`].
 pub trait AsyncReadExt: AsyncRead {
@@ -18,7 +18,8 @@ pub trait AsyncReadExt: AsyncRead {
     /// This method is not cancel safe: an unknown number of bytes may already be read into `buf`.
     fn read_exact<
         'a,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -26,7 +27,7 @@ pub trait AsyncReadExt: AsyncRead {
         const FDS: usize,
     >(
         &'a mut self,
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         mut buf: &'a mut [u8],
     ) -> impl Future<Output = Result<(), ReadExactError<Self::Error>>> {
         async move {
@@ -71,7 +72,6 @@ impl<E: core::error::Error> core::error::Error for ReadExactError<E> {}
 #[cfg(test)]
 mod tests {
     use core::{
-        cell::RefCell,
         future::{Future, pending, ready},
         net::SocketAddr,
         pin::pin,
@@ -84,11 +84,12 @@ mod tests {
     };
 
     use crate::{
-        Selector, State,
+        Selector,
         io::{AsyncRead, AsyncReadExt, ReadExactError},
         net::TcpStream,
         testing::{
-            EventLoopTestingExt, Log, TestContext, TestLoop, TestStorage, is_readable, raw_accept,
+            EventLoopTestingExt, TestContext, TestLoop, TestStorage, assert_yields, is_readable,
+            raw_accept,
         },
     };
 
@@ -115,7 +116,8 @@ mod tests {
 
         fn read<
             'a,
-            S: State,
+            E: 'static,
+            const EVENTS: usize,
             const TASKS: usize,
             const TASK_SIZE: usize,
             const ROOT_TASK_SIZE: usize,
@@ -123,7 +125,7 @@ mod tests {
             const FDS: usize,
         >(
             &'a mut self,
-            _ctx: &'a crate::Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+            _ctx: &'a crate::Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
             buf: &'a mut [u8],
         ) -> impl Future<Output = rustix::io::Result<usize>> {
             self.calls += 1;
@@ -143,8 +145,7 @@ mod tests {
         buf: &mut [u8],
     ) -> Poll<Result<(), ReadExactError<Errno>>> {
         let selector = Selector::new().unwrap();
-        let state = RefCell::new(Log::default());
-        let ctx: TestContext<'_> = storage.claim(&selector, &state);
+        let ctx: TestContext<'_> = storage.claim(&selector);
         let mut cx = Context::from_waker(Waker::noop());
         pin!(reader.read_exact(&ctx, buf)).poll(&mut cx)
     }
@@ -236,14 +237,12 @@ mod tests {
             .unwrap();
 
         let mut selector = Selector::new().unwrap();
-        let mut state = RefCell::new(Log::default());
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            &mut state,
             async move |ctx| {
                 let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
                 ctx.dispatch(1);
@@ -257,16 +256,15 @@ mod tests {
         .unwrap();
 
         let peer = raw_accept(&listener);
-        event_loop.run_until_events(1);
+        assert_eq!(event_loop.run_until_events(), [1]);
 
         rustix::io::write(&peer, b"hello ").unwrap();
         assert!(is_readable(&event_loop, 1000));
         assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
         assert!(!is_readable(&event_loop, 0));
-        assert_eq!(event_loop.state_mut().events(), [1]);
+        assert_yields!(event_loop.events(), []);
 
         rustix::io::write(&peer, b"world").unwrap();
-        event_loop.run_until_events(2);
-        assert_eq!(event_loop.state_mut().events(), [1, 2]);
+        assert_eq!(event_loop.run_until_events(), [2]);
     }
 }

@@ -6,12 +6,12 @@
     clippy::indexing_slicing
 )]
 
-use core::{cell::RefCell, net::SocketAddr, time::Duration};
+use core::{net::SocketAddr, time::Duration};
 use std::os::fd::AsFd;
 
 use externally_driven_async_rt::{
-    Context, Error, EventLoop, LoopStorage, Selector, State,
-    io::{AsyncRead, AsyncWrite},
+    Context, Error, EventLoop, LoopStorage, Selector,
+    io::{AsyncRead, AsyncWriteExt, WriteAllError},
     net::{TcpListener, TcpStream},
 };
 
@@ -21,25 +21,26 @@ use rustix::{
     io::Errno,
 };
 
+const EVENTS: usize = 256;
 const TASKS: usize = 5;
 const TASK_SIZE: usize = 1024;
 const ROOT_TASK_SIZE: usize = 4096;
 const TIMERS: usize = 4;
 const FDS: usize = 5;
 
-type ServerLoop<'a> = EventLoop<'a, Server, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
-type ServerContext<'a> = Context<'a, Server, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
+type ServerLoop<'a> = EventLoop<'a, Event, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
+type ServerContext<'a> = Context<'a, Event, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
 
-type ServerStorage = LoopStorage<TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
+type ServerStorage = LoopStorage<Event, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
 
 #[derive(Default)]
 struct Server {
     active: usize,
     total: usize,
     bytes: u64,
-    log: Vec<String>,
 }
 
+#[derive(Clone, Copy)]
 enum Event {
     Listening(SocketAddr),
     Connected(SocketAddr),
@@ -55,41 +56,36 @@ enum Event {
     Tick,
 }
 
-impl State for Server {
-    type Event = Event;
-
-    fn apply(&mut self, event: Event) {
-        let line = match event {
-            Event::Listening(addr) => format!("listening on {addr}"),
+impl Server {
+    fn on_event(&mut self, event: Event) {
+        match event {
+            Event::Listening(addr) => println!("listening on {addr}"),
             Event::Connected(peer) => {
                 self.active += 1;
                 self.total += 1;
-                format!("{peer} connected")
+                println!("{peer} connected");
             }
             Event::Echoed { peer, len } => {
                 self.bytes += len as u64;
-                format!("{peer}: echoed {len} bytes")
+                println!("{peer}: echoed {len} bytes");
             }
             Event::Disconnected { peer, error } => {
                 self.active -= 1;
                 match error {
-                    Some(errno) => format!("{peer} disconnected: {errno}"),
-                    None => format!("{peer} disconnected"),
+                    Some(errno) => println!("{peer} disconnected: {errno}"),
+                    None => println!("{peer} disconnected"),
                 }
             }
-            Event::AcceptFailed(errno) => format!("accept failed: {errno}"),
-            Event::Tick => self.stats(),
-        };
-        self.log.push(line);
+            Event::AcceptFailed(errno) => println!("accept failed: {errno}"),
+            Event::Tick => self.print_stats(),
+        }
     }
-}
 
-impl Server {
-    fn stats(&self) -> String {
-        format!(
+    fn print_stats(&self) {
+        println!(
             "{} active, {} total connections, {} bytes echoed",
             self.active, self.total, self.bytes
-        )
+        );
     }
 }
 
@@ -130,9 +126,10 @@ async fn echo(
         if len == 0 {
             return Ok(());
         }
-        let mut written = 0;
-        while written < len {
-            written += stream.write(ctx, &buf[written..len]).await?;
+        match stream.write_all(ctx, &buf[..len]).await {
+            Ok(()) => {}
+            Err(WriteAllError::Io(errno)) => return Err(errno),
+            Err(WriteAllError::WriteZero) => return Ok(()),
         }
         ctx.dispatch(Event::Echoed { peer, len });
     }
@@ -177,10 +174,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     static STORAGE: ServerStorage = ServerStorage::new();
     let mut selector = Selector::new()?;
-    let mut state = RefCell::new(Server::default());
-    let mut event_loop = ServerLoop::new(&STORAGE, &mut selector, &mut state, root)?;
-    for line in core::mem::take(&mut event_loop.state_mut().log) {
-        println!("{line}");
+    let mut server = Server::default();
+    let mut event_loop = ServerLoop::new(&STORAGE, &mut selector, root)?;
+    for event in event_loop.events() {
+        server.on_event(event);
     }
     println!("commands: stats, quit");
     let stdin = std::io::stdin();
@@ -204,8 +201,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if loop_ready {
             let result = event_loop.drain_events_without_blocking();
-            for line in core::mem::take(&mut event_loop.state_mut().log) {
-                println!("{line}");
+            for event in event_loop.events() {
+                server.on_event(event);
             }
             match result {
                 Ok(()) => {}
@@ -221,7 +218,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             for command in commands.drain(..) {
                 match command {
-                    Command::Stats => println!("{}", event_loop.state_mut().stats()),
+                    Command::Stats => server.print_stats(),
                     Command::Quit => return Ok(()),
                     Command::Unknown(command) => println!("unknown command: {command:?}"),
                 }

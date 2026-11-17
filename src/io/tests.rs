@@ -1,5 +1,5 @@
 use core::{
-    cell::{Cell, RefCell},
+    cell::Cell,
     future::{Future, pending, poll_fn},
     pin::{Pin, pin},
     task::{Poll, Waker},
@@ -11,23 +11,25 @@ use rustix::{
 };
 
 use crate::{
-    Context, LoopStorage, Selector, State,
+    Context, LoopStorage, Selector,
     io::{IoIndex, IoRegistration},
     selector::Direction,
     testing::{
-        EventLoopTestingExt, Log, TestContext, TestLoop, TestStorage, is_readable, socketpair,
+        EventLoopTestingExt, TestContext, TestLoop, TestStorage, assert_yields, is_readable,
+        socketpair,
     },
 };
 
 async fn read_some<
-    S: State,
+    E: 'static,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
 >(
-    ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     fd: &OwnedFd,
     cached: &Cell<Option<IoIndex>>,
 ) -> rustix::io::Result<usize> {
@@ -64,8 +66,8 @@ fn drain_receive_buffer(fd: &OwnedFd) {
     while rustix::io::read(fd, &mut buf).is_ok() {}
 }
 
-fn registrations(event_loop: &TestLoop<Log>) -> usize {
-    event_loop.ctx().storage.io_waiters.count()
+fn registrations(event_loop: &TestLoop) -> usize {
+    event_loop.ctx.storage.io_waiters.count()
 }
 
 #[test]
@@ -73,14 +75,12 @@ fn registrations(event_loop: &TestLoop<Log>) -> usize {
 fn read_waits_until_the_peer_writes() {
     let (rx, tx) = socketpair();
     let mut selector = Selector::new().unwrap();
-    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        &mut state,
         async move |ctx| {
             let n = read_some(&ctx, &rx, &Cell::new(None)).await.unwrap();
             ctx.dispatch(n as u32);
@@ -94,7 +94,7 @@ fn read_waits_until_the_peer_writes() {
     rustix::io::write(&tx, b"abc").unwrap();
     assert!(is_readable(&event_loop, 1000));
     assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
-    assert_eq!(event_loop.state_mut().events(), [3]);
+    assert_yields!(event_loop.events(), [3]);
     assert_eq!(registrations(&event_loop), 0);
 }
 
@@ -104,26 +104,24 @@ fn write_waits_on_a_full_buffer() {
     let (tx, rx) = socketpair();
     fill_send_buffer(&tx);
     let mut selector = Selector::new().unwrap();
-    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        &mut state,
         async move |ctx| {
             let n = write_some(&ctx, &tx, &Cell::new(None)).await.unwrap();
             ctx.dispatch(n as u32);
         },
     )
     .unwrap();
-    assert!(event_loop.state_mut().events().is_empty());
+    assert_yields!(event_loop.events(), []);
     assert!(!is_readable(&event_loop, 0));
 
     drain_receive_buffer(&rx);
     event_loop.run_until_root_finishes();
-    assert_eq!(event_loop.state_mut().events(), [1]);
+    assert_yields!(event_loop.events(), [1]);
 }
 
 #[test]
@@ -132,14 +130,12 @@ fn read_and_write_wait_on_one_fd_at_the_same_time() {
     let (a, b) = socketpair();
     fill_send_buffer(&a);
     let mut selector = Selector::new().unwrap();
-    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        &mut state,
         async move |ctx| {
             let cached = Cell::new(None);
             let mut read = pin!(read_some(&ctx, &a, &cached));
@@ -171,24 +167,23 @@ fn read_and_write_wait_on_one_fd_at_the_same_time() {
     rustix::io::write(&b, b"abc").unwrap();
     assert!(is_readable(&event_loop, 1000));
     assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
-    assert_eq!(event_loop.state_mut().events(), [3]);
+    assert_yields!(event_loop.events(), [3]);
 
     drain_receive_buffer(&b);
     assert!(is_readable(&event_loop, 1000));
     assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
-    assert_eq!(event_loop.state_mut().events(), [3, 101]);
+    assert_yields!(event_loop.events(), [101]);
 }
 
-type IoStorage = LoopStorage<1, 64, 0, 1, 1>;
+type IoStorage = LoopStorage<(), 1, 1, 64, 0, 1, 1>;
 
 #[test]
 #[cfg_attr(miri, ignore)]
 fn dropping_a_pending_wait_deregisters() {
     let selector = Selector::new().unwrap();
-    let state = RefCell::new(Log::default());
     let ctx = {
         static STORAGE: IoStorage = IoStorage::new();
-        STORAGE.claim(&selector, &state)
+        STORAGE.claim(&selector)
     };
     let (rx, tx) = socketpair();
     let mut cx = core::task::Context::from_waker(Waker::noop());
@@ -207,10 +202,9 @@ fn dropping_a_pending_wait_deregisters() {
 #[cfg_attr(miri, ignore)]
 fn wait_survives_a_spurious_poll() {
     let selector = Selector::new().unwrap();
-    let state = RefCell::new(Log::default());
     let ctx = {
         static STORAGE: IoStorage = IoStorage::new();
-        STORAGE.claim(&selector, &state)
+        STORAGE.claim(&selector)
     };
     let (rx, tx) = socketpair();
     let mut cx = core::task::Context::from_waker(Waker::noop());
@@ -229,10 +223,9 @@ fn wait_survives_a_spurious_poll() {
 #[cfg_attr(miri, ignore)]
 fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
     let selector = Selector::new().unwrap();
-    let state = RefCell::new(Log::default());
     let ctx = {
         static STORAGE: IoStorage = IoStorage::new();
-        STORAGE.claim(&selector, &state)
+        STORAGE.claim(&selector)
     };
     let mut cx = core::task::Context::from_waker(Waker::noop());
     let (old_rx, _old_tx) = socketpair();
@@ -259,10 +252,9 @@ fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
 #[cfg_attr(miri, ignore)]
 fn sequential_registrations_reuse_the_slot() {
     let selector = Selector::new().unwrap();
-    let state = RefCell::new(Log::default());
     let ctx = {
         static STORAGE: IoStorage = IoStorage::new();
-        STORAGE.claim(&selector, &state)
+        STORAGE.claim(&selector)
     };
     let (rx, tx) = socketpair();
     let mut cx = core::task::Context::from_waker(Waker::noop());

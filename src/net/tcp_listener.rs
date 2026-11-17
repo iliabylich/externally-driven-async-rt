@@ -8,7 +8,6 @@ use rustix::{
 use crate::{
     context::Context,
     net::{TcpStream, socket::Socket},
-    state::State,
 };
 
 /// A TCP listener.
@@ -41,7 +40,8 @@ impl TcpListener {
     ///
     /// This method is cancel safe.
     pub async fn accept<
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -49,7 +49,7 @@ impl TcpListener {
         const FDS: usize,
     >(
         &mut self,
-        ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     ) -> rustix::io::Result<(TcpStream, SocketAddr)> {
         let (socket, addr) = self.socket.accept(ctx).await?;
         Ok((

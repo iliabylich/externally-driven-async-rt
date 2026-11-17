@@ -1,4 +1,4 @@
-use crate::{Context, State, io::AsyncRead};
+use crate::{Context, io::AsyncRead};
 
 /// Reads frames of exactly `N` bytes from an [`AsyncRead`].
 ///
@@ -36,7 +36,8 @@ impl<R: AsyncRead, const N: usize> FrameReader<R, N> {
     ///
     /// This method is cancel safe.
     pub async fn read_exact<
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -44,7 +45,7 @@ impl<R: AsyncRead, const N: usize> FrameReader<R, N> {
         const FDS: usize,
     >(
         &mut self,
-        ctx: &Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     ) -> Result<Option<[u8; N]>, FrameReaderError<R::Error>> {
         while self.filled < N {
             let Some(rest) = self.buf.get_mut(self.filled..) else {
@@ -102,7 +103,6 @@ impl<E: core::error::Error> core::error::Error for FrameReaderError<E> {}
 #[cfg(test)]
 mod tests {
     use core::{
-        cell::RefCell,
         future::{Future, poll_fn},
         pin::pin,
         task::{Context, Poll, Waker},
@@ -111,9 +111,9 @@ mod tests {
     use rustix::io::Errno;
 
     use crate::{
-        Selector, State,
+        Selector,
         io::{AsyncRead, FrameReader, FrameReaderError},
-        testing::{Log, TestContext, TestStorage},
+        testing::{TestContext, TestStorage},
     };
 
     struct Chunks {
@@ -126,7 +126,8 @@ mod tests {
 
         fn read<
             'a,
-            S: State,
+            E: 'static,
+            const EVENTS: usize,
             const TASKS: usize,
             const TASK_SIZE: usize,
             const ROOT_TASK_SIZE: usize,
@@ -134,7 +135,7 @@ mod tests {
             const FDS: usize,
         >(
             &'a mut self,
-            _ctx: &'a crate::Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+            _ctx: &'a crate::Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
             buf: &'a mut [u8],
         ) -> impl Future<Output = rustix::io::Result<usize>> {
             poll_fn(move |_| {
@@ -157,8 +158,7 @@ mod tests {
     fn reads_consecutive_frames_from_partial_reads() {
         static STORAGE: TestStorage = TestStorage::new();
         let selector = Selector::new().unwrap();
-        let state = RefCell::new(Log::default());
-        let ctx: TestContext<'_> = STORAGE.claim(&selector, &state);
+        let ctx: TestContext<'_> = STORAGE.claim(&selector);
         let mut reader = FrameReader::<_, 5>::new(Chunks {
             chunks: &[b"hel", b"lo", b"wor", b"ld"],
             end: None,
@@ -178,8 +178,7 @@ mod tests {
     fn resumes_a_cancelled_read() {
         static STORAGE: TestStorage = TestStorage::new();
         let selector = Selector::new().unwrap();
-        let state = RefCell::new(Log::default());
-        let ctx: TestContext<'_> = STORAGE.claim(&selector, &state);
+        let ctx: TestContext<'_> = STORAGE.claim(&selector);
         let mut reader = FrameReader::<_, 5>::new(Chunks {
             chunks: &[b"he", b"l"],
             end: None,
@@ -198,8 +197,7 @@ mod tests {
     fn returns_none_when_the_stream_ends_between_frames() {
         static STORAGE: TestStorage = TestStorage::new();
         let selector = Selector::new().unwrap();
-        let state = RefCell::new(Log::default());
-        let ctx: TestContext<'_> = STORAGE.claim(&selector, &state);
+        let ctx: TestContext<'_> = STORAGE.claim(&selector);
         let mut reader = FrameReader::<_, 5>::new(Chunks {
             chunks: &[b"hello"],
             end: Some(Ok(0)),
@@ -216,8 +214,7 @@ mod tests {
     fn fails_when_the_stream_ends_in_the_middle_of_a_frame() {
         static STORAGE: TestStorage = TestStorage::new();
         let selector = Selector::new().unwrap();
-        let state = RefCell::new(Log::default());
-        let ctx: TestContext<'_> = STORAGE.claim(&selector, &state);
+        let ctx: TestContext<'_> = STORAGE.claim(&selector);
         let mut reader = FrameReader::<_, 5>::new(Chunks {
             chunks: &[b"hel"],
             end: Some(Ok(0)),
@@ -233,8 +230,7 @@ mod tests {
     fn returns_syscall_errors() {
         static STORAGE: TestStorage = TestStorage::new();
         let selector = Selector::new().unwrap();
-        let state = RefCell::new(Log::default());
-        let ctx: TestContext<'_> = STORAGE.claim(&selector, &state);
+        let ctx: TestContext<'_> = STORAGE.claim(&selector);
         let mut reader = FrameReader::<_, 5>::new(Chunks {
             chunks: &[],
             end: Some(Err(Errno::CONNRESET)),

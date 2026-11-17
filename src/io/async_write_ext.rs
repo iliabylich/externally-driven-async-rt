@@ -1,6 +1,6 @@
 use core::future::Future;
 
-use crate::{Context, State, io::AsyncWrite};
+use crate::{Context, io::AsyncWrite};
 
 /// Helper methods on top of [`AsyncWrite`], implemented for every [`AsyncWrite`].
 pub trait AsyncWriteExt: AsyncWrite {
@@ -15,7 +15,8 @@ pub trait AsyncWriteExt: AsyncWrite {
     /// This method is not cancel safe: an unknown number of bytes from `buf` may already be written.
     fn write_all<
         'a,
-        S: State,
+        E: 'static,
+        const EVENTS: usize,
         const TASKS: usize,
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
@@ -23,7 +24,7 @@ pub trait AsyncWriteExt: AsyncWrite {
         const FDS: usize,
     >(
         &'a mut self,
-        ctx: &'a Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         mut buf: &'a [u8],
     ) -> impl Future<Output = Result<(), WriteAllError<Self::Error>>> {
         async move {
@@ -68,7 +69,6 @@ impl<E: core::error::Error> core::error::Error for WriteAllError<E> {}
 #[cfg(test)]
 mod tests {
     use core::{
-        cell::RefCell,
         future::{Future, pending, ready},
         net::SocketAddr,
         pin::pin,
@@ -81,10 +81,10 @@ mod tests {
     };
 
     use crate::{
-        Selector, State,
+        Selector,
         io::{AsyncWrite, AsyncWriteExt, WriteAllError},
         net::TcpStream,
-        testing::{EventLoopTestingExt, Log, TestContext, TestLoop, TestStorage, raw_accept},
+        testing::{EventLoopTestingExt, TestContext, TestLoop, TestStorage, raw_accept},
     };
 
     struct Scripted {
@@ -116,7 +116,8 @@ mod tests {
 
         fn write<
             'a,
-            S: State,
+            E: 'static,
+            const EVENTS: usize,
             const TASKS: usize,
             const TASK_SIZE: usize,
             const ROOT_TASK_SIZE: usize,
@@ -124,7 +125,7 @@ mod tests {
             const FDS: usize,
         >(
             &'a mut self,
-            _ctx: &'a crate::Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+            _ctx: &'a crate::Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
             buf: &'a [u8],
         ) -> impl Future<Output = rustix::io::Result<usize>> {
             self.calls += 1;
@@ -139,7 +140,8 @@ mod tests {
 
         fn flush<
             'a,
-            S: State,
+            E: 'static,
+            const EVENTS: usize,
             const TASKS: usize,
             const TASK_SIZE: usize,
             const ROOT_TASK_SIZE: usize,
@@ -147,7 +149,7 @@ mod tests {
             const FDS: usize,
         >(
             &'a mut self,
-            _ctx: &'a crate::Context<'_, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+            _ctx: &'a crate::Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         ) -> impl Future<Output = rustix::io::Result<()>> {
             ready(Ok(()))
         }
@@ -159,8 +161,7 @@ mod tests {
         buf: &[u8],
     ) -> Poll<Result<(), WriteAllError<Errno>>> {
         let selector = Selector::new().unwrap();
-        let state = RefCell::new(Log::default());
-        let ctx: TestContext<'_> = storage.claim(&selector, &state);
+        let ctx: TestContext<'_> = storage.claim(&selector);
         let mut cx = Context::from_waker(Waker::noop());
         pin!(writer.write_all(&ctx, buf)).poll(&mut cx)
     }
@@ -260,14 +261,12 @@ mod tests {
             .unwrap();
 
         let mut selector = Selector::new().unwrap();
-        let mut state = RefCell::new(Log::default());
         let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            &mut state,
             async move |ctx| {
                 let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
                 stream.write_all(&ctx, &DATA).await.unwrap();
@@ -284,7 +283,6 @@ mod tests {
             event_loop.peer_read_exact(&peer, received);
             assert_eq!(received, chunk);
         }
-        event_loop.run_until_events(1);
-        assert_eq!(event_loop.state_mut().events(), [1]);
+        assert_eq!(event_loop.run_until_events(), [1]);
     }
 }

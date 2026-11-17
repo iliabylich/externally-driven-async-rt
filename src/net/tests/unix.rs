@@ -1,4 +1,4 @@
-use core::{cell::RefCell, ffi::CStr, future::pending};
+use core::{ffi::CStr, future::pending};
 
 use rustix::{
     io::Errno,
@@ -9,7 +9,7 @@ use crate::{
     Selector,
     io::{AsyncRead, AsyncWrite},
     net::{UnixDatagram, UnixListener, UnixStream},
-    testing::{EventLoopTestingExt, Log, TestLoop, TestStorage, raw_accept, raw_socket},
+    testing::{EventLoopTestingExt, TestLoop, TestStorage, assert_yields, raw_accept, raw_socket},
 };
 
 struct TempPath {
@@ -72,14 +72,12 @@ fn stream_echo_with_a_raw_peer() {
     rustix::net::bind(&listener, &server_addr).unwrap();
     rustix::net::listen(&listener, 1).unwrap();
     let mut selector = Selector::new().unwrap();
-    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        &mut state,
         async move |ctx| {
             let mut stream = UnixStream::connect(&ctx, &server_addr).await.unwrap();
             assert_eq!(path_of(&stream.peer_addr().unwrap()), path_of(&server_addr));
@@ -105,7 +103,7 @@ fn stream_echo_with_a_raw_peer() {
     event_loop.drain_until_readable(&peer);
     assert_eq!(rustix::io::read(&peer, &mut buf).unwrap(), 0, "no EOF");
     drop(peer);
-    event_loop.run_until_events(1);
+    event_loop.run_until_events::<1>();
 }
 
 #[test]
@@ -119,14 +117,12 @@ fn listener_accepts_a_raw_client() {
         path_of(&listener_addr)
     );
     let mut selector = Selector::new().unwrap();
-    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        &mut state,
         async move |ctx| {
             let (mut stream, peer) = listener.accept(&ctx).await.unwrap();
             assert!(path_of(&peer).is_empty());
@@ -145,7 +141,7 @@ fn listener_accepts_a_raw_client() {
     let client = raw_socket(AddressFamily::UNIX, SocketType::STREAM);
     rustix::net::connect(&client, &path.addr()).unwrap();
     assert_eq!(rustix::io::write(&client, b"ping").unwrap(), 4);
-    event_loop.run_until_events(1);
+    event_loop.run_until_events::<1>();
     let mut buf = [0; 4];
     event_loop.peer_read_exact(&client, &mut buf);
     assert_eq!(&buf, b"pong");
@@ -160,14 +156,12 @@ fn datagram_round_trip_with_a_raw_peer() {
     let peer = raw_socket(AddressFamily::UNIX, SocketType::DGRAM);
     rustix::net::bind(&peer, &theirs_addr).unwrap();
     let mut selector = Selector::new().unwrap();
-    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        &mut state,
         async move |ctx| {
             let mut socket = UnixDatagram::bind(&ours_addr).unwrap();
             assert_eq!(path_of(&socket.local_addr().unwrap()), path_of(&ours_addr));
@@ -198,7 +192,7 @@ fn datagram_round_trip_with_a_raw_peer() {
         let sent = rustix::net::sendto(&peer, &buf[..len], SendFlags::empty(), &from).unwrap();
         assert_eq!(sent, len);
     }
-    event_loop.run_until_events(1);
+    event_loop.run_until_events::<1>();
 }
 
 #[test]
@@ -207,14 +201,12 @@ fn unbound_datagram_sender_has_an_unnamed_address() {
     let path = TempPath::new("dgram-unbound");
     let bound_addr = path.addr();
     let mut selector = Selector::new().unwrap();
-    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        &mut state,
         async move |ctx| {
             let mut bound = UnixDatagram::bind(&bound_addr).unwrap();
             let mut unbound = UnixDatagram::unbound().unwrap();
@@ -228,7 +220,7 @@ fn unbound_datagram_sender_has_an_unnamed_address() {
         },
     )
     .unwrap();
-    event_loop.run_until_events(1);
+    event_loop.run_until_events::<1>();
 }
 
 #[test]
@@ -237,14 +229,12 @@ fn connect_to_a_missing_path_fails() {
     let path = TempPath::new("missing");
     let addr = path.addr();
     let mut selector = Selector::new().unwrap();
-    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        &mut state,
         async move |ctx| {
             let errno = UnixStream::connect(&ctx, &addr).await.err().unwrap();
             ctx.dispatch(errno.raw_os_error() as u32);
@@ -252,10 +242,7 @@ fn connect_to_a_missing_path_fails() {
         },
     )
     .unwrap();
-    assert_eq!(
-        event_loop.state_mut().events(),
-        [Errno::NOENT.raw_os_error() as u32]
-    );
+    assert_yields!(event_loop.events(), [Errno::NOENT.raw_os_error() as u32]);
 }
 
 #[test]
@@ -267,14 +254,12 @@ fn stream_halves_echo_with_a_raw_peer() {
     rustix::net::bind(&listener, &server_addr).unwrap();
     rustix::net::listen(&listener, 1).unwrap();
     let mut selector = Selector::new().unwrap();
-    let mut state = RefCell::new(Log::default());
     let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
-        &mut state,
         async move |ctx| {
             let mut stream = UnixStream::connect(&ctx, &server_addr).await.unwrap();
             let (mut read, mut write) = stream.split();
@@ -294,5 +279,5 @@ fn stream_halves_echo_with_a_raw_peer() {
     let mut buf = [0; 4];
     event_loop.peer_read_exact(&peer, &mut buf);
     assert_eq!(rustix::io::write(&peer, &buf).unwrap(), 4);
-    event_loop.run_until_events(1);
+    event_loop.run_until_events::<1>();
 }

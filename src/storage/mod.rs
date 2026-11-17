@@ -1,8 +1,6 @@
-use core::cell::RefCell;
-
 use crate::{
-    context::Context, io::IoWaiters, notify::Notification, selector::Selector, state::State,
-    tasks::Tasks, time::Timers,
+    context::Context, event_queue::EventQueue, io::IoWaiters, notify::Notification,
+    selector::Selector, tasks::Tasks, time::Timers,
 };
 
 /// The main pre-allocated storage that [`EventLoop`](crate::EventLoop) needs.
@@ -10,6 +8,8 @@ use crate::{
 /// A storage can be used by only one [`EventLoop`](crate::EventLoop) ever.
 #[must_use]
 pub struct LoopStorage<
+    E,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
@@ -20,6 +20,7 @@ pub struct LoopStorage<
     pub(crate) io_waiters: IoWaiters<FDS>,
     pub(crate) tasks: Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
     pub(crate) notification: Notification,
+    pub(crate) events: EventQueue<E, EVENTS>,
 }
 
 // SAFETY: a storage has no public methods, so other threads can only pass `&LoopStorage` around.
@@ -29,22 +30,26 @@ pub struct LoopStorage<
 // `!Send`, so everything but the wakers stays on that thread, and wakers only touch the atomic
 // `WakeQueue`, which asserts that thread.
 unsafe impl<
+    E,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
-> Sync for LoopStorage<TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+> Sync for LoopStorage<E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
 }
 
 impl<
+    E,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
-> LoopStorage<TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+> LoopStorage<E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     /// Constructor of an empty storage, **can be called in const-context**, so you can put it into a static variable.
     pub const fn new() -> Self {
@@ -53,25 +58,27 @@ impl<
             io_waiters: IoWaiters::new(),
             tasks: Tasks::new(),
             notification: Notification::new(),
+            events: EventQueue::new(),
         }
     }
 
-    pub(crate) fn claim<'a, S: State>(
+    pub(crate) fn claim<'a>(
         &'static self,
         selector: &'a Selector,
-        state: &'a RefCell<S>,
-    ) -> Context<'a, S, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
-        Context::claim(self, selector, state)
+    ) -> Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
+        Context::claim(self, selector)
     }
 }
 
 impl<
+    E,
+    const EVENTS: usize,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
-> core::fmt::Debug for LoopStorage<TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+> core::fmt::Debug for LoopStorage<E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("LoopStorage")

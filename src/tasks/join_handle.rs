@@ -49,7 +49,6 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> co
 #[cfg(test)]
 mod tests {
     use core::{
-        cell::RefCell,
         future::{Future, pending},
         pin::Pin,
         sync::atomic::{AtomicBool, Ordering::Relaxed},
@@ -59,7 +58,7 @@ mod tests {
     use crate::{
         Selector,
         tasks::{JoinHandle, Tasks},
-        testing::{Log, TestLoop, TestStorage, spawn_static},
+        testing::{TestLoop, TestStorage, assert_yields, spawn_static},
     };
 
     type TestTasks = Tasks<2, 64, 0>;
@@ -98,14 +97,12 @@ mod tests {
     #[test]
     fn spawned_task_can_spawn_and_join() {
         let mut selector = Selector::new().unwrap();
-        let mut state = RefCell::new(Log::default());
-        let event_loop = TestLoop::new(
+        let mut event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE
             },
             &mut selector,
-            &mut state,
             async |ctx| {
                 ctx.spawn(async |ctx| {
                     ctx.spawn(async |ctx| ctx.dispatch(1)).await;
@@ -115,7 +112,8 @@ mod tests {
                 ctx.dispatch(3);
                 pending::<()>().await;
             },
-        );
-        assert_eq!(event_loop.unwrap().state_mut().events(), [1, 2, 3]);
+        )
+        .unwrap();
+        assert_yields!(event_loop.events(), [1, 2, 3]);
     }
 }

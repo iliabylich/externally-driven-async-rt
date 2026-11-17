@@ -1,11 +1,11 @@
-use crate::{State, testing::TestContext};
+use crate::testing::TestContext;
 
-pub(crate) struct DispatchOnDrop<'c, 'a, S: State<Event: Copy>>(
-    pub(crate) &'c TestContext<'a, S>,
-    pub(crate) S::Event,
+pub(crate) struct DispatchOnDrop<'c, 'a, E: Copy + 'static>(
+    pub(crate) &'c TestContext<'a, E>,
+    pub(crate) E,
 );
 
-impl<S: State<Event: Copy>> Drop for DispatchOnDrop<'_, '_, S> {
+impl<E: Copy + 'static> Drop for DispatchOnDrop<'_, '_, E> {
     fn drop(&mut self) {
         self.0.dispatch(self.1);
     }
