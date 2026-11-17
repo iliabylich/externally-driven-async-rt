@@ -1,13 +1,15 @@
 use core::{future::Future, time::Duration};
 
 use crate::{
+    Either2,
     claimed::Claimed,
     io::IoIndex,
     notify::Notified,
+    select2,
     selector::{EVENTS_PER_CALL, Selector, SelectorEvent},
     storage::LoopStorage,
     tasks::{JoinHandle, ReserveTask},
-    time::{Instant, Sleep, Timeout},
+    time::{Instant, Sleep},
 };
 
 /// A handle of the event loop that you are currently in.
@@ -122,8 +124,18 @@ impl<
     /// # Cancel safety
     ///
     /// This method is cancel safe if `future` is.
-    pub fn timeout<F: Future>(&self, duration: Duration, future: F) -> Timeout<'_, F, TIMERS> {
-        Timeout::new(future, self.sleep(duration))
+    pub fn timeout<F: Future>(
+        &self,
+        duration: Duration,
+        future: F,
+    ) -> impl Future<Output = Option<F::Output>> {
+        let sleep = self.sleep(duration);
+        async move {
+            match select2(future, sleep).await {
+                Either2::Left(output) => Some(output),
+                Either2::Right(()) => None,
+            }
+        }
     }
 
     /// Waits until [`EventLoop::notify`](crate::EventLoop::notify) is called.
