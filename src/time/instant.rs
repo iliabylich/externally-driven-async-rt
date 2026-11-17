@@ -13,7 +13,6 @@ impl Instant {
         Self(monotonic_nanos())
     }
 
-    // TODO: constify
     pub(crate) fn saturating_add(self, duration: Duration) -> Self {
         let nanos = u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX);
         Self(self.0.saturating_add(nanos))

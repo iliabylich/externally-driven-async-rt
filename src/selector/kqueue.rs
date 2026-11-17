@@ -1,4 +1,4 @@
-use core::{cell::RefCell, ffi::c_void, mem::MaybeUninit, time::Duration};
+use core::{cell::Cell, ffi::c_void, mem::MaybeUninit, time::Duration};
 
 use rustix::{
     event::kqueue::{Event, EventFilter, EventFlags, UserDefinedFlags, UserFlags, kevent, kqueue},
@@ -21,7 +21,7 @@ const CHANGES_PER_CALL: usize = if cfg!(test) { 4 } else { 64 };
 #[must_use]
 pub(crate) struct KqueueSelector {
     kq: OwnedFd,
-    timer: RefCell<KernelTimer>,
+    timer: Cell<KernelTimer>,
 }
 
 impl KqueueSelector {
@@ -36,7 +36,7 @@ impl KqueueSelector {
         result?;
         let selector = Self {
             kq,
-            timer: RefCell::new(KernelTimer::default()),
+            timer: Cell::new(KernelTimer::default()),
         };
         selector.submit([Self::notify_kevent(
             UserFlags::empty(),
@@ -54,18 +54,19 @@ impl KqueueSelector {
     }
 
     pub(crate) fn arm_timer(&self, deadline: Instant) {
-        self.timer.borrow_mut().arm_in_memory(deadline);
+        self.timer.update(|timer| timer.arm_in_memory(deadline));
     }
 
     pub(crate) fn disarm_timer(&self) {
-        self.timer.borrow_mut().disarm_in_memory();
+        self.timer.update(KernelTimer::disarm_in_memory);
     }
 
     pub(crate) fn flush(
         &self,
         io_changes: impl IntoIterator<Item = IoChange>,
     ) -> rustix::io::Result<()> {
-        let timer_change = self.timer.borrow_mut().flush(Instant::now());
+        let (timer, timer_change) = self.timer.get().flush(Instant::now());
+        self.timer.set(timer);
         let changes = io_changes
             .into_iter()
             .flat_map(Self::io_kevents)
@@ -169,7 +170,7 @@ impl KqueueSelector {
                 ready: Directions::Write,
             },
             EventFilter::Timer { .. } => {
-                self.timer.borrow_mut().fired();
+                self.timer.update(KernelTimer::fired);
                 SelectorEvent::Timer
             }
             EventFilter::User { .. } => SelectorEvent::Notify,

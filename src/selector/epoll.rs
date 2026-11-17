@@ -1,4 +1,4 @@
-use core::{cell::RefCell, time::Duration};
+use core::{cell::Cell, time::Duration};
 
 use rustix::{
     event::{
@@ -36,7 +36,7 @@ pub(crate) struct EpollSelector {
     epoll: OwnedFd,
     timer_fd: OwnedFd,
     notify_fd: OwnedFd,
-    timer: RefCell<KernelTimer>,
+    timer: Cell<KernelTimer>,
 }
 
 impl EpollSelector {
@@ -65,7 +65,7 @@ impl EpollSelector {
             epoll,
             timer_fd,
             notify_fd,
-            timer: RefCell::new(KernelTimer::default()),
+            timer: Cell::new(KernelTimer::default()),
         })
     }
 
@@ -85,11 +85,11 @@ impl EpollSelector {
     }
 
     pub(crate) fn arm_timer(&self, deadline: Instant) {
-        self.timer.borrow_mut().arm_in_memory(deadline);
+        self.timer.update(|timer| timer.arm_in_memory(deadline));
     }
 
     pub(crate) fn disarm_timer(&self) {
-        self.timer.borrow_mut().disarm_in_memory();
+        self.timer.update(KernelTimer::disarm_in_memory);
     }
 
     pub(crate) fn flush(
@@ -99,7 +99,8 @@ impl EpollSelector {
         for change in io_changes {
             self.apply_io(change)?;
         }
-        let timer_change = self.timer.borrow_mut().flush(Instant::now());
+        let (timer, timer_change) = self.timer.get().flush(Instant::now());
+        self.timer.set(timer);
         match timer_change {
             Some(change) => self.apply_timer(change),
             None => Ok(()),
@@ -162,7 +163,7 @@ impl EpollSelector {
         syscall_end!(result; &expirations[..result.unwrap_or(0)], expirations.len());
         match result {
             Ok(_) => {
-                self.timer.borrow_mut().fired();
+                self.timer.update(KernelTimer::fired);
                 Ok(Some(SelectorEvent::Timer))
             }
             Err(Errno::AGAIN) => Ok(None),
