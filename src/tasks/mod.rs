@@ -6,13 +6,17 @@ mod root;
 mod root_status;
 mod task;
 mod task_entry;
+mod task_memory;
 mod task_reservation;
 mod task_slot;
+mod task_type;
 mod wake_queue;
 
 use core::{cell::Cell, task::Waker};
 
-use self::{aligned16::Aligned16, task_slot::TaskSlot};
+use self::{
+    aligned16::Aligned16, task_memory::TaskMemory, task_slot::TaskSlot, task_type::TaskType,
+};
 pub use self::{
     join_handle::JoinHandle, reserve_task::ReserveTask, task_reservation::TaskReservation,
 };
@@ -30,7 +34,7 @@ use crate::{claimed::Claimed, pool::ObjectPool, waker_slot::WakerSlot};
 pub(crate) struct Tasks<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> {
     pub(crate) pool: ObjectPool<TaskEntry<TASK_SIZE>, TASKS>,
     pub(crate) queue: WakeQueue<TASKS>,
-    pub(crate) root_region: Aligned16<ROOT_TASK_SIZE>,
+    pub(crate) root_region: TaskMemory<ROOT_TASK_SIZE>,
     pub(crate) root: Cell<Root<TASK_SIZE>>,
     pub(crate) slot_waiter: WakerSlot,
 }
@@ -42,7 +46,7 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         Self {
             pool: ObjectPool::new([const { TaskEntry::new() }; TASKS]),
             queue: WakeQueue::new(),
-            root_region: Aligned16::new(),
+            root_region: TaskMemory::new(),
             root: Cell::new(Root::Unset),
             slot_waiter: WakerSlot::new(),
         }
@@ -82,7 +86,7 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         id
     }
 
-    pub(crate) fn spawn_root<'a, Fut>(&'static self, _: Claimed<'a>, future: Fut)
+    pub(crate) fn spawn_root<'a, Fut>(&'static self, claimed: Claimed<'a>, future: Fut)
     where
         Fut: Future<Output = ()> + 'a,
     {
@@ -90,26 +94,10 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
             matches!(self.root.get(), Root::Unset),
             "the root is already spawned"
         );
-        assert!(
-            size_of::<Fut>() <= ROOT_TASK_SIZE,
-            "the root future of {} bytes doesn't fit ROOT_TASK_SIZE \
-             ({ROOT_TASK_SIZE} bytes)",
-            size_of::<Fut>(),
-        );
-        assert!(
-            align_of::<Fut>() <= 16,
-            "the root future aligned to {} bytes doesn't fit (align at most 16)",
-            align_of::<Fut>(),
-        );
         let Some((id, entry)) = self.pool.alloc() else {
             unreachable!("the root is the first task, the pool has room for it");
         };
-        // SAFETY: `Fut` fits the root region (asserted above), which lives in `self`, so it is
-        // `'static` and never moves. The region is unused: the root is still `Unset` (asserted
-        // above), and leaves that state below, so this is the only call that gets here. `Fut: 'a`,
-        // and the `Claimed<'a>` guarantees every poll and drop of its task happens before `'a`
-        // ends.
-        let task = unsafe { Task::write(self.root_region.as_ptr(), future) };
+        let task = Task::write(&self.root_region, TaskType::Root, claimed, future);
         entry.occupy(task);
         self.queue.push(id.slot());
         self.root.set(Root::Running(id));

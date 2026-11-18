@@ -7,7 +7,7 @@ use core::{
 use crate::{
     claimed::Claimed,
     pool::Index,
-    tasks::{Aligned16, Task, TaskSlot},
+    tasks::{Task, TaskMemory, TaskSlot, TaskType},
     waker_slot::WakerSlot,
 };
 
@@ -15,7 +15,7 @@ use crate::{
 pub(crate) struct TaskEntry<const SIZE: usize> {
     task: Cell<TaskSlot>,
     join_waiter: WakerSlot,
-    memory: Aligned16<SIZE>,
+    memory: TaskMemory<SIZE>,
 }
 
 impl<const SIZE: usize> TaskEntry<SIZE> {
@@ -23,32 +23,15 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
         Self {
             task: Cell::new(TaskSlot::Empty),
             join_waiter: WakerSlot::new(),
-            memory: Aligned16::new(),
+            memory: TaskMemory::new(),
         }
     }
 
-    pub(crate) fn write<'a, Fut>(&'static self, _: Claimed<'a>, future: Fut)
+    pub(crate) fn write<'a, Fut>(&'static self, claimed: Claimed<'a>, future: Fut)
     where
         Fut: Future<Output = ()> + 'a,
     {
-        assert!(
-            size_of::<Fut>() <= SIZE,
-            "a task future of {} bytes doesn't fit TASK_SIZE ({SIZE} bytes)",
-            size_of::<Fut>(),
-        );
-        assert!(
-            align_of::<Fut>() <= 16,
-            "a task future aligned to {} bytes doesn't fit (align at most 16)",
-            align_of::<Fut>(),
-        );
-        assert!(!self.has_task(), "a reserved slot holds no task yet");
-        // SAFETY: `Fut` fits the memory, which is aligned to 16 (both checked above). The memory
-        // is unused: it holds no task (checked above), and only a `write` puts one there. It
-        // stays valid and unused until the task is dropped: the task lives in `self`, which is
-        // `'static`, so it never moves, and the next `write` asserts the task is gone. `Fut: 'a`,
-        // and the `Claimed<'a>` guarantees every poll and drop of the task happens before `'a`
-        // ends.
-        let task = unsafe { Task::write(self.memory.as_ptr(), future) };
+        let task = Task::write(&self.memory, TaskType::NonRoot, claimed, future);
         self.occupy(task);
     }
 
