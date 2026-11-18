@@ -4,6 +4,7 @@ mod join_status;
 mod reserve_task;
 mod root;
 mod root_status;
+mod slot_waiter_taken_error;
 mod task;
 mod task_entry;
 mod task_memory;
@@ -16,7 +17,8 @@ use core::{cell::Cell, task::Waker};
 
 use self::{aligned16::Aligned16, task_memory::TaskMemory, task_slot::TaskSlot};
 pub use self::{
-    join_handle::JoinHandle, reserve_task::ReserveTask, task_reservation::TaskReservation,
+    join_handle::JoinHandle, reserve_task::ReserveTask,
+    slot_waiter_taken_error::SlotWaiterTakenError, task_reservation::TaskReservation,
     tasks_full_error::TasksFullError,
 };
 pub(crate) use self::{

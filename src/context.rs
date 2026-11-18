@@ -98,6 +98,11 @@ impl<
     ///
     /// The future stays pending until some other task finishes and frees a slot.
     ///
+    /// # Errors
+    ///
+    /// Only one task can wait for a free slot at a time. The future resolves to
+    /// [`SlotWaiterTakenError`](crate::SlotWaiterTakenError) if all `TASKS` slots are taken and another task already waits.
+    ///
     /// # Cancel safety
     ///
     /// This method is cancel safe.

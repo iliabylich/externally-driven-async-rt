@@ -2,7 +2,7 @@ use core::{future::Future, pin::Pin, task::Poll};
 
 use crate::{
     claimed::Claimed,
-    tasks::{TaskReservation, Tasks},
+    tasks::{SlotWaiterTakenError, TaskReservation, Tasks},
 };
 
 /// A future to obtain a [`TaskReservation`].
@@ -32,7 +32,8 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
 impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> Future
     for ReserveTask<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
-    type Output = TaskReservation<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>;
+    type Output =
+        Result<TaskReservation<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>, SlotWaiterTakenError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
@@ -42,12 +43,10 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
                 tasks.clear_slot_waiter();
                 this.waiting = false;
             }
-            Poll::Ready(TaskReservation::new(tasks, this.claimed, id, entry))
+            Poll::Ready(Ok(TaskReservation::new(tasks, this.claimed, id, entry)))
+        } else if !this.waiting && tasks.has_slot_waiter() {
+            Poll::Ready(Err(SlotWaiterTakenError))
         } else {
-            assert!(
-                this.waiting || !tasks.has_slot_waiter(),
-                "only one task can wait for a free task slot"
-            );
             tasks.set_slot_waiter(cx.waker());
             this.waiting = true;
             Poll::Pending
@@ -76,13 +75,13 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> co
 #[cfg(test)]
 mod tests {
     use core::{
-        future::{Future, pending},
+        future::Future,
         pin::Pin,
-        task::{Context, Waker},
+        task::{Context, Poll, Waker},
     };
 
     use crate::{
-        tasks::ReserveTask,
+        tasks::{ReserveTask, SlotWaiterTakenError},
         testing::{TasksStorage, claimed_forever, spawn_static},
     };
 
@@ -92,6 +91,13 @@ mod tests {
         Pin::new(reserve)
             .poll(&mut Context::from_waker(Waker::noop()))
             .is_ready()
+    }
+
+    fn poll_err(reserve: &mut ReserveTask<'static, 1, 64, 0>) -> Option<SlotWaiterTakenError> {
+        match Pin::new(reserve).poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Ready(result) => result.err(),
+            Poll::Pending => None,
+        }
     }
 
     #[test]
@@ -108,14 +114,16 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "only one task can wait for a free task slot")]
-    fn a_second_waiter_panics() {
+    fn a_second_waiter_gets_an_error() {
         static STORAGE: Storage = Storage::new();
         let tasks = &STORAGE.tasks;
-        let _ = spawn_static(tasks, pending()).unwrap();
+        let _ = spawn_static(tasks, async {}).unwrap();
         let mut first = ReserveTask::new(tasks, claimed_forever());
         let mut second = ReserveTask::new(tasks, claimed_forever());
         assert!(!poll(&mut first));
-        poll(&mut second);
+        assert_eq!(poll_err(&mut second), Some(SlotWaiterTakenError));
+        assert!(tasks.has_slot_waiter());
+        let _ = tasks.run_ready();
+        assert!(poll(&mut first));
     }
 }

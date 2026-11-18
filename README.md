@@ -75,7 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 As you can see, everything has an upper bound:
 
-1. maximum number of co-existing tasks (spawning a new one either returns [`TasksFullError`] or gives your a future depending on whether you use `ctx.spawn()` or `ctx.reserve_task().await` API)
+1. maximum number of co-existing tasks (spawning a new one either returns [`TasksFullError`] or gives your a future depending on whether you use `ctx.spawn()` or `ctx.reserve_task().await` API, only one task can wait for a slot at a time, another one gets [`SlotWaiterTakenError`])
 2. maximum size of the future of the task (exceeding it is a compile-time error)
 3. maximum size of the root task (stored separately, it's usually bigger than sub-tasks, exceeding it is a compile-time error)
 4. maximum number of co-existing timers (`ctx.sleep(<duration>)` or `ctx.timeout()` API, exceeding it returns an error)

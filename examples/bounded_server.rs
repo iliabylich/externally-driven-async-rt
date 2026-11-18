@@ -119,7 +119,7 @@ async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
         })
         .unwrap();
     loop {
-        let task = ctx.reserve_task().await;
+        let task = ctx.reserve_task().await.unwrap();
         let (stream, peer) = loop {
             match listener.accept(ctx).await {
                 Ok(client) => break client,

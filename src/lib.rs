@@ -41,5 +41,5 @@ pub use notify::Notified;
 pub use select::{Either2, Either3, select2, select3};
 pub use selector::Selector;
 pub use storage::LoopStorage;
-pub use tasks::{JoinHandle, ReserveTask, TaskReservation, TasksFullError};
+pub use tasks::{JoinHandle, ReserveTask, SlotWaiterTakenError, TaskReservation, TasksFullError};
 pub use time::{Sleep, TimersFullError};
