@@ -41,6 +41,12 @@ pub(crate) type TestStorage<E = u32> = LoopStorage<
     TEST_FDS,
 >;
 
+pub(crate) type TasksStorage<
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+> = LoopStorage<(), 1, TASKS, TASK_SIZE, ROOT_TASK_SIZE, 1, 1>;
+
 pub(crate) type TestLoop<'a, E = u32> = EventLoop<
     'a,
     E,

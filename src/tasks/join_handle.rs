@@ -57,11 +57,11 @@ mod tests {
 
     use crate::{
         Selector,
-        tasks::{JoinHandle, Tasks},
-        testing::{TestLoop, TestStorage, assert_yields, spawn_static},
+        tasks::JoinHandle,
+        testing::{TasksStorage, TestLoop, TestStorage, assert_yields, spawn_static},
     };
 
-    type TestTasks = Tasks<2, 64, 0>;
+    type Storage = TasksStorage<2, 64, 0>;
 
     fn poll(handle: &mut JoinHandle<2, 64, 0>) -> Poll<()> {
         Pin::new(handle).poll(&mut Context::from_waker(Waker::noop()))
@@ -69,28 +69,31 @@ mod tests {
 
     #[test]
     fn pending_until_the_task_finishes() {
-        static TASKS: TestTasks = TestTasks::new();
-        let mut handle = JoinHandle::new(&TASKS, spawn_static(&TASKS, async {}));
+        static STORAGE: Storage = Storage::new();
+        let tasks = &STORAGE.tasks;
+        let mut handle = JoinHandle::new(tasks, spawn_static(tasks, async {}));
         assert_eq!(poll(&mut handle), Poll::Pending);
-        let _ = TASKS.run_ready();
+        let _ = tasks.run_ready();
         assert_eq!(poll(&mut handle), Poll::Ready(()));
     }
 
     #[test]
     fn joining_a_finished_task_resolves_immediately() {
-        static TASKS: TestTasks = TestTasks::new();
-        let id = spawn_static(&TASKS, async {});
-        let _ = TASKS.run_ready();
-        assert_eq!(poll(&mut JoinHandle::new(&TASKS, id)), Poll::Ready(()));
+        static STORAGE: Storage = Storage::new();
+        let tasks = &STORAGE.tasks;
+        let id = spawn_static(tasks, async {});
+        let _ = tasks.run_ready();
+        assert_eq!(poll(&mut JoinHandle::new(tasks, id)), Poll::Ready(()));
     }
 
     #[test]
     fn dropped_handle_detaches_the_task() {
-        static TASKS: TestTasks = TestTasks::new();
+        static STORAGE: Storage = Storage::new();
         static RAN: AtomicBool = AtomicBool::new(false);
-        let id = spawn_static(&TASKS, async { RAN.store(true, Relaxed) });
-        drop(JoinHandle::new(&TASKS, id));
-        let _ = TASKS.run_ready();
+        let tasks = &STORAGE.tasks;
+        let id = spawn_static(tasks, async { RAN.store(true, Relaxed) });
+        drop(JoinHandle::new(tasks, id));
+        let _ = tasks.run_ready();
         assert!(RAN.load(Relaxed));
     }
 

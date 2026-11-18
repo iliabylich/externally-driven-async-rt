@@ -163,22 +163,7 @@ impl TraceArg for Result<(), Errno> {
 
 impl TraceArg for SocketAddrAny {
     fn trace_arg(&self, out: &mut dyn Write) -> fmt::Result {
-        if self.address_family() != AddressFamily::UNIX {
-            return write!(out, "{{{self:?}}}");
-        }
-        const SUN_PATH_OFFSET: usize = 2;
-        // SAFETY: `as_ptr` points to the `addr_len()` initialized bytes of the address.
-        let bytes = unsafe {
-            core::slice::from_raw_parts(self.as_ptr().cast::<u8>(), self.addr_len() as usize)
-        };
-        let path = bytes.get(SUN_PATH_OFFSET..).unwrap_or_default();
-        let len = path
-            .iter()
-            .rposition(|&byte| byte != 0)
-            .map_or(0, |last| last + 1);
-        out.write_str("{AF_UNIX, ")?;
-        path[..len].trace_arg(out)?;
-        out.write_char('}')
+        write!(out, "{{{self:?}}}")
     }
 }
 

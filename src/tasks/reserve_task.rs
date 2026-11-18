@@ -82,11 +82,11 @@ mod tests {
     };
 
     use crate::{
-        tasks::{ReserveTask, Tasks},
-        testing::{claimed_forever, spawn_static},
+        tasks::ReserveTask,
+        testing::{TasksStorage, claimed_forever, spawn_static},
     };
 
-    type TestTasks = Tasks<1, 64, 0>;
+    type Storage = TasksStorage<1, 64, 0>;
 
     fn poll(reserve: &mut ReserveTask<'static, 1, 64, 0>) -> bool {
         Pin::new(reserve)
@@ -96,23 +96,25 @@ mod tests {
 
     #[test]
     fn waits_until_a_task_finishes() {
-        static TASKS: TestTasks = TestTasks::new();
-        let _ = spawn_static(&TASKS, async {});
-        let mut reserve = ReserveTask::new(&TASKS, claimed_forever());
+        static STORAGE: Storage = Storage::new();
+        let tasks = &STORAGE.tasks;
+        let _ = spawn_static(tasks, async {});
+        let mut reserve = ReserveTask::new(tasks, claimed_forever());
         assert!(!poll(&mut reserve));
-        assert!(TASKS.has_slot_waiter());
-        let _ = TASKS.run_ready();
+        assert!(tasks.has_slot_waiter());
+        let _ = tasks.run_ready();
         assert!(poll(&mut reserve));
-        assert!(!TASKS.has_slot_waiter());
+        assert!(!tasks.has_slot_waiter());
     }
 
     #[test]
     #[should_panic(expected = "only one task can wait for a free task slot")]
     fn a_second_waiter_panics() {
-        static TASKS: TestTasks = TestTasks::new();
-        let _ = spawn_static(&TASKS, pending());
-        let mut first = ReserveTask::new(&TASKS, claimed_forever());
-        let mut second = ReserveTask::new(&TASKS, claimed_forever());
+        static STORAGE: Storage = Storage::new();
+        let tasks = &STORAGE.tasks;
+        let _ = spawn_static(tasks, pending());
+        let mut first = ReserveTask::new(tasks, claimed_forever());
+        let mut second = ReserveTask::new(tasks, claimed_forever());
         assert!(!poll(&mut first));
         poll(&mut second);
     }

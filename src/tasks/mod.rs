@@ -35,15 +35,6 @@ pub(crate) struct Tasks<const TASKS: usize, const TASK_SIZE: usize, const ROOT_T
     pub(crate) slot_waiter: WakerSlot,
 }
 
-// SAFETY: `Tasks` is crate-private, so only the crate can reach it, and the crate uses each one
-// from a single thread: a loop's tasks only through its `Context`, which `Context::claim` creates
-// on the claiming thread, and the `JoinHandle`s, `ReserveTask`s and `TaskReservation`s it hands
-// out, all `!Send`; a test's tasks only from that test. Wakers only touch the atomic `WakeQueue`, which asserts that thread.
-unsafe impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> Sync
-    for Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>
-{
-}
-
 impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
     Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
@@ -75,16 +66,18 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         !self.queue.is_empty()
     }
 
-    pub(crate) fn spawn<'a, Fut>(&'static self, _: Claimed<'a>, future: Fut) -> TaskId<TASK_SIZE>
+    pub(crate) fn spawn<'a, Fut>(
+        &'static self,
+        claimed: Claimed<'a>,
+        future: Fut,
+    ) -> TaskId<TASK_SIZE>
     where
         Fut: Future<Output = ()> + 'a,
     {
         let Some((id, entry)) = self.reserve() else {
             panic!("more than {TASKS} concurrent tasks");
         };
-        // SAFETY: `entry` lives in `self`, which is `'static`, so it never moves. `Fut: 'a`, and
-        // the `Claimed<'a>` guarantees every poll and drop of its task happens before `'a` ends.
-        unsafe { entry.write(future) };
+        entry.write(claimed, future);
         self.queue.push(id.slot());
         id
     }
@@ -124,16 +117,14 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
 
     pub(crate) fn spawn_reserved<'a, Fut>(
         &self,
-        _: Claimed<'a>,
+        claimed: Claimed<'a>,
         id: TaskId<TASK_SIZE>,
         entry: &'static TaskEntry<TASK_SIZE>,
         future: Fut,
     ) where
         Fut: Future<Output = ()> + 'a,
     {
-        // SAFETY: `entry` is `'static`, so it never moves. `Fut: 'a`, and the `Claimed<'a>`
-        // guarantees every poll and drop of its task happens before `'a` ends.
-        unsafe { entry.write(future) };
+        entry.write(claimed, future);
         self.queue.push(id.slot());
     }
 

@@ -5,6 +5,7 @@ use core::{
 };
 
 use crate::{
+    claimed::Claimed,
     pool::Index,
     tasks::{Aligned16, Task, TaskSlot},
     waker_slot::WakerSlot,
@@ -26,13 +27,9 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
         }
     }
 
-    /// # Safety
-    ///
-    /// `self` must not move while it holds this task, and everything `Fut` borrows must outlive
-    /// every poll and drop of the task.
-    pub(crate) unsafe fn write<Fut>(&self, future: Fut)
+    pub(crate) fn write<'a, Fut>(&'static self, _: Claimed<'a>, future: Fut)
     where
-        Fut: Future<Output = ()>,
+        Fut: Future<Output = ()> + 'a,
     {
         assert!(
             size_of::<Fut>() <= SIZE,
@@ -47,10 +44,10 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
         assert!(!self.has_task(), "a reserved slot holds no task yet");
         // SAFETY: `Fut` fits the memory, which is aligned to 16 (both checked above). The memory
         // is unused: it holds no task (checked above), and only a `write` puts one there. It
-        // stays valid and unused until the task is dropped: the task lives in `self`, which
-        // doesn't move while holding it (guaranteed by the caller), and the next `write` asserts
-        // the task is gone. Everything `Fut` borrows outlives every poll and drop of the task
-        // (guaranteed by the caller).
+        // stays valid and unused until the task is dropped: the task lives in `self`, which is
+        // `'static`, so it never moves, and the next `write` asserts the task is gone. `Fut: 'a`,
+        // and the `Claimed<'a>` guarantees every poll and drop of the task happens before `'a`
+        // ends.
         let task = unsafe { Task::write(self.memory.as_ptr(), future) };
         self.occupy(task);
     }
