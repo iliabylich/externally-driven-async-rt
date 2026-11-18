@@ -1,10 +1,13 @@
 use crate::{
-    pool::{Index, ObjectPool},
+    pool::{ObjectPool, VersionedIndex},
     testing::assert_yields,
 };
 use core::cell::Cell;
 
-fn alloc<T, const N: usize>(pool: &ObjectPool<Cell<T>, N>, value: T) -> Option<Index<Cell<T>>> {
+fn alloc<T, const N: usize>(
+    pool: &ObjectPool<Cell<T>, N>,
+    value: T,
+) -> Option<VersionedIndex<Cell<T>>> {
     let (index, slot) = pool.alloc()?;
     slot.set(value);
     Some(index)
@@ -12,7 +15,7 @@ fn alloc<T, const N: usize>(pool: &ObjectPool<Cell<T>, N>, value: T) -> Option<I
 
 fn value<T: Copy, const N: usize>(
     pool: &ObjectPool<Cell<T>, N>,
-    index: Index<Cell<T>>,
+    index: VersionedIndex<Cell<T>>,
 ) -> Option<T> {
     pool.get(index).map(Cell::get)
 }
@@ -55,14 +58,14 @@ fn a_slot_is_usable_while_another_is_allocated_and_freed() {
 }
 
 #[test]
-fn index_round_trips_through_bits() {
+fn index_round_trips_through_pack_unpack() {
     let pool = &ObjectPool::<Cell<u32>, 2>::new([const { Cell::new(0) }; 2]);
     let first = alloc(pool, 1).unwrap();
     pool.free(first);
     let index = alloc(pool, 2).unwrap();
-    assert_eq!(Index::from_bits(index.to_bits()), index);
-    assert_ne!(index.to_bits(), first.to_bits());
-    assert!(pool.get(Index::from_bits(first.to_bits())).is_none());
+    assert_eq!(VersionedIndex::unpack(index.pack()), index);
+    assert_ne!(index.pack(), first.pack());
+    assert!(pool.get(VersionedIndex::unpack(first.pack())).is_none());
 }
 
 #[test]
@@ -73,7 +76,7 @@ fn full_pool_rejects_alloc() {
 }
 
 #[test]
-fn freed_slot_is_reused_with_a_new_generation() {
+fn freed_slot_is_reused_with_a_new_version() {
     let pool = &ObjectPool::<Cell<u32>, 1>::new([const { Cell::new(0) }; 1]);
     let old = alloc(pool, 1).unwrap();
     pool.free(old);
@@ -141,23 +144,23 @@ fn freeing_the_yielded_slot_while_iterating() {
 #[test]
 fn occupied_list_stays_consistent() {
     let pool = &ObjectPool::<Cell<u32>, 8>::new([const { Cell::new(0) }; 8]);
-    let mut live: [Option<(Index<Cell<u32>>, u32)>; 8] = [None; 8];
+    let mut live: [Option<(VersionedIndex<Cell<u32>>, u32)>; 8] = [None; 8];
     let mut next_value = 0;
     for step in 0..64u32 {
         let live_count = live.iter().flatten().count();
         if step % 3 == 2 && live_count > 0 {
             let position = (step as usize * 7) % live_count;
             let (index, value) = live.iter().flatten().nth(position).copied().unwrap();
-            live[index.slot() as usize] = None;
+            live[index.idx as usize] = None;
             assert_eq!(pool.get(index).map(Cell::get), Some(value));
             pool.free(index);
         } else if let Some(index) = alloc(pool, next_value) {
-            live[index.slot() as usize] = Some((index, next_value));
+            live[index.idx as usize] = Some((index, next_value));
             next_value += 1;
         }
         assert_eq!(pool.iter().count(), live.iter().flatten().count());
         for (index, value) in pool.iter() {
-            assert_eq!(live[index.slot() as usize], Some((index, value.get())));
+            assert_eq!(live[index.idx as usize], Some((index, value.get())));
         }
     }
 }

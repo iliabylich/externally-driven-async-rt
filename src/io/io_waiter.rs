@@ -3,7 +3,7 @@ use core::cell::Cell;
 use rustix::fd::RawFd;
 
 use crate::{
-    pool::Index,
+    pool::VersionedIndex,
     selector::{Direction, Directions, IoChange},
     waker_slot::WakerSlot,
 };
@@ -98,11 +98,11 @@ impl IoWaiter {
 
     fn change(&self, index: IoIndex) -> IoChange {
         IoChange {
-            token: index.to_bits(),
+            token: index.pack(),
             fd: self.fd(),
             interest: self.interest(),
         }
     }
 }
 
-pub(crate) type IoIndex = Index<IoWaiter>;
+pub(crate) type IoIndex = VersionedIndex<IoWaiter>;

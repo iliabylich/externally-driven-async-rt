@@ -185,7 +185,7 @@ impl<
                     SelectorEvent::Io { token, ready } => {
                         self.storage
                             .io_waiters
-                            .wake_ready(IoIndex::from_bits(token), ready);
+                            .wake_ready(IoIndex::unpack(token), ready);
                     }
                     SelectorEvent::Notify => self.storage.notification.fire(),
                     SelectorEvent::Timer => {

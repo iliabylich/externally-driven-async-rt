@@ -104,7 +104,7 @@ mod tests {
 
     fn change(index: IoIndex, fd: i32, interest: Directions) -> IoChange {
         IoChange {
-            token: index.to_bits(),
+            token: index.pack(),
             fd,
             interest,
         }

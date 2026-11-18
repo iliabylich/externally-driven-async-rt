@@ -27,7 +27,7 @@ fn waker<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
     tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
     id: TaskId<TASK_SIZE>,
 ) -> Waker {
-    tasks.queue.waker(id.slot())
+    tasks.queue.waker(id.idx)
 }
 
 #[test]
@@ -89,7 +89,7 @@ fn a_task_spawned_while_one_is_dropped_gets_another_slot() {
                 JoinStatus::Finished
             );
             let spawned = spawn_static(self.tasks, async {}).unwrap();
-            assert_ne!(spawned.slot(), self.id.slot());
+            assert_ne!(spawned.idx, self.id.idx);
         }
     }
 
@@ -166,7 +166,7 @@ fn root_region_holds_a_root_bigger_than_a_slab_block() {
         panic!("spawning the root makes it running");
     };
     let sibling = spawn_static(tasks, async {}).unwrap();
-    assert_ne!(sibling.slot(), id.slot());
+    assert_ne!(sibling.idx, id.idx);
     assert_eq!(tasks.run_ready(), RootStatus::Running);
     assert!(contains(tasks, id));
     assert!(!DROPPED.load(Relaxed));

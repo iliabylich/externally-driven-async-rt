@@ -108,7 +108,7 @@ mod tests {
         let (id, entry) = tasks.reserve().unwrap();
         let reservation = TaskReservation::new(tasks, claimed_forever(), id, entry);
         let mut reserve = ReserveTask::new(tasks, claimed_forever());
-        let waker = tasks.queue.waker(waiter.slot());
+        let waker = tasks.queue.waker(waiter.idx);
         let mut cx = Context::from_waker(&waker);
         assert!(Pin::new(&mut reserve).poll(&mut cx).is_pending());
         drop(reservation);

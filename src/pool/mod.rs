@@ -3,7 +3,7 @@ mod slot;
 
 use core::cell::Cell;
 
-pub(crate) use self::index::Index;
+pub(crate) use self::index::VersionedIndex;
 use self::slot::Slot;
 use crate::conversions::u32_to_usize;
 
@@ -22,7 +22,7 @@ impl<T, const N: usize> ObjectPool<T, N> {
             assert!(N <= 0xFFFF_FFFF, "object pool capacity must fit in u32");
             let mut slots = [const {
                 Cell::new(Slot::Vacant {
-                    generation: 0,
+                    version: 0,
                     next_free: None,
                 })
             }; N];
@@ -30,7 +30,7 @@ impl<T, const N: usize> ObjectPool<T, N> {
             let mut next: u32 = 1;
             while i + 1 < N {
                 slots[i] = Cell::new(Slot::Vacant {
-                    generation: 0,
+                    version: 0,
                     next_free: Some(next),
                 });
                 i += 1;
@@ -46,41 +46,37 @@ impl<T, const N: usize> ObjectPool<T, N> {
         }
     }
 
-    pub(crate) fn alloc(&self) -> Option<(Index<T>, &T)> {
-        let slot = self.free_head.get()?;
-        let Some((cell, value)) = self.entry(slot) else {
+    pub(crate) fn alloc(&self) -> Option<(VersionedIndex<T>, &T)> {
+        let idx = self.free_head.get()?;
+        let Some((slot, value)) = self.entry(idx) else {
             unreachable!("the free list points outside the pool");
         };
-        let Slot::Vacant {
-            generation,
-            next_free,
-        } = cell.get()
-        else {
+        let Slot::Vacant { version, next_free } = slot.get() else {
             unreachable!("the free list points at an occupied slot");
         };
         let head = self.occupied_head.get();
-        cell.set(Slot::Occupied {
-            generation,
+        slot.set(Slot::Occupied {
+            version,
             prev: None,
             next: head,
         });
         self.free_head.set(next_free);
         if let Some(head) = head {
-            self.set_prev(head, Some(slot));
+            self.set_prev(head, Some(idx));
         }
-        self.occupied_head.set(Some(slot));
-        Some((Index::from_parts(slot, generation), value))
+        self.occupied_head.set(Some(idx));
+        Some((VersionedIndex::new(idx, version), value))
     }
 
-    pub(crate) fn free(&self, index: Index<T>) {
-        let Some((cell, _)) = self.occupied(index) else {
+    pub(crate) fn free(&self, idx: VersionedIndex<T>) {
+        let Some((slot, _)) = self.occupied(idx) else {
             return;
         };
-        let Slot::Occupied { prev, next, .. } = cell.get() else {
+        let Slot::Occupied { prev, next, .. } = slot.get() else {
             unreachable!("checked by `occupied`");
         };
-        cell.set(Slot::Vacant {
-            generation: index.generation().wrapping_add(1),
+        slot.set(Slot::Vacant {
+            version: idx.version.wrapping_add(1),
             next_free: self.free_head.get(),
         });
         match prev {
@@ -90,85 +86,76 @@ impl<T, const N: usize> ObjectPool<T, N> {
         if let Some(next) = next {
             self.set_prev(next, prev);
         }
-        self.free_head.set(Some(index.slot()));
+        self.free_head.set(Some(idx.idx));
     }
 
-    fn entry(&self, slot: u32) -> Option<(&Cell<Slot>, &T)> {
-        let slot = u32_to_usize(slot);
-        self.slots.get(slot).zip(self.values.get(slot))
+    fn entry(&self, idx: u32) -> Option<(&Cell<Slot>, &T)> {
+        let idx = u32_to_usize(idx);
+        let slot = self.slots.get(idx)?;
+        let value = self.values.get(idx)?;
+        Some((slot, value))
     }
 
-    fn occupied(&self, index: Index<T>) -> Option<(&Cell<Slot>, &T)> {
-        let (cell, value) = self.entry(index.slot())?;
-        match cell.get() {
-            Slot::Occupied { generation, .. } if generation == index.generation() => {
-                Some((cell, value))
-            }
+    fn occupied(&self, index: VersionedIndex<T>) -> Option<(&Cell<Slot>, &T)> {
+        let (slot, value) = self.entry(index.idx)?;
+        match slot.get() {
+            Slot::Occupied { version, .. } if version == index.version => Some((slot, value)),
             _ => None,
         }
     }
 
-    fn set_prev(&self, slot: u32, link: Option<u32>) {
-        let Some((cell, _)) = self.entry(slot) else {
+    fn set_prev(&self, idx: u32, link: Option<u32>) {
+        let Some((slot, _)) = self.entry(idx) else {
             unreachable!("the occupied list points outside the pool");
         };
-        let Slot::Occupied {
-            generation, next, ..
-        } = cell.get()
-        else {
+        let Slot::Occupied { version, next, .. } = slot.get() else {
             unreachable!("the occupied list points at a vacant slot");
         };
-        cell.set(Slot::Occupied {
-            generation,
+        slot.set(Slot::Occupied {
+            version,
             prev: link,
             next,
         });
     }
 
-    fn set_next(&self, slot: u32, link: Option<u32>) {
-        let Some((cell, _)) = self.entry(slot) else {
+    fn set_next(&self, idx: u32, link: Option<u32>) {
+        let Some((slot, _)) = self.entry(idx) else {
             unreachable!("the occupied list points outside the pool");
         };
-        let Slot::Occupied {
-            generation, prev, ..
-        } = cell.get()
-        else {
+        let Slot::Occupied { version, prev, .. } = slot.get() else {
             unreachable!("the occupied list points at a vacant slot");
         };
-        cell.set(Slot::Occupied {
-            generation,
+        slot.set(Slot::Occupied {
+            version,
             prev,
             next: link,
         });
     }
 
-    pub(crate) fn get(&self, index: Index<T>) -> Option<&T> {
-        self.occupied(index).map(|(_, value)| value)
+    pub(crate) fn get(&self, idx: VersionedIndex<T>) -> Option<&T> {
+        self.occupied(idx).map(|(_, value)| value)
     }
 
-    pub(crate) fn get_at(&self, slot: u32) -> Option<(Index<T>, &T)> {
-        let (cell, value) = self.entry(slot)?;
-        let Slot::Occupied { generation, .. } = cell.get() else {
+    pub(crate) fn get_at(&self, idx: u32) -> Option<(VersionedIndex<T>, &T)> {
+        let (slot, value) = self.entry(idx)?;
+        let Slot::Occupied { version, .. } = slot.get() else {
             return None;
         };
-        Some((Index::from_parts(slot, generation), value))
+        Some((VersionedIndex::new(idx, version), value))
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (Index<T>, &T)> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (VersionedIndex<T>, &T)> {
         let mut cursor = self.occupied_head.get();
         core::iter::from_fn(move || {
-            let slot = cursor?;
-            let Some((cell, value)) = self.entry(slot) else {
+            let idx = cursor?;
+            let Some((slot, value)) = self.entry(idx) else {
                 unreachable!("the occupied list points outside the pool");
             };
-            let Slot::Occupied {
-                generation, next, ..
-            } = cell.get()
-            else {
+            let Slot::Occupied { version, next, .. } = slot.get() else {
                 unreachable!("the occupied list points at a vacant slot");
             };
             cursor = next;
-            Some((Index::from_parts(slot, generation), value))
+            Some((VersionedIndex::new(idx, version), value))
         })
     }
 }

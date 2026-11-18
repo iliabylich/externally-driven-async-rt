@@ -87,7 +87,7 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
     {
         let (id, entry) = self.reserve().ok_or(TasksFullError)?;
         entry.write(claimed, f());
-        self.queue.push(id.slot());
+        self.queue.push(id.idx);
         Ok(id)
     }
 
@@ -103,7 +103,7 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         };
         let task = Task::write(&self.root_region, claimed, future);
         entry.occupy(task);
-        self.queue.push(id.slot());
+        self.queue.push(id.idx);
         self.root.set(Root::Running(id));
     }
 
@@ -117,7 +117,7 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         Fut: Future<Output = ()> + 'a,
     {
         entry.write(claimed, future);
-        self.queue.push(id.slot());
+        self.queue.push(id.idx);
     }
 
     pub(crate) fn reserve(&self) -> Option<(TaskId<TASK_SIZE>, &TaskEntry<TASK_SIZE>)> {

@@ -1,6 +1,6 @@
 use core::{cell::Cell, task::Waker};
 
-use crate::{pool::Index, time::Instant, waker_slot::WakerSlot};
+use crate::{pool::VersionedIndex, time::Instant, waker_slot::WakerSlot};
 
 #[must_use]
 pub(crate) struct TimerEntry {
@@ -45,4 +45,4 @@ impl TimerEntry {
     }
 }
 
-pub(crate) type TimerIndex = Index<TimerEntry>;
+pub(crate) type TimerIndex = VersionedIndex<TimerEntry>;

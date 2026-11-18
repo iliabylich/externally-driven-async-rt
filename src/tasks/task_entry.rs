@@ -6,7 +6,7 @@ use core::{
 
 use crate::{
     claimed::Claimed,
-    pool::Index,
+    pool::VersionedIndex,
     tasks::{Task, TaskMemory, TaskSlot},
     waker_slot::WakerSlot,
 };
@@ -82,4 +82,4 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
     }
 }
 
-pub(crate) type TaskId<const SIZE: usize> = Index<TaskEntry<SIZE>>;
+pub(crate) type TaskId<const SIZE: usize> = VersionedIndex<TaskEntry<SIZE>>;

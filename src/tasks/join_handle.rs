@@ -122,7 +122,7 @@ mod tests {
         let stale = JoinHandle::new(tasks, spawn_static(tasks, async {}).unwrap());
         let _ = tasks.run_ready();
         let id = spawn_static(tasks, async {}).unwrap();
-        assert_eq!(id.slot(), stale.id.slot());
+        assert_eq!(id.idx, stale.id.idx);
         let mut handle = JoinHandle::new(tasks, id);
         assert_eq!(poll(&mut handle, &counting_waker(&drops)), Poll::Pending);
         assert_eq!(drops.get(), 1);

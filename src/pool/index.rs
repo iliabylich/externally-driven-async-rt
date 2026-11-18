@@ -3,63 +3,55 @@ use core::{fmt, marker::PhantomData};
 const _: () = assert!(usize::BITS == 64, "only 64-bit targets are supported");
 
 #[must_use]
-pub(crate) struct Index<T> {
-    slot: u32,
-    generation: u32,
+pub(crate) struct VersionedIndex<T> {
+    pub(crate) idx: u32,
+    pub(crate) version: u32,
     _marker: PhantomData<fn() -> T>,
 }
 
-impl<T> Index<T> {
-    pub(crate) fn from_parts(slot: u32, generation: u32) -> Self {
+impl<T> VersionedIndex<T> {
+    pub(crate) fn new(idx: u32, version: u32) -> Self {
         Self {
-            slot,
-            generation,
+            idx,
+            version,
             _marker: PhantomData,
         }
     }
 
-    pub(crate) const fn slot(self) -> u32 {
-        self.slot
+    pub(crate) const fn pack(self) -> usize {
+        let [i1, i2, i3, i4] = self.idx.to_le_bytes();
+        let [v1, v2, v3, v4] = self.version.to_le_bytes();
+        usize::from_le_bytes([i1, i2, i3, i4, v1, v2, v3, v4])
     }
 
-    pub(crate) const fn generation(self) -> u32 {
-        self.generation
-    }
-
-    pub(crate) const fn to_bits(self) -> usize {
-        let [s0, s1, s2, s3] = self.slot.to_le_bytes();
-        let [g0, g1, g2, g3] = self.generation.to_le_bytes();
-        usize::from_le_bytes([s0, s1, s2, s3, g0, g1, g2, g3])
-    }
-
-    pub(crate) const fn from_bits(bits: usize) -> Self {
-        let [s0, s1, s2, s3, g0, g1, g2, g3] = bits.to_le_bytes();
+    pub(crate) const fn unpack(bits: usize) -> Self {
+        let [i1, i2, i3, i4, v1, v2, v3, v4] = bits.to_le_bytes();
         Self {
-            slot: u32::from_le_bytes([s0, s1, s2, s3]),
-            generation: u32::from_le_bytes([g0, g1, g2, g3]),
+            idx: u32::from_le_bytes([i1, i2, i3, i4]),
+            version: u32::from_le_bytes([v1, v2, v3, v4]),
             _marker: PhantomData,
         }
     }
 }
 
-impl<T> Clone for Index<T> {
+impl<T> Clone for VersionedIndex<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T> Copy for Index<T> {}
+impl<T> Copy for VersionedIndex<T> {}
 
-impl<T> PartialEq for Index<T> {
+impl<T> PartialEq for VersionedIndex<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.slot == other.slot && self.generation == other.generation
+        self.idx == other.idx && self.version == other.version
     }
 }
 
-impl<T> Eq for Index<T> {}
+impl<T> Eq for VersionedIndex<T> {}
 
-impl<T> fmt::Debug for Index<T> {
+impl<T> fmt::Debug for VersionedIndex<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Index({}v{})", self.slot, self.generation)
+        write!(f, "VersionedIndex({}v{})", self.idx, self.version)
     }
 }
