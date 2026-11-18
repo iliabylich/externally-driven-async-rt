@@ -95,7 +95,7 @@ async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
         .unwrap();
     let _ = ctx.spawn(async |ctx| {
         loop {
-            ctx.sleep(Duration::from_secs(10)).await;
+            ctx.sleep(Duration::from_secs(10)).await.unwrap();
             ctx.dispatch(Event::Tick).unwrap();
         }
     });
@@ -110,7 +110,7 @@ async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
             }
             Err(errno) => {
                 ctx.dispatch(Event::AcceptFailed(errno)).unwrap();
-                ctx.sleep(Duration::from_millis(100)).await;
+                ctx.sleep(Duration::from_millis(100)).await.unwrap();
             }
         }
     }

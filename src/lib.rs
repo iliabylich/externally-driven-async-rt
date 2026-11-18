@@ -42,4 +42,4 @@ pub use select::{Either2, Either3, select2, select3};
 pub use selector::Selector;
 pub use storage::LoopStorage;
 pub use tasks::{JoinHandle, ReserveTask, TaskReservation};
-pub use time::Sleep;
+pub use time::{Sleep, TimersFullError};

@@ -80,7 +80,7 @@ fn notification_without_a_waiter_is_kept() {
         },
         &mut selector,
         async |ctx| {
-            ctx.sleep(Duration::from_millis(10)).await;
+            ctx.sleep(Duration::from_millis(10)).await.unwrap();
             ctx.dispatch(1).unwrap();
             ctx.notified().await;
             ctx.dispatch(2).unwrap();

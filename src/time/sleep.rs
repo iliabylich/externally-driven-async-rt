@@ -1,6 +1,6 @@
 use core::{future::Future, pin::Pin, task::Poll};
 
-use crate::time::{Instant, TimerEntry, TimerIndex, Timers};
+use crate::time::{Instant, TimerEntry, TimerIndex, Timers, TimersFullError};
 
 /// A sleep future.
 #[must_use = "futures do nothing unless you `.await` or poll them"]
@@ -21,18 +21,21 @@ impl<'ctx, const TIMERS: usize> Sleep<'ctx, TIMERS> {
 }
 
 impl<const TIMERS: usize> Future for Sleep<'_, TIMERS> {
-    type Output = ();
+    type Output = Result<(), TimersFullError>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<Self::Output> {
         if Instant::now() >= self.deadline {
             if let Some((index, _)) = self.timer.take() {
                 self.timers.release(index);
             }
-            return Poll::Ready(());
+            return Poll::Ready(Ok(()));
         }
         match self.timer {
             Some((_, timer)) => timer.set_waker(cx.waker()),
-            None => self.timer = Some(self.timers.alloc(self.deadline, cx.waker().clone())),
+            None => match self.timers.alloc(self.deadline, cx.waker().clone()) {
+                Ok(timer) => self.timer = Some(timer),
+                Err(err) => return Poll::Ready(Err(err)),
+            },
         }
         Poll::Pending
     }
@@ -66,7 +69,7 @@ mod tests {
         testing::{
             EventLoopTestingExt, FdTestingExt, TestLoop, TestStorage, assert_yields, sleep_blocking,
         },
-        time::{Instant, Sleep, Timers},
+        time::{Instant, Sleep, Timers, TimersFullError},
     };
 
     #[test]
@@ -81,7 +84,7 @@ mod tests {
             },
             &mut selector,
             async |ctx| {
-                ctx.sleep(Duration::from_millis(20)).await;
+                ctx.sleep(Duration::from_millis(20)).await.unwrap();
                 ctx.dispatch(1).unwrap();
             },
         )
@@ -105,7 +108,7 @@ mod tests {
             async |ctx| {
                 let handles = [30, 10, 20].map(|ms| {
                     ctx.spawn(async move |ctx| {
-                        ctx.sleep(Duration::from_millis(ms)).await;
+                        ctx.sleep(Duration::from_millis(ms)).await.unwrap();
                         ctx.dispatch(ms as u32).unwrap();
                     })
                 });
@@ -137,7 +140,8 @@ mod tests {
                 for i in 0..5 {
                     next = next + period;
                     ctx.sleep(next.saturating_duration_since(Instant::now()))
-                        .await;
+                        .await
+                        .unwrap();
                     ctx.dispatch(i).unwrap();
                 }
             },
@@ -153,7 +157,7 @@ mod tests {
         let timers = &Timers::<1>::new();
         let mut cx = Context::from_waker(Waker::noop());
         let mut sleep = Sleep::new(timers, Instant::now());
-        assert_eq!(Pin::new(&mut sleep).poll(&mut cx), Poll::Ready(()));
+        assert_eq!(Pin::new(&mut sleep).poll(&mut cx), Poll::Ready(Ok(())));
         assert_eq!(timers.next_deadline(), None);
     }
 
@@ -176,8 +180,22 @@ mod tests {
         let mut sleep = Sleep::new(timers, Instant::now() + Duration::from_millis(1));
         assert_eq!(Pin::new(&mut sleep).poll(&mut cx), Poll::Pending);
         sleep_blocking(Duration::from_millis(1));
-        assert_eq!(Pin::new(&mut sleep).poll(&mut cx), Poll::Ready(()));
+        assert_eq!(Pin::new(&mut sleep).poll(&mut cx), Poll::Ready(Ok(())));
         assert_eq!(timers.next_deadline(), None);
+    }
+
+    #[test]
+    fn sleep_without_a_free_timer_fails() {
+        let timers = &Timers::<1>::new();
+        let mut cx = Context::from_waker(Waker::noop());
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut first = Sleep::new(timers, deadline);
+        let mut second = Sleep::new(timers, deadline);
+        assert_eq!(Pin::new(&mut first).poll(&mut cx), Poll::Pending);
+        assert_eq!(
+            Pin::new(&mut second).poll(&mut cx),
+            Poll::Ready(Err(TimersFullError))
+        );
     }
 
     #[test]

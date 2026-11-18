@@ -27,7 +27,8 @@ fn future_finishing_first_wins() {
         async move |ctx| {
             let result = ctx
                 .timeout(Duration::from_secs(60), wait_readable(&ctx, &rx))
-                .await;
+                .await
+                .unwrap();
             ctx.dispatch(result.map_or(0, |()| 1)).unwrap();
             pending::<()>().await;
         },
@@ -56,7 +57,8 @@ fn elapsing_drops_the_future() {
         async move |ctx| {
             let result = ctx
                 .timeout(Duration::from_millis(10), wait_readable(&ctx, &rx))
-                .await;
+                .await
+                .unwrap();
             ctx.dispatch(result.map_or(0, |()| 1)).unwrap();
             pending::<()>().await;
         },
@@ -80,7 +82,10 @@ fn ready_future_beats_a_zero_timeout() {
         },
         &mut selector,
         async move |ctx| {
-            let result = ctx.timeout(Duration::ZERO, wait_readable(&ctx, &rx)).await;
+            let result = ctx
+                .timeout(Duration::ZERO, wait_readable(&ctx, &rx))
+                .await
+                .unwrap();
             ctx.dispatch(result.map_or(0, |()| 1)).unwrap();
             pending::<()>().await;
         },
@@ -102,7 +107,7 @@ fn ready_pinned_future_resolves_and_releases_the_timer() {
         core::future::ready(()).await;
         *borrowed
     }));
-    assert_eq!(timeout.as_mut().poll(&mut cx), Poll::Ready(Some(1)));
+    assert_eq!(timeout.as_mut().poll(&mut cx), Poll::Ready(Ok(Some(1))));
     assert_eq!(ctx.storage.timers.next_deadline(), None);
 }
 

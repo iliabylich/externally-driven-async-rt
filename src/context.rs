@@ -9,7 +9,7 @@ use crate::{
     selector::{EVENTS_PER_CALL, Selector, SelectorEvent},
     storage::LoopStorage,
     tasks::{JoinHandle, ReserveTask},
-    time::{Instant, Sleep},
+    time::{Instant, Sleep, TimersFullError},
 };
 
 /// A handle of the event loop that you are currently in.
@@ -106,6 +106,10 @@ impl<
 
     /// Sleeps for `duration`.
     ///
+    /// # Errors
+    ///
+    /// The returned future resolves to an error if all `TIMERS` timer slots are taken.
+    ///
     /// # Cancel safety
     ///
     /// This method is cancel safe.
@@ -116,7 +120,11 @@ impl<
         )
     }
 
-    /// Runs `future` with a timeout of `duration`, resolves to `None` in case of a timeout.
+    /// Runs `future` with a timeout of `duration`, resolves to `Ok(None)` in case of a timeout.
+    ///
+    /// # Errors
+    ///
+    /// The returned future resolves to an error if all `TIMERS` timer slots are taken.
     ///
     /// # Cancel safety
     ///
@@ -125,12 +133,13 @@ impl<
         &self,
         duration: Duration,
         future: F,
-    ) -> impl Future<Output = Option<F::Output>> {
+    ) -> impl Future<Output = Result<Option<F::Output>, TimersFullError>> {
         let sleep = self.sleep(duration);
         async move {
             match select2(future, sleep).await {
-                Either2::Left(output) => Some(output),
-                Either2::Right(()) => None,
+                Either2::Left(output) => Ok(Some(output)),
+                Either2::Right(Ok(())) => Ok(None),
+                Either2::Right(Err(err)) => Err(err),
             }
         }
     }
