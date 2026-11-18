@@ -102,7 +102,7 @@ mod tests {
     fn dropping_frees_the_slot_and_wakes_the_waiter() {
         static STORAGE: TasksStorage<2, 64, 0> = TasksStorage::new();
         let tasks = &STORAGE.tasks;
-        tasks.queue.claim();
+        assert!(tasks.queue.claim());
         let waiter = spawn_static(tasks, pending()).unwrap();
         let _ = tasks.run_ready();
         let (id, entry) = tasks.reserve().unwrap();

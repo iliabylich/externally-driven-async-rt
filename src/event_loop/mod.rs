@@ -43,16 +43,13 @@ impl<
     /// The future must fit `ROOT_TASK_SIZE` bytes and be aligned to at most 16 bytes, otherwise
     /// the program doesn't compile.
     ///
-    /// # Panics
-    ///
-    /// Panics if `storage` has already been used by another event loop.
-    ///
     /// # Errors
     ///
     /// Returns an error if:
     ///
-    /// 1. epoll/kqueue returned an error during initial poll
-    /// 2. given future completed during initial poll.
+    /// 1. `storage` has already been used by another event loop, `f` isn't called then
+    /// 2. epoll/kqueue returned an error during initial poll
+    /// 3. given future completed during initial poll.
     pub fn new<F, Fut>(
         storage: &'static LoopStorage<E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         selector: &'a mut Selector,
@@ -62,7 +59,7 @@ impl<
         F: FnOnce(Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
-        let ctx = storage.claim(selector);
+        let ctx = storage.claim(selector).ok_or(Error::StorageAlreadyUsed)?;
         let event_loop = Self { ctx };
         ctx.storage.tasks.spawn_root(ctx.claimed, f(ctx));
         match ctx.storage.tasks.run_ready() {

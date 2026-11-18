@@ -89,10 +89,9 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
     where
         Fut: Future<Output = ()> + 'a,
     {
-        assert!(
-            matches!(self.root.get(), Root::Unset),
-            "the root is already spawned"
-        );
+        if !matches!(self.root.get(), Root::Unset) {
+            unreachable!("the root is already spawned");
+        }
         let Some((id, entry)) = self.pool.alloc() else {
             unreachable!("the root is the first task, the pool has room for it");
         };

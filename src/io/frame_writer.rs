@@ -225,7 +225,7 @@ mod tests {
     fn writes_frames_on_the_next_write_and_flush() {
         static STORAGE: TestStorage = TestStorage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector);
+        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap();
         let mut writer = FrameWriter::<_, 5>::new(Sink::new(2, 16, None));
 
         assert_eq!(
@@ -248,7 +248,7 @@ mod tests {
     fn resumes_a_cancelled_write() {
         static STORAGE: TestStorage = TestStorage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector);
+        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap();
         let mut writer = FrameWriter::<_, 5>::new(Sink::new(2, 3, None));
 
         assert_eq!(
@@ -273,7 +273,7 @@ mod tests {
     fn fails_when_zero_bytes_are_accepted() {
         static STORAGE: TestStorage = TestStorage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector);
+        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap();
         let mut writer = FrameWriter::<_, 5>::new(Sink::new(0, 16, None));
 
         assert_eq!(
@@ -290,7 +290,7 @@ mod tests {
     fn returns_syscall_errors() {
         static STORAGE: TestStorage = TestStorage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector);
+        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap();
         let mut writer = FrameWriter::<_, 5>::new(Sink::new(2, 16, Some(Errno::PIPE)));
 
         assert_eq!(

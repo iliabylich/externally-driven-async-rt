@@ -161,7 +161,7 @@ mod tests {
         buf: &[u8],
     ) -> Poll<Result<(), WriteAllError<Errno>>> {
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = storage.claim(&selector);
+        let ctx: TestContext<'_> = storage.claim(&selector).unwrap();
         let mut cx = Context::from_waker(Waker::noop());
         pin!(writer.write_all(&ctx, buf)).poll(&mut cx)
     }

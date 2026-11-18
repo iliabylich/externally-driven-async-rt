@@ -99,7 +99,7 @@ fn ready_future_beats_a_zero_timeout() {
 fn ready_pinned_future_resolves_and_releases_the_timer() {
     static STORAGE: TestStorage = TestStorage::new();
     let selector = Selector::new().unwrap();
-    let ctx: TestContext<'_> = STORAGE.claim(&selector);
+    let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap();
     let mut cx = Context::from_waker(Waker::noop());
     let mut timeout = pin!(ctx.timeout(Duration::from_secs(60), async {
         let value = 1;
@@ -115,7 +115,7 @@ fn ready_pinned_future_resolves_and_releases_the_timer() {
 fn pending_pinned_future_keeps_its_timer_until_dropped() {
     static STORAGE: TestStorage = TestStorage::new();
     let selector = Selector::new().unwrap();
-    let ctx: TestContext<'_> = STORAGE.claim(&selector);
+    let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap();
     let mut cx = Context::from_waker(Waker::noop());
     {
         let mut timeout = pin!(ctx.timeout(Duration::from_secs(60), async {

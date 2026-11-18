@@ -10,7 +10,7 @@ fn clearing_drops_live_wakers() {
     let selector = Selector::new().unwrap();
     let ctx = {
         static STORAGE: SmallStorage = SmallStorage::new();
-        STORAGE.claim(&selector)
+        STORAGE.claim(&selector).unwrap()
     };
     let _ = ctx
         .storage
@@ -30,12 +30,11 @@ fn clearing_drops_live_wakers() {
 }
 
 #[test]
-#[should_panic(expected = "a WakeQueue can only be used by one EventLoop")]
 fn a_storage_can_only_be_claimed_once() {
     static STORAGE: SmallStorage = SmallStorage::new();
     let selector = Selector::new().unwrap();
-    let _ctx1 = STORAGE.claim(&selector);
-    let _ctx2 = STORAGE.claim(&selector);
+    assert!(STORAGE.claim(&selector).is_some());
+    assert!(STORAGE.claim(&selector).is_none());
 }
 
 #[test]

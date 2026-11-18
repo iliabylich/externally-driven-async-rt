@@ -49,14 +49,11 @@ impl<const N: usize> WakeQueue<N> {
         }
     }
 
-    pub(crate) fn claim(&self) {
-        let claimed =
-            self.owner
-                .compare_exchange(UNCLAIMED, ThreadId::current().to_raw(), Relaxed, Relaxed);
-        assert!(
-            claimed.is_ok(),
-            "a WakeQueue can only be used by one EventLoop"
-        );
+    #[must_use]
+    pub(crate) fn claim(&self) -> bool {
+        self.owner
+            .compare_exchange(UNCLAIMED, ThreadId::current().to_raw(), Relaxed, Relaxed)
+            .is_ok()
     }
 
     pub(crate) fn waker(&'static self, slot: u32) -> Waker {
@@ -190,7 +187,7 @@ mod tests {
     #[test]
     fn waking_pushes_the_slot() {
         static QUEUE: WakeQueue<2> = WakeQueue::new();
-        QUEUE.claim();
+        assert!(QUEUE.claim());
         let waker = QUEUE.waker(1);
         waker.wake_by_ref();
         assert_yields!(drain(&QUEUE), [1]);
@@ -203,7 +200,7 @@ mod tests {
     #[test]
     fn duplicate_wakes_queue_the_slot_once() {
         static QUEUE: WakeQueue<2> = WakeQueue::new();
-        QUEUE.claim();
+        assert!(QUEUE.claim());
         let waker = QUEUE.waker(0);
         waker.wake_by_ref();
         waker.wake_by_ref();
@@ -214,7 +211,7 @@ mod tests {
     #[test]
     fn waking_after_the_queue_was_mutated() {
         static QUEUE: WakeQueue<2> = WakeQueue::new();
-        QUEUE.claim();
+        assert!(QUEUE.claim());
         let waker = QUEUE.waker(0);
         QUEUE.push(1);
         waker.wake_by_ref();
@@ -226,7 +223,7 @@ mod tests {
     #[test]
     fn dropping_does_not_wake() {
         static QUEUE: WakeQueue<2> = WakeQueue::new();
-        QUEUE.claim();
+        assert!(QUEUE.claim());
         let waker = QUEUE.waker(0);
         drop(waker.clone());
         drop(waker);
@@ -234,10 +231,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "a WakeQueue can only be used by one EventLoop")]
-    fn claiming_twice_panics() {
+    fn claiming_twice_fails() {
         let queue = WakeQueue::<1>::new();
-        queue.claim();
-        queue.claim();
+        assert!(queue.claim());
+        assert!(!queue.claim());
     }
 }

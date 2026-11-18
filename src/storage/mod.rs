@@ -65,7 +65,7 @@ impl<
     pub(crate) fn claim<'a>(
         &'static self,
         selector: &'a Selector,
-    ) -> Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
+    ) -> Option<Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>> {
         Context::claim(self, selector)
     }
 }

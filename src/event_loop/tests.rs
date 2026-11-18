@@ -440,6 +440,10 @@ fn errors_display_their_cause() {
     for (error, expected) in [
         (Error::RootFinished, "the root future has finished"),
         (Error::Io(Errno::BADF), "event loop IO error: "),
+        (
+            Error::StorageAlreadyUsed,
+            "the storage has already been used by another event loop",
+        ),
     ] {
         let mut prefix = StartsWith(expected);
         core::fmt::write(&mut prefix, format_args!("{error}")).unwrap();
@@ -469,5 +473,20 @@ fn spawning_into_a_full_pool_fails_without_calling_the_closure() {
     )
     .unwrap();
     assert_yields!(event_loop.events(), [1]);
+    assert!(!CALLED.load(Relaxed));
+}
+
+#[test]
+fn a_used_storage_is_an_error_without_calling_the_closure() {
+    static STORAGE: TestStorage = TestStorage::new();
+    static CALLED: AtomicBool = AtomicBool::new(false);
+    let mut first_selector = Selector::new().unwrap();
+    let _first = TestLoop::new(&STORAGE, &mut first_selector, async |_| pending().await).unwrap();
+    let mut second_selector = Selector::new().unwrap();
+    let second = TestLoop::new(&STORAGE, &mut second_selector, |_| {
+        CALLED.store(true, Relaxed);
+        pending()
+    });
+    assert_eq!(second.err(), Some(Error::StorageAlreadyUsed));
     assert!(!CALLED.load(Relaxed));
 }
