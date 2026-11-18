@@ -109,7 +109,7 @@ mod tests {
                 let handles = [30, 10, 20].map(|ms| {
                     ctx.spawn(async move |ctx| {
                         ctx.sleep(Duration::from_millis(ms)).await.unwrap();
-                        ctx.dispatch(ms as u32).unwrap();
+                        ctx.dispatch(u32::try_from(ms).unwrap()).unwrap();
                     })
                     .unwrap()
                 });

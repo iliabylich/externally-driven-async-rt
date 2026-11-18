@@ -93,7 +93,7 @@ async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
     let mut listener = TcpListener::bind(addr).unwrap();
     ctx.dispatch(Event::Listening(listener.local_addr().unwrap()))
         .unwrap();
-    let _ = ctx
+    let handle = ctx
         .spawn(async |ctx| {
             loop {
                 ctx.sleep(Duration::from_secs(10)).await.unwrap();
@@ -101,16 +101,18 @@ async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
             }
         })
         .unwrap();
+    drop(handle);
     loop {
         match listener.accept(ctx).await {
             Ok((stream, peer)) => {
                 ctx.dispatch(Event::Connected(peer)).unwrap();
-                let _ = ctx
+                let handle = ctx
                     .spawn(async move |ctx| {
                         let error = echo(&ctx, stream, peer).await.err();
                         ctx.dispatch(Event::Disconnected { peer, error }).unwrap();
                     })
                     .unwrap();
+                drop(handle);
             }
             Err(errno) => {
                 ctx.dispatch(Event::AcceptFailed(errno)).unwrap();
@@ -170,6 +172,7 @@ fn read_commands(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    static STORAGE: ServerStorage = ServerStorage::new();
     let addr: SocketAddr = match std::env::args().nth(1) {
         Some(arg) => arg.parse()?,
         None => "127.0.0.1:7878".parse()?,
@@ -177,7 +180,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = async move |ctx: ServerContext<'_>| {
         accept_loop(&ctx, addr).await;
     };
-    static STORAGE: ServerStorage = ServerStorage::new();
     let mut selector = Selector::new()?;
     let mut server = Server::default();
     let mut event_loop = ServerLoop::new(&STORAGE, &mut selector, root)?;
@@ -221,7 +223,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(()) | Err(Errno::INTR) => {}
                 Err(errno) => return Err(errno.to_string().into()),
             }
-            for command in commands.drain(..) {
+            for command in core::mem::take(&mut commands) {
                 match command {
                     Command::Stats => server.print_stats(),
                     Command::Quit => return Ok(()),

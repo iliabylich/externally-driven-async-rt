@@ -14,7 +14,7 @@ use crate::{
 
 pub(crate) fn sleep_blocking(duration: Duration) {
     let timeout = Timespec {
-        tv_sec: duration.as_secs() as i64,
+        tv_sec: i64::try_from(duration.as_secs()).unwrap(),
         tv_nsec: i64::from(duration.subsec_nanos()),
     };
     assert!(matches!(nanosleep(&timeout), NanosleepRelativeResult::Ok));

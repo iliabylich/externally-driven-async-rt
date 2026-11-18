@@ -272,18 +272,20 @@ fn tasks_are_dropped_when_the_root_finishes() {
         },
         &mut selector,
         async move |ctx| {
-            let _ = ctx
+            let handle = ctx
                 .spawn(async |ctx| {
                     let _guard = DispatchOnDrop(&ctx, 10);
                     pending::<()>().await;
                 })
                 .unwrap();
-            let _ = ctx
+            drop(handle);
+            let handle = ctx
                 .spawn(async |ctx| {
                     let _guard = DispatchOnDrop(&ctx, 20);
                     pending::<()>().await;
                 })
                 .unwrap();
+            drop(handle);
             wait_readable(&ctx, &rx).await;
             ctx.dispatch(1).unwrap();
         },
@@ -322,12 +324,13 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
         },
         &mut selector,
         async move |ctx| {
-            let _ = ctx
+            let handle = ctx
                 .spawn(async |ctx| {
                     let _guard = SpawnOnDrop(&ctx);
                     pending::<()>().await;
                 })
                 .unwrap();
+            drop(handle);
             wait_readable(&ctx, &rx).await;
             ctx.dispatch(1).unwrap();
         },
@@ -365,12 +368,13 @@ fn undrained_events_are_dropped_with_the_loop() {
         &mut selector,
         async |ctx| {
             ctx.dispatch(FlagOnDrop::new(&QUEUED)).unwrap();
-            let _ = ctx
+            let handle = ctx
                 .spawn(async |ctx| {
                     let _guard = DispatchFlagOnDrop(&ctx, &DISPATCHED_WHILE_DROPPING);
                     pending::<()>().await;
                 })
                 .unwrap();
+            drop(handle);
             pending::<()>().await;
         },
     )

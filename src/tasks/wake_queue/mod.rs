@@ -109,7 +109,7 @@ impl<const N: usize> WakeQueue<N> {
 
     #[cfg(test)]
     pub(crate) fn id_by_waker_data(&'static self, waker: &Waker) -> u32 {
-        (0..N as u32)
+        (0..u32::try_from(N).unwrap())
             .find(|&id| waker.data() == self.waker(id).data())
             .expect("the waker comes from `waker`")
     }

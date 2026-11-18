@@ -3,6 +3,8 @@ use core::{future::Future, marker::PhantomData, pin::Pin, task::Poll};
 use crate::tasks::{JoinStatus, TaskId, Tasks};
 
 /// A join handle of the spawned task, resolves once the task is finished.
+///
+/// Dropping it detaches the task, which keeps running until it finishes.
 #[must_use]
 pub struct JoinHandle<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> {
     tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,

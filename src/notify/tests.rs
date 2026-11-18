@@ -25,7 +25,7 @@ fn notify_makes_the_loop_readable_and_wakes_the_waiter() {
         },
         &mut selector,
         async |ctx| {
-            for i in 1.. {
+            for i in 1..=u32::MAX {
                 ctx.notified().await;
                 ctx.dispatch(i).unwrap();
             }
@@ -54,7 +54,7 @@ fn notifications_coalesce() {
         },
         &mut selector,
         async |ctx| {
-            for i in 1.. {
+            for i in 1..=u32::MAX {
                 ctx.notified().await;
                 ctx.dispatch(i).unwrap();
             }

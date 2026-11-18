@@ -154,7 +154,7 @@ fn borrowed_halves_read_and_write_concurrently_in_one_task() {
         },
         &mut selector,
         async move |ctx| {
-            let _ = ctx
+            let handle = ctx
                 .spawn(async move |ctx| {
                     let (mut stream, _) = listener.accept(&ctx).await.unwrap();
                     let mut buf = [0; CHUNK];
@@ -170,6 +170,7 @@ fn borrowed_halves_read_and_write_concurrently_in_one_task() {
                     }
                 })
                 .unwrap();
+            drop(handle);
             let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
             let (mut read, mut write) = stream.split();
             let mut reading = pin!(async {
@@ -179,7 +180,7 @@ fn borrowed_halves_read_and_write_concurrently_in_one_task() {
                     let len = read.read(&ctx, &mut buf).await.unwrap();
                     assert_ne!(len, 0);
                     for (i, byte) in buf[..len].iter().enumerate() {
-                        assert_eq!(*byte, (received + i) as u8);
+                        assert_eq!(*byte, u8::try_from((received + i) % 256).unwrap());
                     }
                     received += len;
                 }
@@ -188,7 +189,8 @@ fn borrowed_halves_read_and_write_concurrently_in_one_task() {
             let mut writing = pin!(async {
                 let mut sent = 0;
                 while sent < LEN {
-                    let chunk: [u8; CHUNK] = core::array::from_fn(|i| (sent + i) as u8);
+                    let chunk: [u8; CHUNK] =
+                        core::array::from_fn(|i| u8::try_from((sent + i) % 256).unwrap());
                     let len = CHUNK.min(LEN - sent);
                     sent += write.write(&ctx, &chunk[..len]).await.unwrap();
                 }
@@ -210,12 +212,13 @@ fn borrowed_halves_read_and_write_concurrently_in_one_task() {
                 }
             })
             .await;
-            ctx.dispatch(received.unwrap() as u32).unwrap();
+            ctx.dispatch(u32::try_from(received.unwrap()).unwrap())
+                .unwrap();
             pending::<()>().await;
         },
     )
     .unwrap();
-    assert_eq!(event_loop.run_until_events(), [LEN as u32]);
+    assert_eq!(event_loop.run_until_events(), [u32::try_from(LEN).unwrap()]);
 }
 
 #[test]

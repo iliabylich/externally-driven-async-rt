@@ -110,7 +110,7 @@ async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
     let mut listener = TcpListener::bind(addr).unwrap();
     ctx.dispatch(Event::Listening(listener.local_addr().unwrap()))
         .unwrap();
-    let _ = ctx
+    let handle = ctx
         .spawn(async |ctx| {
             loop {
                 ctx.sleep(Duration::from_secs(10)).await.unwrap();
@@ -118,6 +118,7 @@ async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
             }
         })
         .unwrap();
+    drop(handle);
     loop {
         let task = ctx.reserve_task().await.unwrap();
         let (stream, peer) = loop {
@@ -131,10 +132,11 @@ async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
         };
         ctx.dispatch(Event::Connected(peer)).unwrap();
         let ctx = *ctx;
-        let _ = task.spawn(async move {
+        let handle = task.spawn(async move {
             let event = serve(&ctx, stream, peer).await;
             ctx.dispatch(event).unwrap();
         });
+        drop(handle);
     }
 }
 
@@ -188,6 +190,7 @@ async fn exchange(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    static STORAGE: ServerStorage = ServerStorage::new();
     let addr: SocketAddr = match std::env::args().nth(1) {
         Some(arg) => arg.parse()?,
         None => "127.0.0.1:7879".parse()?,
@@ -195,7 +198,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = async move |ctx: ServerContext<'_>| {
         accept_loop(&ctx, addr).await;
     };
-    static STORAGE: ServerStorage = ServerStorage::new();
     let mut selector = Selector::new()?;
     let mut server = Server::default();
     let mut event_loop = ServerLoop::new(&STORAGE, &mut selector, root)?;

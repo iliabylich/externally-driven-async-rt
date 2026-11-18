@@ -215,9 +215,9 @@ fn a_stale_wake_of_a_freed_slot_polls_nothing() {
 #[test]
 fn a_stale_wake_of_a_reserved_slot_is_skipped() {
     static STORAGE: Storage<1> = Storage::new();
+    static POLLS: AtomicU32 = AtomicU32::new(0);
     let tasks = &STORAGE.tasks;
     assert!(tasks.queue.claim());
-    static POLLS: AtomicU32 = AtomicU32::new(0);
     let id = spawn_static(tasks, async {}).unwrap();
     let waker = waker(tasks, id);
     let _ = tasks.run_ready();
@@ -232,9 +232,9 @@ fn a_stale_wake_of_a_reserved_slot_is_skipped() {
 #[test]
 fn a_stale_wake_of_a_reused_slot_polls_its_new_task() {
     static STORAGE: Storage<1> = Storage::new();
+    static POLLS: AtomicU32 = AtomicU32::new(0);
     let tasks = &STORAGE.tasks;
     assert!(tasks.queue.claim());
-    static POLLS: AtomicU32 = AtomicU32::new(0);
     let id = spawn_static(tasks, async {}).unwrap();
     let waker = waker(tasks, id);
     let _ = tasks.run_ready();
@@ -260,9 +260,9 @@ fn a_task_dropped_while_queued_is_skipped() {
 #[test]
 fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
     static STORAGE: Storage<1> = Storage::new();
+    static POLLS: AtomicU32 = AtomicU32::new(0);
     let tasks = &STORAGE.tasks;
     assert!(tasks.queue.claim());
-    static POLLS: AtomicU32 = AtomicU32::new(0);
     let _ = spawn_static(
         tasks,
         poll_fn(|cx| {
@@ -285,7 +285,7 @@ fn task_spawned_during_a_poll_runs_in_the_same_run() {
     let tasks = &STORAGE.tasks;
     let child = counting(&POLLS);
     let _ = spawn_static(tasks, async move {
-        let _ = spawn_static(tasks, child);
+        let _ = spawn_static(tasks, child).unwrap();
     })
     .unwrap();
     let _ = tasks.run_ready();
@@ -295,9 +295,9 @@ fn task_spawned_during_a_poll_runs_in_the_same_run() {
 #[test]
 fn join_waiter_is_woken_when_the_task_finishes() {
     static STORAGE: Storage<2> = Storage::new();
+    static POLLS: AtomicU32 = AtomicU32::new(0);
     let tasks = &STORAGE.tasks;
     assert!(tasks.queue.claim());
-    static POLLS: AtomicU32 = AtomicU32::new(0);
     let waiter = spawn_static(tasks, counting(&POLLS)).unwrap();
     let task = spawn_static(tasks, async {}).unwrap();
     let _ = tasks.set_join_waiter(task, &waker(tasks, waiter));
@@ -334,9 +334,9 @@ fn spawning_into_a_reserved_slot_queues_the_task() {
 #[test]
 fn releasing_a_slot_wakes_the_slot_waiter() {
     static STORAGE: Storage<2> = Storage::new();
+    static POLLS: AtomicU32 = AtomicU32::new(0);
     let tasks = &STORAGE.tasks;
     assert!(tasks.queue.claim());
-    static POLLS: AtomicU32 = AtomicU32::new(0);
     let waiter = spawn_static(tasks, counting(&POLLS)).unwrap();
     let _ = tasks.run_ready();
     tasks.set_slot_waiter(&waker(tasks, waiter));
@@ -350,9 +350,9 @@ fn releasing_a_slot_wakes_the_slot_waiter() {
 #[test]
 fn finishing_a_task_wakes_the_slot_waiter() {
     static STORAGE: Storage<2> = Storage::new();
+    static POLLS: AtomicU32 = AtomicU32::new(0);
     let tasks = &STORAGE.tasks;
     assert!(tasks.queue.claim());
-    static POLLS: AtomicU32 = AtomicU32::new(0);
     let waiter = spawn_static(tasks, counting(&POLLS)).unwrap();
     let _ = tasks.run_ready();
     tasks.set_slot_waiter(&waker(tasks, waiter));

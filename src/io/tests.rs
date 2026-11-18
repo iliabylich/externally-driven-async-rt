@@ -79,7 +79,7 @@ fn read_waits_until_the_peer_writes() {
         &mut selector,
         async move |ctx| {
             let n = read_some(&ctx, &rx, &Cell::new(None)).await.unwrap();
-            ctx.dispatch(n as u32).unwrap();
+            ctx.dispatch(u32::try_from(n).unwrap()).unwrap();
             pending::<()>().await;
         },
     )
@@ -108,7 +108,7 @@ fn write_waits_on_a_full_buffer() {
         &mut selector,
         async move |ctx| {
             let n = write_some(&ctx, &tx, &Cell::new(None)).await.unwrap();
-            ctx.dispatch(n as u32).unwrap();
+            ctx.dispatch(u32::try_from(n).unwrap()).unwrap();
         },
     )
     .unwrap();
@@ -139,11 +139,12 @@ fn read_and_write_wait_on_one_fd_at_the_same_time() {
             let (mut read_done, mut write_done) = (false, false);
             poll_fn(|cx| {
                 if !read_done && let Poll::Ready(n) = read.as_mut().poll(cx) {
-                    ctx.dispatch(n.unwrap() as u32).unwrap();
+                    ctx.dispatch(u32::try_from(n.unwrap()).unwrap()).unwrap();
                     read_done = true;
                 }
                 if !write_done && let Poll::Ready(n) = write.as_mut().poll(cx) {
-                    ctx.dispatch(100 + n.unwrap() as u32).unwrap();
+                    ctx.dispatch(100 + u32::try_from(n.unwrap()).unwrap())
+                        .unwrap();
                     write_done = true;
                 }
                 if read_done && write_done {

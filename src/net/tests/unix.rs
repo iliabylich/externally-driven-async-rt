@@ -125,7 +125,7 @@ fn listener_accepts_a_raw_client() {
         &mut selector,
         async move |ctx| {
             let (mut stream, peer) = listener.accept(&ctx).await.unwrap();
-            assert!(path_of(&peer).is_empty());
+            assert_eq!(path_of(&peer), []);
             let mut buf = [0; 4];
             let mut len = 0;
             while len < 4 {
@@ -214,7 +214,7 @@ fn unbound_datagram_sender_has_an_unnamed_address() {
             let mut buf = [0; 8];
             let (len, from) = bound.recv_from(&ctx, &mut buf).await.unwrap();
             assert_eq!(&buf[..len], b"hi");
-            assert!(path_of(&from).is_empty());
+            assert_eq!(path_of(&from), []);
             ctx.dispatch(1).unwrap();
             pending::<()>().await;
         },
