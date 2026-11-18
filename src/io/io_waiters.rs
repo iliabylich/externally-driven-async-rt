@@ -146,12 +146,16 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "fd 3 already has a Read registration")]
-    fn a_direction_is_registered_once_per_fd() {
+    fn registering_a_registered_direction_takes_it_over() {
         let io_waiters = &IoWaiters::<1>::new();
         let cached = &Cell::new(None);
-        let _ = io_waiters.register(cached, 3, Direction::Read).unwrap();
-        let _ = io_waiters.register(cached, 3, Direction::Read).unwrap();
+        let (leaked, io) = io_waiters.register(cached, 3, Direction::Read).unwrap();
+        io.waker(Direction::Read).store(Waker::noop());
+        let (index, io) = io_waiters.register(cached, 3, Direction::Read).unwrap();
+        assert_eq!(index, leaked);
+        assert!(!io.waker(Direction::Read).is_set());
+        assert_eq!(io_waiters.release(index, Direction::Read), None);
+        assert_eq!(io_waiters.count(), 0);
     }
 
     #[test]

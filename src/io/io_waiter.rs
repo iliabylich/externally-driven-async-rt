@@ -40,13 +40,8 @@ impl IoWaiter {
     }
 
     pub(crate) fn register(&self, direction: Direction) {
-        let registered = self.registered.get();
-        assert!(
-            !registered.contains(direction),
-            "fd {} already has a {direction:?} registration",
-            self.fd()
-        );
-        self.registered.set(registered.with(direction));
+        self.waker(direction).take();
+        self.registered.set(self.registered.get().with(direction));
     }
 
     pub(crate) fn release(&self, index: IoIndex, direction: Direction) -> Option<IoChange> {

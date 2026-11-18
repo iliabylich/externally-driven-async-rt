@@ -37,7 +37,7 @@ impl<'s> BorrowedWriteHalf<'s> {
         const TIMERS: usize,
         const FDS: usize,
     >(
-        &self,
+        &mut self,
         ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     ) -> Result<(), FdsFullError> {
         self.socket.ready(ctx, Direction::Write).await

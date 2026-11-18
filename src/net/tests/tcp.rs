@@ -13,9 +13,10 @@ use rustix::{
 };
 
 use crate::{
-    Selector,
+    Either2, Selector,
     io::{AsyncRead, AsyncWrite},
     net::{NetError, TcpListener, TcpStream},
+    select2,
     testing::{self, EventLoopTestingExt, FdTestingExt, TestLoop, TestStorage, raw_accept},
 };
 
@@ -236,7 +237,7 @@ fn split_halves_wait_for_readiness_and_try_io() {
         &mut selector,
         async move |ctx| {
             let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
-            let (rx, tx) = stream.split();
+            let (mut rx, mut tx) = stream.split();
             let mut buf = [0; 5];
             assert_eq!(rx.try_read(&mut buf), Err(Errno::AGAIN));
 
@@ -282,4 +283,37 @@ fn set_keepalive_on_a_connected_stream() {
     .unwrap();
     let _peer = raw_accept(&listener);
     event_loop.run_until_events::<1>();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn a_read_after_a_leaked_read_still_waits() {
+    let (listener, addr) = raw_listener();
+    let mut selector = Selector::new().unwrap();
+    let mut event_loop = TestLoop::new(
+        {
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
+        },
+        &mut selector,
+        async move |ctx| {
+            let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
+            let mut buf = [0; 4];
+            let mut leaked = stream.read(&ctx, &mut buf);
+            let Either2::Right(()) = select2(&mut leaked, core::future::ready(())).await else {
+                panic!("nothing is sent yet");
+            };
+            core::mem::forget(leaked);
+            ctx.dispatch(0).unwrap();
+            assert_eq!(stream.read(&ctx, &mut buf).await.unwrap(), 4);
+            assert_eq!(&buf, b"ping");
+            ctx.dispatch(1).unwrap();
+            pending::<()>().await;
+        },
+    )
+    .unwrap();
+    let peer = raw_accept(&listener);
+    assert_eq!(event_loop.run_until_events(), [0]);
+    assert_eq!(rustix::io::write(&peer, b"ping").unwrap(), 4);
+    assert_eq!(event_loop.run_until_events(), [1]);
 }
