@@ -5,6 +5,7 @@ use core::{
     task::{Context, Poll},
 };
 
+#[derive(Debug)]
 pub(crate) struct FlagOnDrop<'a>(&'a AtomicBool);
 
 impl<'a> FlagOnDrop<'a> {

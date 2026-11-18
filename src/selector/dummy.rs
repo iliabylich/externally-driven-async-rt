@@ -25,11 +25,11 @@ impl DummySelector {
     }
 
     pub(crate) fn apply_now(&self, _: IoChange) -> rustix::io::Result<()> {
-        panic!("no selector under Miri")
+        unreachable!("no selector under Miri")
     }
 
     pub(crate) fn arm_timer(&self, _: Instant) {
-        panic!("no selector under Miri")
+        unreachable!("no selector under Miri")
     }
 
     pub(crate) fn disarm_timer(&self) {}
@@ -61,6 +61,6 @@ impl DummySelector {
 
 impl AsFd for DummySelector {
     fn as_fd(&self) -> BorrowedFd<'_> {
-        panic!("no selector under Miri")
+        unreachable!("no selector under Miri")
     }
 }

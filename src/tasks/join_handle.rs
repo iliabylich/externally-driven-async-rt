@@ -108,11 +108,11 @@ mod tests {
             &mut selector,
             async |ctx| {
                 ctx.spawn(async |ctx| {
-                    ctx.spawn(async |ctx| ctx.dispatch(1)).await;
-                    ctx.dispatch(2);
+                    ctx.spawn(async |ctx| ctx.dispatch(1).unwrap()).await;
+                    ctx.dispatch(2).unwrap();
                 })
                 .await;
-                ctx.dispatch(3);
+                ctx.dispatch(3).unwrap();
                 pending::<()>().await;
             },
         )

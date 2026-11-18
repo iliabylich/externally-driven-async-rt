@@ -270,7 +270,7 @@ mod tests {
             async move |ctx| {
                 let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
                 stream.write_all(&ctx, &DATA).await.unwrap();
-                ctx.dispatch(1);
+                ctx.dispatch(1).unwrap();
                 pending::<()>().await;
             },
         )

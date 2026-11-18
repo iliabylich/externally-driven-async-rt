@@ -58,7 +58,7 @@ fn echo_with_a_raw_peer() {
             assert_eq!(&buf, b"hello");
             stream.shutdown(Shutdown::Write).unwrap();
             assert_eq!(stream.read(&ctx, &mut buf).await.unwrap(), 0);
-            ctx.dispatch(1);
+            ctx.dispatch(1).unwrap();
             pending::<()>().await;
         },
     )
@@ -96,7 +96,7 @@ fn listener_accepts_a_raw_client() {
             }
             assert_eq!(&buf, b"ping");
             stream.write(&ctx, b"pong").await.unwrap();
-            ctx.dispatch(1);
+            ctx.dispatch(1).unwrap();
             pending::<()>().await;
         },
     )
@@ -127,7 +127,7 @@ fn connect_to_a_closed_port_fails() {
         &mut selector,
         async move |ctx| {
             let errno = TcpStream::connect(&ctx, addr).await.err().unwrap();
-            ctx.dispatch(errno.raw_os_error() as u32);
+            ctx.dispatch(errno.raw_os_error() as u32).unwrap();
             pending::<()>().await;
         },
     )
@@ -207,7 +207,7 @@ fn borrowed_halves_read_and_write_concurrently_in_one_task() {
                 }
             })
             .await;
-            ctx.dispatch(received.unwrap() as u32);
+            ctx.dispatch(received.unwrap() as u32).unwrap();
             pending::<()>().await;
         },
     )
@@ -246,7 +246,7 @@ fn split_halves_wait_for_readiness_and_try_io() {
             rx.readable(&ctx).await;
             assert_eq!(rx.try_read(&mut buf).unwrap(), 5);
             assert_eq!(&buf, b"world");
-            ctx.dispatch(1);
+            ctx.dispatch(1).unwrap();
             pending::<()>().await;
         },
     )
@@ -275,7 +275,7 @@ fn set_keepalive_on_a_connected_stream() {
             stream
                 .set_keepalive(Duration::from_secs(1), Duration::from_secs(1), 2)
                 .unwrap();
-            ctx.dispatch(1);
+            ctx.dispatch(1).unwrap();
             pending::<()>().await;
         },
     )

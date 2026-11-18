@@ -62,14 +62,11 @@ impl<
     /// Pushes given `event` into the queue that [`EventLoop::events`](crate::EventLoop::events)
     /// pops from.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the queue already holds `EVENTS` events.
-    pub fn dispatch(&self, event: E) {
-        assert!(
-            self.storage.events.push(event).is_ok(),
-            "more than {EVENTS} undrained events"
-        );
+    /// Returns `event` back if the queue already holds `EVENTS` events.
+    pub fn dispatch(&self, event: E) -> Result<(), E> {
+        self.storage.events.push(event)
     }
 
     /// Spawns a task with a given async closure.

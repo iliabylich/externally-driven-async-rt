@@ -28,7 +28,7 @@ fn future_finishing_first_wins() {
             let result = ctx
                 .timeout(Duration::from_secs(60), wait_readable(&ctx, &rx))
                 .await;
-            ctx.dispatch(result.map_or(0, |()| 1));
+            ctx.dispatch(result.map_or(0, |()| 1)).unwrap();
             pending::<()>().await;
         },
     )
@@ -57,7 +57,7 @@ fn elapsing_drops_the_future() {
             let result = ctx
                 .timeout(Duration::from_millis(10), wait_readable(&ctx, &rx))
                 .await;
-            ctx.dispatch(result.map_or(0, |()| 1));
+            ctx.dispatch(result.map_or(0, |()| 1)).unwrap();
             pending::<()>().await;
         },
     )
@@ -81,7 +81,7 @@ fn ready_future_beats_a_zero_timeout() {
         &mut selector,
         async move |ctx| {
             let result = ctx.timeout(Duration::ZERO, wait_readable(&ctx, &rx)).await;
-            ctx.dispatch(result.map_or(0, |()| 1));
+            ctx.dispatch(result.map_or(0, |()| 1)).unwrap();
             pending::<()>().await;
         },
     )

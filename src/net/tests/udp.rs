@@ -49,7 +49,7 @@ fn round_trip_with_a_raw_peer() {
             let len = socket.recv(&ctx, &mut buf).await.unwrap();
             assert_eq!(&buf[..len], b"hello");
 
-            ctx.dispatch(1);
+            ctx.dispatch(1).unwrap();
             pending::<()>().await;
         },
     )
@@ -85,13 +85,13 @@ fn connected_socket_reports_a_refused_peer() {
             socket.connect(closed).unwrap();
             socket.send(&ctx, b"x").await.unwrap();
             let errno = socket.recv(&ctx, &mut buf).await.err().unwrap();
-            ctx.dispatch(errno.raw_os_error() as u32);
+            ctx.dispatch(errno.raw_os_error() as u32).unwrap();
 
             let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
             socket.connect(closed).unwrap();
             socket.send(&ctx, b"x").await.unwrap();
             let errno = socket.recv_from(&ctx, &mut buf).await.err().unwrap();
-            ctx.dispatch(errno.raw_os_error() as u32);
+            ctx.dispatch(errno.raw_os_error() as u32).unwrap();
             pending::<()>().await;
         },
     )

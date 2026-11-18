@@ -82,7 +82,7 @@ mod tests {
             &mut selector,
             async |ctx| {
                 ctx.sleep(Duration::from_millis(20)).await;
-                ctx.dispatch(1);
+                ctx.dispatch(1).unwrap();
             },
         )
         .unwrap();
@@ -106,7 +106,7 @@ mod tests {
                 let handles = [30, 10, 20].map(|ms| {
                     ctx.spawn(async move |ctx| {
                         ctx.sleep(Duration::from_millis(ms)).await;
-                        ctx.dispatch(ms as u32);
+                        ctx.dispatch(ms as u32).unwrap();
                     })
                 });
                 for handle in handles {
@@ -138,7 +138,7 @@ mod tests {
                     next = next + period;
                     ctx.sleep(next.saturating_duration_since(Instant::now()))
                         .await;
-                    ctx.dispatch(i);
+                    ctx.dispatch(i).unwrap();
                 }
             },
         )

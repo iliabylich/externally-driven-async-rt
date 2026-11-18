@@ -41,7 +41,7 @@ struct Server {
     kicked: usize,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum Event {
     Listening(SocketAddr),
     Connected(SocketAddr),
@@ -108,11 +108,12 @@ enum Exchange {
 
 async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
     let mut listener = TcpListener::bind(addr).unwrap();
-    ctx.dispatch(Event::Listening(listener.local_addr().unwrap()));
+    ctx.dispatch(Event::Listening(listener.local_addr().unwrap()))
+        .unwrap();
     let _ = ctx.spawn(async |ctx| {
         loop {
             ctx.sleep(Duration::from_secs(10)).await;
-            ctx.dispatch(Event::Tick);
+            ctx.dispatch(Event::Tick).unwrap();
         }
     });
     loop {
@@ -121,16 +122,16 @@ async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
             match listener.accept(ctx).await {
                 Ok(client) => break client,
                 Err(errno) => {
-                    ctx.dispatch(Event::AcceptFailed(errno));
+                    ctx.dispatch(Event::AcceptFailed(errno)).unwrap();
                     ctx.sleep(Duration::from_millis(100)).await;
                 }
             }
         };
-        ctx.dispatch(Event::Connected(peer));
+        ctx.dispatch(Event::Connected(peer)).unwrap();
         let ctx = *ctx;
         let _ = task.spawn(async move {
             let event = serve(&ctx, stream, peer).await;
-            ctx.dispatch(event);
+            ctx.dispatch(event).unwrap();
         });
     }
 }
@@ -141,7 +142,7 @@ async fn serve(ctx: &ServerContext<'_>, mut stream: TcpStream, peer: SocketAddr)
     loop {
         let exchange = exchange(ctx, &mut stream, &mut buf, &mut len);
         match ctx.timeout(REQUEST_TIMEOUT, exchange).await {
-            Some(Ok(Exchange::Served(len))) => ctx.dispatch(Event::Served { peer, len }),
+            Some(Ok(Exchange::Served(len))) => ctx.dispatch(Event::Served { peer, len }).unwrap(),
             Some(Ok(Exchange::TooLong)) => return Event::RequestTooLong(peer),
             Some(Ok(Exchange::Closed)) => return Event::Disconnected { peer, error: None },
             Some(Err(errno)) => {

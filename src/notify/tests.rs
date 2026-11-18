@@ -27,7 +27,7 @@ fn notify_makes_the_loop_readable_and_wakes_the_waiter() {
         async |ctx| {
             for i in 1.. {
                 ctx.notified().await;
-                ctx.dispatch(i);
+                ctx.dispatch(i).unwrap();
             }
         },
     )
@@ -56,7 +56,7 @@ fn notifications_coalesce() {
         async |ctx| {
             for i in 1.. {
                 ctx.notified().await;
-                ctx.dispatch(i);
+                ctx.dispatch(i).unwrap();
             }
         },
     )
@@ -81,9 +81,9 @@ fn notification_without_a_waiter_is_kept() {
         &mut selector,
         async |ctx| {
             ctx.sleep(Duration::from_millis(10)).await;
-            ctx.dispatch(1);
+            ctx.dispatch(1).unwrap();
             ctx.notified().await;
-            ctx.dispatch(2);
+            ctx.dispatch(2).unwrap();
             pending::<()>().await;
         },
     )

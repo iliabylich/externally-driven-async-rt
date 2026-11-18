@@ -25,7 +25,7 @@ fn root_finishing_during_new_is_an_error() {
             &STORAGE
         },
         &mut selector,
-        async |ctx| ctx.dispatch(1),
+        async |ctx| ctx.dispatch(1).unwrap(),
     );
     assert_eq!(result.err(), Some(Error::RootFinished));
 }
@@ -40,8 +40,8 @@ fn events_dispatched_during_new_are_queued() {
         },
         &mut selector,
         async |ctx| {
-            ctx.dispatch(1);
-            ctx.dispatch(2);
+            ctx.dispatch(1).unwrap();
+            ctx.dispatch(2).unwrap();
             pending::<()>().await;
         },
     )
@@ -79,10 +79,10 @@ fn root_finishing_inside_a_drain() {
         },
         &mut selector,
         async move |ctx| {
-            ctx.dispatch(1);
+            ctx.dispatch(1).unwrap();
             wait_readable(&ctx, &rx).await;
-            ctx.dispatch(2);
-            ctx.dispatch(3);
+            ctx.dispatch(2).unwrap();
+            ctx.dispatch(3).unwrap();
         },
     )
     .unwrap();
@@ -118,7 +118,7 @@ fn root_progresses_across_drains() {
                 wait_readable(&ctx, &rx).await;
                 let mut buf = [0; 16];
                 rustix::io::read(&rx, &mut buf).unwrap();
-                ctx.dispatch(i);
+                ctx.dispatch(i).unwrap();
                 i += 1;
             }
         },
@@ -146,7 +146,7 @@ fn two_loops_on_one_thread_are_independent() {
         &mut selector,
         async move |ctx| {
             wait_readable(&ctx, &rx1).await;
-            ctx.dispatch(1);
+            ctx.dispatch(1).unwrap();
         },
     )
     .unwrap();
@@ -159,7 +159,7 @@ fn two_loops_on_one_thread_are_independent() {
         &mut selector,
         async move |ctx| {
             wait_readable(&ctx, &rx2).await;
-            ctx.dispatch(2);
+            ctx.dispatch(2).unwrap();
         },
     )
     .unwrap();
@@ -212,22 +212,24 @@ fn panic_propagates_out_of_drain() {
 }
 
 #[test]
-#[should_panic(expected = "more than 16 undrained events")]
-fn dispatching_into_a_full_queue_panics() {
+fn dispatching_into_a_full_queue_returns_the_event() {
     let mut selector = Selector::new().unwrap();
-    let _ = TestLoop::new(
+    let mut event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
         },
         &mut selector,
         async |ctx| {
-            for _ in 0..=TEST_EVENTS {
-                ctx.dispatch(0);
+            for event in (0..).take(TEST_EVENTS) {
+                ctx.dispatch(event).unwrap();
             }
+            assert_eq!(ctx.dispatch(99), Err(99));
             pending::<()>().await;
         },
-    );
+    )
+    .unwrap();
+    assert_yields!(event_loop.events(), (0..).take(TEST_EVENTS));
 }
 
 #[test]
@@ -249,7 +251,8 @@ fn root_future_bigger_than_task_size_is_fine() {
         },
         &mut selector,
         async move |ctx| {
-            ctx.dispatch(u32::from(data.iter().all(|byte| *byte == 7)));
+            ctx.dispatch(u32::from(data.iter().all(|byte| *byte == 7)))
+                .unwrap();
             pending::<()>().await;
         },
     )
@@ -278,7 +281,7 @@ fn tasks_are_dropped_when_the_root_finishes() {
                 pending::<()>().await;
             });
             wait_readable(&ctx, &rx).await;
-            ctx.dispatch(1);
+            ctx.dispatch(1).unwrap();
         },
     )
     .unwrap();
@@ -301,8 +304,8 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
 
     impl Drop for SpawnOnDrop<'_, '_> {
         fn drop(&mut self) {
-            let _ = self.0.spawn(async |ctx| ctx.dispatch(100));
-            self.0.dispatch(3);
+            let _ = self.0.spawn(async |ctx| ctx.dispatch(100).unwrap());
+            self.0.dispatch(3).unwrap();
         }
     }
 
@@ -320,7 +323,7 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
                 pending::<()>().await;
             });
             wait_readable(&ctx, &rx).await;
-            ctx.dispatch(1);
+            ctx.dispatch(1).unwrap();
         },
     )
     .unwrap();
@@ -341,7 +344,7 @@ fn undrained_events_are_dropped_with_the_loop() {
 
     impl Drop for DispatchFlagOnDrop<'_, '_> {
         fn drop(&mut self) {
-            self.0.dispatch(FlagOnDrop::new(self.1));
+            self.0.dispatch(FlagOnDrop::new(self.1)).unwrap();
         }
     }
 
@@ -355,7 +358,7 @@ fn undrained_events_are_dropped_with_the_loop() {
         },
         &mut selector,
         async |ctx| {
-            ctx.dispatch(FlagOnDrop::new(&QUEUED));
+            ctx.dispatch(FlagOnDrop::new(&QUEUED)).unwrap();
             let _ = ctx.spawn(async |ctx| {
                 let _guard = DispatchFlagOnDrop(&ctx, &DISPATCHED_WHILE_DROPPING);
                 pending::<()>().await;

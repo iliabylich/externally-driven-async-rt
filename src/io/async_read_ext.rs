@@ -245,11 +245,11 @@ mod tests {
             &mut selector,
             async move |ctx| {
                 let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
-                ctx.dispatch(1);
+                ctx.dispatch(1).unwrap();
                 let mut buf = [0; 11];
                 stream.read_exact(&ctx, &mut buf).await.unwrap();
                 assert_eq!(&buf, b"hello world");
-                ctx.dispatch(2);
+                ctx.dispatch(2).unwrap();
                 pending::<()>().await;
             },
         )

@@ -61,7 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut selector = Selector::new()?;
     let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| loop {
         ctx.sleep(Duration::from_secs(1)).await;
-        ctx.dispatch("hello");
+        ctx.dispatch("hello").unwrap();
     })?;
     loop {
         poll(&mut [PollFd::new(&event_loop, PollFlags::IN)], None)?;
@@ -80,4 +80,4 @@ As you can see, everything has an upper bound:
 3. maximum size of the root task (stored separately, it's usually bigger than sub-tasks, exceeding it panics at runtime)
 4. maximum number of co-existing timers (`ctx.sleep(<duration>)` or `ctx.timeout()` API, exceeding it panics at runtime)
 5. maximum number of co-existing file descriptors that runtime operates on (exceeding it panics at runtime)
-6. maximum number of dispatched events that are not yet popped via `event_loop.events()` (exceeding it panics at runtime)
+6. maximum number of dispatched events that are not yet popped via `event_loop.events()` (`ctx.dispatch()` returns the event back when the queue is full)

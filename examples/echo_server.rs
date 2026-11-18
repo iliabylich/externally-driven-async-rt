@@ -40,7 +40,7 @@ struct Server {
     bytes: u64,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum Event {
     Listening(SocketAddr),
     Connected(SocketAddr),
@@ -91,24 +91,25 @@ impl Server {
 
 async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
     let mut listener = TcpListener::bind(addr).unwrap();
-    ctx.dispatch(Event::Listening(listener.local_addr().unwrap()));
+    ctx.dispatch(Event::Listening(listener.local_addr().unwrap()))
+        .unwrap();
     let _ = ctx.spawn(async |ctx| {
         loop {
             ctx.sleep(Duration::from_secs(10)).await;
-            ctx.dispatch(Event::Tick);
+            ctx.dispatch(Event::Tick).unwrap();
         }
     });
     loop {
         match listener.accept(ctx).await {
             Ok((stream, peer)) => {
-                ctx.dispatch(Event::Connected(peer));
+                ctx.dispatch(Event::Connected(peer)).unwrap();
                 let _ = ctx.spawn(async move |ctx| {
                     let error = echo(&ctx, stream, peer).await.err();
-                    ctx.dispatch(Event::Disconnected { peer, error });
+                    ctx.dispatch(Event::Disconnected { peer, error }).unwrap();
                 });
             }
             Err(errno) => {
-                ctx.dispatch(Event::AcceptFailed(errno));
+                ctx.dispatch(Event::AcceptFailed(errno)).unwrap();
                 ctx.sleep(Duration::from_millis(100)).await;
             }
         }
@@ -131,7 +132,7 @@ async fn echo(
             Err(WriteAllError::Io(errno)) => return Err(errno),
             Err(WriteAllError::WriteZero) => return Ok(()),
         }
-        ctx.dispatch(Event::Echoed { peer, len });
+        ctx.dispatch(Event::Echoed { peer, len }).unwrap();
     }
 }
 
