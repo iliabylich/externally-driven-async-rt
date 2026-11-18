@@ -67,6 +67,12 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         }
     }
 
+    pub(crate) fn clear_join_waiter(&self, id: TaskId<TASK_SIZE>) {
+        if let Some(entry) = self.pool.get(id) {
+            entry.take_join_waiter();
+        }
+    }
+
     pub(crate) fn has_ready(&self) -> bool {
         !self.queue.is_empty()
     }

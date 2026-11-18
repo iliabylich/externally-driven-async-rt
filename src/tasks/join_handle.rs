@@ -40,6 +40,14 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> Fu
     }
 }
 
+impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> Drop
+    for JoinHandle<TASKS, TASK_SIZE, ROOT_TASK_SIZE>
+{
+    fn drop(&mut self) {
+        self.tasks.clear_join_waiter(self.id);
+    }
+}
+
 impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> core::fmt::Debug
     for JoinHandle<TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
@@ -51,6 +59,7 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> co
 #[cfg(test)]
 mod tests {
     use core::{
+        cell::Cell,
         future::{Future, pending},
         pin::Pin,
         sync::atomic::{AtomicBool, Ordering::Relaxed},
@@ -60,13 +69,15 @@ mod tests {
     use crate::{
         Selector,
         tasks::JoinHandle,
-        testing::{TasksStorage, TestLoop, TestStorage, assert_yields, spawn_static},
+        testing::{
+            TasksStorage, TestLoop, TestStorage, assert_yields, counting_waker, spawn_static,
+        },
     };
 
     type Storage = TasksStorage<2, 64, 0>;
 
-    fn poll(handle: &mut JoinHandle<2, 64, 0>) -> Poll<()> {
-        Pin::new(handle).poll(&mut Context::from_waker(Waker::noop()))
+    fn poll(handle: &mut JoinHandle<2, 64, 0>, waker: &Waker) -> Poll<()> {
+        Pin::new(handle).poll(&mut Context::from_waker(waker))
     }
 
     #[test]
@@ -74,9 +85,9 @@ mod tests {
         static STORAGE: Storage = Storage::new();
         let tasks = &STORAGE.tasks;
         let mut handle = JoinHandle::new(tasks, spawn_static(tasks, async {}).unwrap());
-        assert_eq!(poll(&mut handle), Poll::Pending);
+        assert_eq!(poll(&mut handle, Waker::noop()), Poll::Pending);
         let _ = tasks.run_ready();
-        assert_eq!(poll(&mut handle), Poll::Ready(()));
+        assert_eq!(poll(&mut handle, Waker::noop()), Poll::Ready(()));
     }
 
     #[test]
@@ -85,7 +96,38 @@ mod tests {
         let tasks = &STORAGE.tasks;
         let id = spawn_static(tasks, async {}).unwrap();
         let _ = tasks.run_ready();
-        assert_eq!(poll(&mut JoinHandle::new(tasks, id)), Poll::Ready(()));
+        assert_eq!(
+            poll(&mut JoinHandle::new(tasks, id), Waker::noop()),
+            Poll::Ready(())
+        );
+    }
+
+    #[test]
+    fn dropping_a_polled_handle_drops_its_join_waiter() {
+        static STORAGE: Storage = Storage::new();
+        let tasks = &STORAGE.tasks;
+        let drops = Cell::new(0);
+        let mut handle = JoinHandle::new(tasks, spawn_static(tasks, async {}).unwrap());
+        assert_eq!(poll(&mut handle, &counting_waker(&drops)), Poll::Pending);
+        assert_eq!(drops.get(), 1);
+        drop(handle);
+        assert_eq!(drops.get(), 2);
+    }
+
+    #[test]
+    fn dropping_a_stale_handle_keeps_the_new_tasks_join_waiter() {
+        static STORAGE: Storage = Storage::new();
+        let tasks = &STORAGE.tasks;
+        let drops = Cell::new(0);
+        let stale = JoinHandle::new(tasks, spawn_static(tasks, async {}).unwrap());
+        let _ = tasks.run_ready();
+        let id = spawn_static(tasks, async {}).unwrap();
+        assert_eq!(id.slot(), stale.id.slot());
+        let mut handle = JoinHandle::new(tasks, id);
+        assert_eq!(poll(&mut handle, &counting_waker(&drops)), Poll::Pending);
+        assert_eq!(drops.get(), 1);
+        drop(stale);
+        assert_eq!(drops.get(), 1);
     }
 
     #[test]
