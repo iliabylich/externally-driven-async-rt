@@ -154,20 +154,22 @@ fn borrowed_halves_read_and_write_concurrently_in_one_task() {
         },
         &mut selector,
         async move |ctx| {
-            let _ = ctx.spawn(async move |ctx| {
-                let (mut stream, _) = listener.accept(&ctx).await.unwrap();
-                let mut buf = [0; CHUNK];
-                loop {
-                    let len = stream.read(&ctx, &mut buf).await.unwrap();
-                    if len == 0 {
-                        return;
+            let _ = ctx
+                .spawn(async move |ctx| {
+                    let (mut stream, _) = listener.accept(&ctx).await.unwrap();
+                    let mut buf = [0; CHUNK];
+                    loop {
+                        let len = stream.read(&ctx, &mut buf).await.unwrap();
+                        if len == 0 {
+                            return;
+                        }
+                        let mut sent = 0;
+                        while sent < len {
+                            sent += stream.write(&ctx, &buf[sent..len]).await.unwrap();
+                        }
                     }
-                    let mut sent = 0;
-                    while sent < len {
-                        sent += stream.write(&ctx, &buf[sent..len]).await.unwrap();
-                    }
-                }
-            });
+                })
+                .unwrap();
             let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
             let (mut read, mut write) = stream.split();
             let mut reading = pin!(async {

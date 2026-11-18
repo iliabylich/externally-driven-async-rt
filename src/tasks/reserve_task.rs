@@ -98,7 +98,7 @@ mod tests {
     fn waits_until_a_task_finishes() {
         static STORAGE: Storage = Storage::new();
         let tasks = &STORAGE.tasks;
-        let _ = spawn_static(tasks, async {});
+        let _ = spawn_static(tasks, async {}).unwrap();
         let mut reserve = ReserveTask::new(tasks, claimed_forever());
         assert!(!poll(&mut reserve));
         assert!(tasks.has_slot_waiter());
@@ -112,7 +112,7 @@ mod tests {
     fn a_second_waiter_panics() {
         static STORAGE: Storage = Storage::new();
         let tasks = &STORAGE.tasks;
-        let _ = spawn_static(tasks, pending());
+        let _ = spawn_static(tasks, pending()).unwrap();
         let mut first = ReserveTask::new(tasks, claimed_forever());
         let mut second = ReserveTask::new(tasks, claimed_forever());
         assert!(!poll(&mut first));

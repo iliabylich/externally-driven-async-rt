@@ -40,13 +40,12 @@ impl<
 {
     /// Creates an event loop and polls given future once.
     ///
+    /// The future must fit `ROOT_TASK_SIZE` bytes and be aligned to at most 16 bytes, otherwise
+    /// the program doesn't compile.
+    ///
     /// # Panics
     ///
-    /// Panics if:
-    ///
-    /// 1. `storage` has already been used by another event loop
-    /// 2. the future is bigger than `ROOT_TASK_SIZE` bytes
-    /// 3. the future is aligned to more than 16 bytes.
+    /// Panics if `storage` has already been used by another event loop.
     ///
     /// # Errors
     ///

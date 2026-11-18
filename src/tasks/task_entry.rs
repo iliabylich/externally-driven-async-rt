@@ -7,7 +7,7 @@ use core::{
 use crate::{
     claimed::Claimed,
     pool::Index,
-    tasks::{Task, TaskMemory, TaskSlot, TaskType},
+    tasks::{Task, TaskMemory, TaskSlot},
     waker_slot::WakerSlot,
 };
 
@@ -31,7 +31,7 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
     where
         Fut: Future<Output = ()> + 'a,
     {
-        let task = Task::write(&self.memory, TaskType::NonRoot, claimed, future);
+        let task = Task::write(&self.memory, claimed, future);
         self.occupy(task);
     }
 

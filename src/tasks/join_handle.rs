@@ -71,7 +71,7 @@ mod tests {
     fn pending_until_the_task_finishes() {
         static STORAGE: Storage = Storage::new();
         let tasks = &STORAGE.tasks;
-        let mut handle = JoinHandle::new(tasks, spawn_static(tasks, async {}));
+        let mut handle = JoinHandle::new(tasks, spawn_static(tasks, async {}).unwrap());
         assert_eq!(poll(&mut handle), Poll::Pending);
         let _ = tasks.run_ready();
         assert_eq!(poll(&mut handle), Poll::Ready(()));
@@ -81,7 +81,7 @@ mod tests {
     fn joining_a_finished_task_resolves_immediately() {
         static STORAGE: Storage = Storage::new();
         let tasks = &STORAGE.tasks;
-        let id = spawn_static(tasks, async {});
+        let id = spawn_static(tasks, async {}).unwrap();
         let _ = tasks.run_ready();
         assert_eq!(poll(&mut JoinHandle::new(tasks, id)), Poll::Ready(()));
     }
@@ -91,7 +91,7 @@ mod tests {
         static STORAGE: Storage = Storage::new();
         static RAN: AtomicBool = AtomicBool::new(false);
         let tasks = &STORAGE.tasks;
-        let id = spawn_static(tasks, async { RAN.store(true, Relaxed) });
+        let id = spawn_static(tasks, async { RAN.store(true, Relaxed) }).unwrap();
         drop(JoinHandle::new(tasks, id));
         let _ = tasks.run_ready();
         assert!(RAN.load(Relaxed));
@@ -108,9 +108,12 @@ mod tests {
             &mut selector,
             async |ctx| {
                 ctx.spawn(async |ctx| {
-                    ctx.spawn(async |ctx| ctx.dispatch(1).unwrap()).await;
+                    ctx.spawn(async |ctx| ctx.dispatch(1).unwrap())
+                        .unwrap()
+                        .await;
                     ctx.dispatch(2).unwrap();
                 })
+                .unwrap()
                 .await;
                 ctx.dispatch(3).unwrap();
                 pending::<()>().await;

@@ -9,16 +9,15 @@ mod task_entry;
 mod task_memory;
 mod task_reservation;
 mod task_slot;
-mod task_type;
+mod tasks_full_error;
 mod wake_queue;
 
 use core::{cell::Cell, task::Waker};
 
-use self::{
-    aligned16::Aligned16, task_memory::TaskMemory, task_slot::TaskSlot, task_type::TaskType,
-};
+use self::{aligned16::Aligned16, task_memory::TaskMemory, task_slot::TaskSlot};
 pub use self::{
     join_handle::JoinHandle, reserve_task::ReserveTask, task_reservation::TaskReservation,
+    tasks_full_error::TasksFullError,
 };
 pub(crate) use self::{
     join_status::JoinStatus,
@@ -73,17 +72,15 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
     pub(crate) fn spawn<'a, Fut>(
         &'static self,
         claimed: Claimed<'a>,
-        future: Fut,
-    ) -> TaskId<TASK_SIZE>
+        f: impl FnOnce() -> Fut,
+    ) -> Result<TaskId<TASK_SIZE>, TasksFullError>
     where
         Fut: Future<Output = ()> + 'a,
     {
-        let Some((id, entry)) = self.reserve() else {
-            panic!("more than {TASKS} concurrent tasks");
-        };
-        entry.write(claimed, future);
+        let (id, entry) = self.reserve().ok_or(TasksFullError)?;
+        entry.write(claimed, f());
         self.queue.push(id.slot());
-        id
+        Ok(id)
     }
 
     pub(crate) fn spawn_root<'a, Fut>(&'static self, claimed: Claimed<'a>, future: Fut)
@@ -97,7 +94,7 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         let Some((id, entry)) = self.pool.alloc() else {
             unreachable!("the root is the first task, the pool has room for it");
         };
-        let task = Task::write(&self.root_region, TaskType::Root, claimed, future);
+        let task = Task::write(&self.root_region, claimed, future);
         entry.occupy(task);
         self.queue.push(id.slot());
         self.root.set(Root::Running(id));

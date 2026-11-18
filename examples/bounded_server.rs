@@ -25,7 +25,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 const EVENTS: usize = 256;
 const TASKS: usize = MAX_CLIENTS + 2;
-const TASK_SIZE: usize = 1024;
+const TASK_SIZE: usize = 2048;
 const ROOT_TASK_SIZE: usize = 1024;
 const TIMERS: usize = MAX_CLIENTS + 2;
 const FDS: usize = MAX_CLIENTS + 1;
@@ -110,12 +110,14 @@ async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
     let mut listener = TcpListener::bind(addr).unwrap();
     ctx.dispatch(Event::Listening(listener.local_addr().unwrap()))
         .unwrap();
-    let _ = ctx.spawn(async |ctx| {
-        loop {
-            ctx.sleep(Duration::from_secs(10)).await.unwrap();
-            ctx.dispatch(Event::Tick).unwrap();
-        }
-    });
+    let _ = ctx
+        .spawn(async |ctx| {
+            loop {
+                ctx.sleep(Duration::from_secs(10)).await.unwrap();
+                ctx.dispatch(Event::Tick).unwrap();
+            }
+        })
+        .unwrap();
     loop {
         let task = ctx.reserve_task().await;
         let (stream, peer) = loop {

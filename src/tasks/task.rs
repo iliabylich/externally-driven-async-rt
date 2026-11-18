@@ -6,10 +6,7 @@ use core::{
     task::{Context, Poll},
 };
 
-use crate::{
-    claimed::Claimed,
-    tasks::{TaskMemory, TaskType},
-};
+use crate::{claimed::Claimed, tasks::TaskMemory};
 
 #[must_use]
 pub(crate) struct Task {
@@ -20,26 +17,22 @@ pub(crate) struct Task {
 impl Task {
     pub(crate) fn write<'a, const SIZE: usize, Fut>(
         memory: &'static TaskMemory<SIZE>,
-        task_type: TaskType,
         _: Claimed<'a>,
         future: Fut,
     ) -> Self
     where
         Fut: Future<Output = ()> + 'a,
     {
-        assert!(
-            size_of::<Fut>() <= SIZE,
-            "{} of {} bytes doesn't fit {} ({SIZE} bytes)",
-            task_type.future(),
-            size_of::<Fut>(),
-            task_type.size_const(),
-        );
-        assert!(
-            align_of::<Fut>() <= 16,
-            "{} aligned to {} bytes doesn't fit (align at most 16)",
-            task_type.future(),
-            align_of::<Fut>(),
-        );
+        const {
+            assert!(
+                size_of::<Fut>() <= SIZE,
+                "a task future doesn't fit TASK_SIZE or ROOT_TASK_SIZE"
+            );
+            assert!(
+                align_of::<Fut>() <= 16,
+                "a task future is aligned to more than 16 bytes"
+            );
+        }
         let occupied = memory.occupied();
         assert!(
             !occupied.replace(true),
@@ -88,7 +81,7 @@ mod tests {
     };
 
     use crate::{
-        tasks::{Task, TaskType},
+        tasks::Task,
         testing::{FlagOnDrop, TasksStorage, claimed_forever},
     };
 
@@ -100,7 +93,6 @@ mod tests {
         let mut polled_once = false;
         let mut task = Task::write(
             &STORAGE.tasks.root_region,
-            TaskType::Root,
             claimed_forever(),
             core::future::poll_fn(move |_| {
                 if polled_once {
@@ -123,7 +115,6 @@ mod tests {
         static DROPPED: AtomicBool = AtomicBool::new(false);
         let task = Task::write(
             &STORAGE.tasks.root_region,
-            TaskType::Root,
             claimed_forever(),
             FlagOnDrop::new(&DROPPED),
         );
@@ -135,18 +126,8 @@ mod tests {
     fn dropping_frees_the_memory_for_the_next_write() {
         static STORAGE: Storage = Storage::new();
         let memory = &STORAGE.tasks.root_region;
-        drop(Task::write(
-            memory,
-            TaskType::Root,
-            claimed_forever(),
-            async {},
-        ));
-        drop(Task::write(
-            memory,
-            TaskType::Root,
-            claimed_forever(),
-            async {},
-        ));
+        drop(Task::write(memory, claimed_forever(), async {}));
+        drop(Task::write(memory, claimed_forever(), async {}));
     }
 
     #[test]
@@ -154,7 +135,7 @@ mod tests {
     fn writing_into_occupied_memory_panics() {
         static STORAGE: Storage = Storage::new();
         let memory = &STORAGE.tasks.root_region;
-        let _first = Task::write(memory, TaskType::Root, claimed_forever(), async {});
-        let _second = Task::write(memory, TaskType::Root, claimed_forever(), async {});
+        let _first = Task::write(memory, claimed_forever(), async {});
+        let _second = Task::write(memory, claimed_forever(), async {});
     }
 }

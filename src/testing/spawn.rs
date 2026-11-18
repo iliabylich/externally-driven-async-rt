@@ -2,7 +2,7 @@ use core::future::Future;
 
 use crate::{
     claimed::Claimed,
-    tasks::{TaskEntry, TaskId, Tasks},
+    tasks::{TaskEntry, TaskId, Tasks, TasksFullError},
 };
 
 pub(crate) fn claimed_forever() -> Claimed<'static> {
@@ -17,8 +17,8 @@ pub(crate) fn spawn_static<
 >(
     tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
     future: impl Future<Output = ()> + 'static,
-) -> TaskId<TASK_SIZE> {
-    tasks.spawn(claimed_forever(), future)
+) -> Result<TaskId<TASK_SIZE>, TasksFullError> {
+    tasks.spawn(claimed_forever(), || future)
 }
 
 pub(crate) fn spawn_root_static<

@@ -93,20 +93,24 @@ async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
     let mut listener = TcpListener::bind(addr).unwrap();
     ctx.dispatch(Event::Listening(listener.local_addr().unwrap()))
         .unwrap();
-    let _ = ctx.spawn(async |ctx| {
-        loop {
-            ctx.sleep(Duration::from_secs(10)).await.unwrap();
-            ctx.dispatch(Event::Tick).unwrap();
-        }
-    });
+    let _ = ctx
+        .spawn(async |ctx| {
+            loop {
+                ctx.sleep(Duration::from_secs(10)).await.unwrap();
+                ctx.dispatch(Event::Tick).unwrap();
+            }
+        })
+        .unwrap();
     loop {
         match listener.accept(ctx).await {
             Ok((stream, peer)) => {
                 ctx.dispatch(Event::Connected(peer)).unwrap();
-                let _ = ctx.spawn(async move |ctx| {
-                    let error = echo(&ctx, stream, peer).await.err();
-                    ctx.dispatch(Event::Disconnected { peer, error }).unwrap();
-                });
+                let _ = ctx
+                    .spawn(async move |ctx| {
+                        let error = echo(&ctx, stream, peer).await.err();
+                        ctx.dispatch(Event::Disconnected { peer, error }).unwrap();
+                    })
+                    .unwrap();
             }
             Err(errno) => {
                 ctx.dispatch(Event::AcceptFailed(errno)).unwrap();

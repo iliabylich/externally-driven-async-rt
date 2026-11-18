@@ -8,7 +8,7 @@ use core::{
 use rustix::{fd::AsRawFd, io::Errno};
 
 use crate::{
-    Error, EventLoop, LoopStorage, Selector,
+    Error, EventLoop, LoopStorage, Selector, TasksFullError,
     testing::{
         DispatchOnDrop, EventLoopTestingExt, FdTestingExt, FlagOnDrop, TEST_EVENTS, TEST_FDS,
         TEST_TASK_SIZE, TEST_TASKS, TEST_TIMERS, TestContext, TestLoop, TestStorage, assert_yields,
@@ -272,14 +272,18 @@ fn tasks_are_dropped_when_the_root_finishes() {
         },
         &mut selector,
         async move |ctx| {
-            let _ = ctx.spawn(async |ctx| {
-                let _guard = DispatchOnDrop(&ctx, 10);
-                pending::<()>().await;
-            });
-            let _ = ctx.spawn(async |ctx| {
-                let _guard = DispatchOnDrop(&ctx, 20);
-                pending::<()>().await;
-            });
+            let _ = ctx
+                .spawn(async |ctx| {
+                    let _guard = DispatchOnDrop(&ctx, 10);
+                    pending::<()>().await;
+                })
+                .unwrap();
+            let _ = ctx
+                .spawn(async |ctx| {
+                    let _guard = DispatchOnDrop(&ctx, 20);
+                    pending::<()>().await;
+                })
+                .unwrap();
             wait_readable(&ctx, &rx).await;
             ctx.dispatch(1).unwrap();
         },
@@ -318,10 +322,12 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
         },
         &mut selector,
         async move |ctx| {
-            let _ = ctx.spawn(async |ctx| {
-                let _guard = SpawnOnDrop(&ctx);
-                pending::<()>().await;
-            });
+            let _ = ctx
+                .spawn(async |ctx| {
+                    let _guard = SpawnOnDrop(&ctx);
+                    pending::<()>().await;
+                })
+                .unwrap();
             wait_readable(&ctx, &rx).await;
             ctx.dispatch(1).unwrap();
         },
@@ -359,10 +365,12 @@ fn undrained_events_are_dropped_with_the_loop() {
         &mut selector,
         async |ctx| {
             ctx.dispatch(FlagOnDrop::new(&QUEUED)).unwrap();
-            let _ = ctx.spawn(async |ctx| {
-                let _guard = DispatchFlagOnDrop(&ctx, &DISPATCHED_WHILE_DROPPING);
-                pending::<()>().await;
-            });
+            let _ = ctx
+                .spawn(async |ctx| {
+                    let _guard = DispatchFlagOnDrop(&ctx, &DISPATCHED_WHILE_DROPPING);
+                    pending::<()>().await;
+                })
+                .unwrap();
             pending::<()>().await;
         },
     )
@@ -437,4 +445,29 @@ fn errors_display_their_cause() {
         core::fmt::write(&mut prefix, format_args!("{error}")).unwrap();
         assert_eq!(prefix.0, "", "{error:?}");
     }
+}
+
+#[test]
+fn spawning_into_a_full_pool_fails_without_calling_the_closure() {
+    static CALLED: AtomicBool = AtomicBool::new(false);
+    let mut selector = Selector::new().unwrap();
+    let mut event_loop = EventLoop::new(
+        {
+            static STORAGE: LoopStorage<u32, 1, 1, 64, 1024, 1, 1> = LoopStorage::new();
+            &STORAGE
+        },
+        &mut selector,
+        async |ctx| {
+            let spawned = ctx.spawn(|_| {
+                CALLED.store(true, Relaxed);
+                async {}
+            });
+            assert_eq!(spawned.err(), Some(TasksFullError));
+            ctx.dispatch(1).unwrap();
+            pending::<()>().await;
+        },
+    )
+    .unwrap();
+    assert_yields!(event_loop.events(), [1]);
+    assert!(!CALLED.load(Relaxed));
 }

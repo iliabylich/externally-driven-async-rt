@@ -8,7 +8,7 @@ use crate::{
     select2,
     selector::{EVENTS_PER_CALL, Selector, SelectorEvent},
     storage::LoopStorage,
-    tasks::{JoinHandle, ReserveTask},
+    tasks::{JoinHandle, ReserveTask, TasksFullError},
     time::{Instant, Sleep, TimersFullError},
 };
 
@@ -71,23 +71,24 @@ impl<
 
     /// Spawns a task with a given async closure.
     ///
-    /// # Panics
+    /// The future must fit `TASK_SIZE` bytes and be aligned to at most 16 bytes, otherwise the
+    /// program doesn't compile.
     ///
-    /// Panics if:
+    /// # Errors
     ///
-    /// 1. all `TASKS` task slots are taken
-    /// 2. if the future is bigger than `TASK_SIZE` bytes
-    /// 3. if it is aligned to more than 16 bytes
-    ///
-    /// Use [`reserve_task`](Self::reserve_task) to wait for a free slot instead.
-    pub fn spawn<F, Fut>(&self, f: F) -> JoinHandle<TASKS, TASK_SIZE, ROOT_TASK_SIZE>
+    /// Returns an error if all `TASKS` task slots are taken, `f` isn't called then. Use
+    /// [`reserve_task`](Self::reserve_task) to wait for a free slot instead.
+    pub fn spawn<F, Fut>(
+        &self,
+        f: F,
+    ) -> Result<JoinHandle<TASKS, TASK_SIZE, ROOT_TASK_SIZE>, TasksFullError>
     where
         F: FnOnce(Self) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
-        let future = f(*self);
-        let id = self.storage.tasks.spawn(self.claimed, future);
-        JoinHandle::new(&self.storage.tasks, id)
+        let ctx = *self;
+        let id = self.storage.tasks.spawn(self.claimed, move || f(ctx))?;
+        Ok(JoinHandle::new(&self.storage.tasks, id))
     }
 
     /// Reserves a task slot.

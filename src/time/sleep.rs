@@ -111,6 +111,7 @@ mod tests {
                         ctx.sleep(Duration::from_millis(ms)).await.unwrap();
                         ctx.dispatch(ms as u32).unwrap();
                     })
+                    .unwrap()
                 });
                 for handle in handles {
                     handle.await;
