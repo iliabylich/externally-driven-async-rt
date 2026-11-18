@@ -18,7 +18,7 @@ pub(crate) use self::{
     fd_testing_ext::FdTestingExt,
     fixed_future::FixedFuture,
     flag_on_drop::FlagOnDrop,
-    poll::{sleep_blocking, wait_readable},
+    poll::{sleep_blocking, wake_expired_timers},
     sockets::{raw_accept, raw_socket, socketpair},
     spawn::{claimed_forever, spawn_reserved_static, spawn_root_static, spawn_static},
     wakers::counting_waker,

@@ -9,8 +9,10 @@ use core::{
 use crate::{
     Selector,
     notify::{Notification, Notified},
+    tasks::RootStatus,
     testing::{
-        EventLoopTestingExt, FdTestingExt, TestLoop, TestStorage, assert_yields, counting_waker,
+        EventLoopTestingExt, FdTestingExt, TestContext, TestLoop, TestStorage, assert_yields,
+        counting_waker, sleep_blocking, wake_expired_timers,
     },
 };
 
@@ -70,31 +72,30 @@ fn notifications_coalesce() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn notification_without_a_waiter_is_kept() {
-    let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async |ctx| {
-            ctx.sleep(Duration::from_millis(10)).await.unwrap();
-            ctx.dispatch(1).unwrap();
-            ctx.notified().await;
-            ctx.dispatch(2).unwrap();
-            pending::<()>().await;
-        },
-    )
-    .unwrap();
+    let selector = Selector::new().unwrap();
+    let ctx: TestContext<'_> = {
+        static STORAGE: TestStorage = TestStorage::new();
+        STORAGE.claim(&selector).unwrap()
+    };
+    ctx.storage.tasks.spawn_root(ctx.claimed, async move {
+        ctx.sleep(Duration::from_millis(1)).await.unwrap();
+        ctx.dispatch(1).unwrap();
+        ctx.notified().await;
+        ctx.dispatch(2).unwrap();
+        pending::<()>().await;
+    });
+    assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
 
-    event_loop.notify().unwrap();
-    assert!(event_loop.is_readable_now());
-    assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
-    assert_yields!(event_loop.events(), []);
+    ctx.storage.notification.fire();
+    assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
+    assert_yields!(core::iter::from_fn(|| ctx.storage.events.pop()), []);
 
-    assert_eq!(event_loop.run_until_events(), [1, 2]);
+    sleep_blocking(Duration::from_millis(1));
+    wake_expired_timers(&ctx.storage.timers);
+    assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
+    assert_yields!(core::iter::from_fn(|| ctx.storage.events.pop()), [1, 2]);
+    ctx.clear();
 }
 
 #[test]

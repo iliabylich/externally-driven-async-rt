@@ -65,9 +65,10 @@ mod tests {
 
     use crate::{
         Selector,
-        tasks::WakeQueue,
+        tasks::{RootStatus, WakeQueue},
         testing::{
-            EventLoopTestingExt, FdTestingExt, TestLoop, TestStorage, assert_yields, sleep_blocking,
+            EventLoopTestingExt, TestContext, TestLoop, TestStorage, assert_yields, sleep_blocking,
+            wake_expired_timers,
         },
         time::{Instant, Sleep, Timers, TimersFullError},
     };
@@ -96,32 +97,30 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn sleeps_complete_in_deadline_order() {
-        let mut selector = Selector::new().unwrap();
-        let mut event_loop = TestLoop::new(
-            {
-                static STORAGE: TestStorage = TestStorage::new();
-                &STORAGE
-            },
-            &mut selector,
-            async |ctx| {
-                let handles = [30, 10, 20].map(|ms| {
-                    ctx.spawn(async move |ctx| {
-                        ctx.sleep(Duration::from_millis(ms)).await.unwrap();
-                        ctx.dispatch(u32::try_from(ms).unwrap()).unwrap();
-                    })
-                    .unwrap()
-                });
-                for handle in handles {
-                    handle.await;
-                }
-            },
-        )
-        .unwrap();
-        event_loop.run_until_root_finishes();
-        assert_yields!(event_loop.events(), [10, 20, 30]);
-        assert!(!event_loop.is_readable_now());
+        let selector = Selector::new().unwrap();
+        let ctx: TestContext<'_> = {
+            static STORAGE: TestStorage = TestStorage::new();
+            STORAGE.claim(&selector).unwrap()
+        };
+        ctx.storage.tasks.spawn_root(ctx.claimed, async move {
+            let handles = [30, 10, 20].map(|ms| {
+                ctx.spawn(async move |ctx| {
+                    ctx.sleep(Duration::from_millis(ms)).await.unwrap();
+                    ctx.dispatch(u32::try_from(ms).unwrap()).unwrap();
+                })
+                .unwrap()
+            });
+            for handle in handles {
+                handle.await;
+            }
+        });
+        assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
+        sleep_blocking(Duration::from_millis(30));
+        wake_expired_timers(&ctx.storage.timers);
+        assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Finished);
+        assert_yields!(core::iter::from_fn(|| ctx.storage.events.pop()), [10, 20, 30]);
+        ctx.clear();
     }
 
     #[test]

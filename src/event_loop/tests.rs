@@ -12,7 +12,6 @@ use crate::{
     testing::{
         DispatchOnDrop, EventLoopTestingExt, FdTestingExt, FlagOnDrop, TEST_EVENTS, TEST_FDS,
         TEST_TASK_SIZE, TEST_TASKS, TEST_TIMERS, TestContext, TestLoop, TestStorage, assert_yields,
-        socketpair, wait_readable,
     },
 };
 
@@ -68,9 +67,7 @@ fn idle_loop_is_not_readable_and_drains_to_nothing() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn root_finishing_inside_a_drain() {
-    let (rx, tx) = socketpair();
     let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
@@ -78,9 +75,9 @@ fn root_finishing_inside_a_drain() {
             &STORAGE
         },
         &mut selector,
-        async move |ctx| {
+        async |ctx| {
             ctx.dispatch(1).unwrap();
-            wait_readable(&ctx, &rx).await;
+            ctx.notified().await;
             ctx.dispatch(2).unwrap();
             ctx.dispatch(3).unwrap();
         },
@@ -88,7 +85,7 @@ fn root_finishing_inside_a_drain() {
     .unwrap();
     assert_yields!(event_loop.events(), [1]);
 
-    event_loop.wake_by_writing(&tx);
+    event_loop.notify().unwrap();
     assert_eq!(
         event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)
@@ -98,13 +95,10 @@ fn root_finishing_inside_a_drain() {
         event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)
     );
-    assert!(!event_loop.is_readable_now());
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn root_progresses_across_drains() {
-    let (rx, tx) = socketpair();
     let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
@@ -112,31 +106,23 @@ fn root_progresses_across_drains() {
             &STORAGE
         },
         &mut selector,
-        async move |ctx| {
-            let mut i = 0;
-            loop {
-                wait_readable(&ctx, &rx).await;
-                let mut buf = [0; 16];
-                rustix::io::read(&rx, &mut buf).unwrap();
+        async |ctx| {
+            for i in 0..=u32::MAX {
+                ctx.notified().await;
                 ctx.dispatch(i).unwrap();
-                i += 1;
             }
         },
     )
     .unwrap();
     for i in 0..3 {
-        event_loop.wake_by_writing(&tx);
+        event_loop.notify().unwrap();
         assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
         assert_yields!(event_loop.events(), [i]);
-        assert!(!event_loop.is_readable_now());
     }
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn two_loops_on_one_thread_are_independent() {
-    let (rx1, tx1) = socketpair();
-    let (rx2, _tx2) = socketpair();
     let mut selector = Selector::new().unwrap();
     let mut first = TestLoop::new(
         {
@@ -144,8 +130,8 @@ fn two_loops_on_one_thread_are_independent() {
             &STORAGE
         },
         &mut selector,
-        async move |ctx| {
-            wait_readable(&ctx, &rx1).await;
+        async |ctx| {
+            ctx.notified().await;
             ctx.dispatch(1).unwrap();
         },
     )
@@ -157,15 +143,14 @@ fn two_loops_on_one_thread_are_independent() {
             &STORAGE
         },
         &mut selector,
-        async move |ctx| {
-            wait_readable(&ctx, &rx2).await;
+        async |ctx| {
+            ctx.notified().await;
             ctx.dispatch(2).unwrap();
         },
     )
     .unwrap();
 
-    first.wake_by_writing(&tx1);
-    assert!(!second.is_readable_now());
+    first.notify().unwrap();
     assert_eq!(second.drain_events_without_blocking(), Ok(()));
     assert_eq!(
         first.drain_events_without_blocking(),
@@ -190,10 +175,8 @@ fn panic_propagates_out_of_new() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 #[should_panic(expected = "boom in drain")]
 fn panic_propagates_out_of_drain() {
-    let (rx, tx) = socketpair();
     let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
@@ -201,13 +184,13 @@ fn panic_propagates_out_of_drain() {
             &STORAGE
         },
         &mut selector,
-        async move |ctx| {
-            wait_readable(&ctx, &rx).await;
+        async |ctx| {
+            ctx.notified().await;
             panic!("boom in drain");
         },
     )
     .unwrap();
-    event_loop.wake_by_writing(&tx);
+    event_loop.notify().unwrap();
     let _ = event_loop.drain_events_without_blocking();
 }
 
@@ -261,9 +244,7 @@ fn root_future_bigger_than_task_size_is_fine() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn tasks_are_dropped_when_the_root_finishes() {
-    let (rx, tx) = socketpair();
     let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
@@ -271,7 +252,7 @@ fn tasks_are_dropped_when_the_root_finishes() {
             &STORAGE
         },
         &mut selector,
-        async move |ctx| {
+        async |ctx| {
             let handle = ctx
                 .spawn(async |ctx| {
                     let _guard = DispatchOnDrop(&ctx, 10);
@@ -286,12 +267,12 @@ fn tasks_are_dropped_when_the_root_finishes() {
                 })
                 .unwrap();
             drop(handle);
-            wait_readable(&ctx, &rx).await;
+            ctx.notified().await;
             ctx.dispatch(1).unwrap();
         },
     )
     .unwrap();
-    event_loop.wake_by_writing(&tx);
+    event_loop.notify().unwrap();
     assert_eq!(
         event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)
@@ -304,7 +285,6 @@ fn tasks_are_dropped_when_the_root_finishes() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn spawning_and_dispatching_from_drop_during_teardown() {
     struct SpawnOnDrop<'c, 'rx>(&'c TestContext<'rx>);
 
@@ -315,7 +295,6 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
         }
     }
 
-    let (rx, tx) = socketpair();
     let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
@@ -323,7 +302,7 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
             &STORAGE
         },
         &mut selector,
-        async move |ctx| {
+        async |ctx| {
             let handle = ctx
                 .spawn(async |ctx| {
                     let _guard = SpawnOnDrop(&ctx);
@@ -331,12 +310,12 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
                 })
                 .unwrap();
             drop(handle);
-            wait_readable(&ctx, &rx).await;
+            ctx.notified().await;
             ctx.dispatch(1).unwrap();
         },
     )
     .unwrap();
-    event_loop.wake_by_writing(&tx);
+    event_loop.notify().unwrap();
     assert_eq!(
         event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)

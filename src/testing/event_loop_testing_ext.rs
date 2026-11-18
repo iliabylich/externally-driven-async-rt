@@ -6,8 +6,6 @@ use rustix::{
 use crate::{Error, EventLoop, testing::FdTestingExt};
 
 pub(crate) trait EventLoopTestingExt<E> {
-    fn wake_by_writing(&self, peer: impl AsFd);
-
     fn run_until_root_finishes(&mut self);
 
     fn drain_until_readable(&mut self, peer: impl AsFd);
@@ -17,8 +15,6 @@ pub(crate) trait EventLoopTestingExt<E> {
     fn run_until_events<const N: usize>(&mut self) -> [E; N];
 
     fn registrations(&self) -> usize;
-
-    fn has_timers(&self) -> bool;
 }
 
 impl<
@@ -32,11 +28,6 @@ impl<
 > EventLoopTestingExt<E>
     for EventLoop<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
-    fn wake_by_writing(&self, peer: impl AsFd) {
-        rustix::io::write(peer, b"x").unwrap();
-        assert!(self.wait_readable_blocking(1000));
-    }
-
     fn run_until_root_finishes(&mut self) {
         loop {
             assert!(
@@ -100,9 +91,5 @@ impl<
 
     fn registrations(&self) -> usize {
         self.ctx.storage.io_waiters.count()
-    }
-
-    fn has_timers(&self) -> bool {
-        self.ctx.storage.timers.next_deadline().is_some()
     }
 }

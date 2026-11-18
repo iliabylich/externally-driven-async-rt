@@ -1,16 +1,11 @@
-use core::{cell::Cell, time::Duration};
+use core::time::Duration;
 
 use rustix::{
     event::Timespec,
-    fd::{AsFd, OwnedFd},
     thread::{NanosleepRelativeResult, nanosleep},
 };
 
-use crate::{
-    io::IoRegistration,
-    selector::Direction,
-    testing::{FdTestingExt, TestContext},
-};
+use crate::time::{Instant, Timers};
 
 pub(crate) fn sleep_blocking(duration: Duration) {
     let timeout = Timespec {
@@ -20,10 +15,9 @@ pub(crate) fn sleep_blocking(duration: Duration) {
     assert!(matches!(nanosleep(&timeout), NanosleepRelativeResult::Ok));
 }
 
-pub(crate) async fn wait_readable(ctx: &TestContext<'_>, fd: &OwnedFd) {
-    let mut registration =
-        IoRegistration::new(ctx, fd.as_fd(), &Cell::new(None), Direction::Read).unwrap();
-    while !fd.is_readable_now() {
-        registration.wait().await;
+pub(crate) fn wake_expired_timers<const TIMERS: usize>(timers: &Timers<TIMERS>) {
+    let now = Instant::now();
+    while let Some(waker) = timers.take_expired(now) {
+        waker.wake();
     }
 }
