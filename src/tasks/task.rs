@@ -34,14 +34,13 @@ impl Task {
             );
         }
         let occupied = memory.occupied();
-        assert!(
-            !occupied.replace(true),
-            "the task memory is already occupied"
-        );
+        if occupied.replace(true) {
+            unreachable!("the task memory is already occupied");
+        }
         let memory = memory.as_ptr().cast::<Fut>();
         let task: NonNull<dyn Future<Output = ()> + 'a> = memory;
         // SAFETY: `Fut` fits the memory, which is aligned to 16 (both asserted above). The memory
-        // is `'static`, so it stays valid, and it was unoccupied (asserted above) and stays
+        // is `'static`, so it stays valid, and it was unoccupied (checked above) and stays
         // occupied until the returned `Task` drops the future, so nothing else uses it. Erasing
         // the trait object's lifetime (the two pointer types differ only in it, so have the same
         // layout) is fine because the future is only polled and dropped through the `Task`, and

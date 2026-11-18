@@ -81,3 +81,5 @@ As you can see, everything has an upper bound:
 4. maximum number of co-existing timers (`ctx.sleep(<duration>)` or `ctx.timeout()` API, exceeding it returns an error)
 5. maximum number of co-existing file descriptors that runtime operates on (exceeding it returns an error)
 6. maximum number of dispatched events that are not yet popped via `event_loop.events()` (`ctx.dispatch()` returns the event back when the queue is full)
+
+The runtime is single-threaded: waking a wakers on any other thread other that the one in which the event loop was created panics.

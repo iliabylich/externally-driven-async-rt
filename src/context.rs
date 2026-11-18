@@ -15,6 +15,11 @@ use crate::{
 /// A handle of the event loop that you are currently in.
 ///
 /// Used to spawn tasks, sleep, dispatch events to the external world and start IO operations.
+///
+/// # Panics
+///
+/// Wakers can only be woken on the same thread that created an
+/// [`EventLoop`](crate::EventLoop), otherwise waking panics.
 #[must_use]
 pub struct Context<
     'a,

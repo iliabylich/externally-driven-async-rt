@@ -58,7 +58,7 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
     pub(crate) fn poll(&self, cx: &mut Context<'_>) -> Poll<()> {
         let mut task = match self.task.replace(TaskSlot::Polling) {
             TaskSlot::Idle(task) => task,
-            TaskSlot::Polling => panic!("a task can't be polled re-entrantly"),
+            TaskSlot::Polling => unreachable!("a task can't be polled re-entrantly"),
             TaskSlot::Empty => unreachable!("an allocated task always has a future"),
         };
         let poll = task.poll(cx);

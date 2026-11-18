@@ -57,7 +57,9 @@ impl<const N: usize> WakeQueue<N> {
     }
 
     pub(crate) fn waker(&'static self, slot: u32) -> Waker {
-        assert!(u32_to_usize(slot) < N, "slot {slot} is out of bounds");
+        if u32_to_usize(slot) >= N {
+            unreachable!("slot {slot} is out of bounds");
+        }
         let link = core::ptr::from_ref(self)
             .wrapping_byte_add(offset_of!(Self, links))
             .cast::<Link>()
@@ -69,7 +71,7 @@ impl<const N: usize> WakeQueue<N> {
 
     fn link(&self, slot: u32) -> &Link {
         let Some(link) = self.links.get(u32_to_usize(slot)) else {
-            panic!("slot {slot} is out of bounds");
+            unreachable!("slot {slot} is out of bounds");
         };
         link
     }
