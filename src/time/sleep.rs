@@ -64,7 +64,7 @@ mod tests {
         Selector,
         tasks::WakeQueue,
         testing::{
-            EventLoopTestingExt, TestLoop, TestStorage, assert_yields, is_readable, sleep_blocking,
+            EventLoopTestingExt, FdTestingExt, TestLoop, TestStorage, assert_yields, sleep_blocking,
         },
         time::{Instant, Sleep, Timers},
     };
@@ -117,7 +117,7 @@ mod tests {
         .unwrap();
         event_loop.run_until_root_finishes();
         assert_yields!(event_loop.events(), [10, 20, 30]);
-        assert!(!is_readable(&event_loop, 0));
+        assert!(!event_loop.is_readable_now());
     }
 
     #[test]

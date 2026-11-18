@@ -4,7 +4,7 @@ use rustix::fd::{AsRawFd, OwnedFd};
 
 use crate::{
     selector::{Direction, Directions, EVENTS_PER_CALL, IoChange, Selector, SelectorEvent},
-    testing::{assert_yields, is_readable, socketpair},
+    testing::{FdTestingExt, assert_yields, socketpair},
     time::Instant,
 };
 
@@ -87,7 +87,7 @@ fn nothing_armed_produces_no_events() {
     let (_rx, tx) = socketpair();
     selector.flush([]).unwrap();
     rustix::io::write(&tx, b"x").unwrap();
-    assert!(!is_readable(selector.as_fd(), 0));
+    assert!(!selector.as_fd().is_readable_now());
     assert_yields!(events(&selector), []);
 }
 
@@ -110,7 +110,7 @@ fn read_interest_is_one_shot() {
     rustix::io::write(&tx, b"hello").unwrap();
     assert_yields!(events(&selector), [ready(2, Direction::Read)]);
     rustix::io::write(&tx, b"more").unwrap();
-    assert!(!is_readable(selector.as_fd(), 0));
+    assert!(!selector.as_fd().is_readable_now());
     assert_yields!(events(&selector), []);
 
     selector.flush([arm(2, &rx, Direction::Read)]).unwrap();
@@ -135,7 +135,7 @@ fn disarming_prevents_events() {
     selector.flush([arm(4, &rx, Direction::Read)]).unwrap();
     selector.flush([disarm(4, &rx)]).unwrap();
     rustix::io::write(&tx, b"x").unwrap();
-    assert!(!is_readable(selector.as_fd(), 0));
+    assert!(!selector.as_fd().is_readable_now());
 }
 
 #[test]
@@ -146,7 +146,7 @@ fn apply_now_deletes_an_armed_filter_without_flush() {
     selector.flush([arm(5, &rx, Direction::Read)]).unwrap();
     selector.apply_now(disarm(5, &rx)).unwrap();
     rustix::io::write(&tx, b"x").unwrap();
-    assert!(!is_readable(selector.as_fd(), 0));
+    assert!(!selector.as_fd().is_readable_now());
 }
 
 #[test]
@@ -203,7 +203,7 @@ fn arming_one_direction_keeps_the_other() {
     fill_send_buffer(&a);
     selector.flush([arm(11, &a, Direction::Read)]).unwrap();
     selector.flush([arm_both(11, &a)]).unwrap();
-    assert!(!is_readable(selector.as_fd(), 0));
+    assert!(!selector.as_fd().is_readable_now());
 
     rustix::io::write(&b, b"x").unwrap();
     assert_eq!(ready_directions(&selector, 11), Directions::Read);
@@ -216,11 +216,11 @@ fn releasing_one_direction_keeps_the_other() {
     let (a, b) = socketpair();
     fill_send_buffer(&a);
     selector.flush([arm_both(12, &a)]).unwrap();
-    assert!(!is_readable(selector.as_fd(), 0));
+    assert!(!selector.as_fd().is_readable_now());
 
     selector.apply_now(arm(12, &a, Direction::Write)).unwrap();
     rustix::io::write(&b, b"x").unwrap();
-    assert!(!is_readable(selector.as_fd(), 0));
+    assert!(!selector.as_fd().is_readable_now());
 
     drain_receive_buffer(&b);
     assert_eq!(ready_directions(&selector, 12), Directions::Write);
@@ -254,10 +254,10 @@ fn timer_fires_after_flush() {
     let start = Instant::now();
     selector.arm_timer(start + Duration::from_millis(20));
     selector.flush([]).unwrap();
-    assert!(is_readable(selector.as_fd(), 500));
+    assert!(selector.as_fd().wait_readable_blocking(500));
     assert!(Instant::now().saturating_duration_since(start) >= Duration::from_millis(20));
     assert_yields!(events(&selector), [SelectorEvent::Timer]);
-    assert!(!is_readable(selector.as_fd(), 50));
+    assert!(!selector.as_fd().wait_readable_blocking(50));
 }
 
 #[test]
@@ -265,7 +265,7 @@ fn timer_fires_after_flush() {
 fn timer_is_not_armed_without_flush() {
     let selector = Selector::new().unwrap();
     selector.arm_timer(Instant::now() + Duration::from_millis(1));
-    assert!(!is_readable(selector.as_fd(), 50));
+    assert!(!selector.as_fd().wait_readable_blocking(50));
 }
 
 #[test]
@@ -275,11 +275,11 @@ fn last_timer_change_before_flush_wins() {
     selector.arm_timer(Instant::now() + Duration::from_millis(1));
     selector.arm_timer(Instant::now() + Duration::from_secs(10));
     selector.flush([]).unwrap();
-    assert!(!is_readable(selector.as_fd(), 50));
+    assert!(!selector.as_fd().wait_readable_blocking(50));
 
     selector.arm_timer(Instant::now() + Duration::from_millis(10));
     selector.flush([]).unwrap();
-    assert!(is_readable(selector.as_fd(), 500));
+    assert!(selector.as_fd().wait_readable_blocking(500));
     assert_yields!(events(&selector), [SelectorEvent::Timer]);
 }
 
@@ -291,7 +291,7 @@ fn disarm_prevents_firing() {
     selector.flush([]).unwrap();
     selector.disarm_timer();
     selector.flush([]).unwrap();
-    assert!(!is_readable(selector.as_fd(), 50));
+    assert!(!selector.as_fd().wait_readable_blocking(50));
     assert_yields!(events(&selector), []);
 }
 
@@ -301,7 +301,7 @@ fn disarm_after_timer_fired_is_ok() {
     let selector = Selector::new().unwrap();
     selector.arm_timer(Instant::now() + Duration::ZERO);
     selector.flush([]).unwrap();
-    assert!(is_readable(selector.as_fd(), 500));
+    assert!(selector.as_fd().wait_readable_blocking(500));
     selector.disarm_timer();
     selector.flush([]).unwrap();
     assert_yields!(events(&selector), []);

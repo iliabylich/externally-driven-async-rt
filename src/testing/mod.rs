@@ -1,6 +1,7 @@
 mod assert_yields;
 mod dispatch_on_drop;
 mod event_loop_testing_ext;
+mod fd_testing_ext;
 mod fixed_future;
 mod flag_on_drop;
 mod poll;
@@ -14,9 +15,10 @@ pub(crate) use self::{
     assert_yields::assert_yields,
     dispatch_on_drop::DispatchOnDrop,
     event_loop_testing_ext::EventLoopTestingExt,
+    fd_testing_ext::FdTestingExt,
     fixed_future::FixedFuture,
     flag_on_drop::FlagOnDrop,
-    poll::{is_readable, is_writable, sleep_blocking, wait_readable},
+    poll::{sleep_blocking, wait_readable},
     sockets::{raw_accept, raw_socket, socketpair},
     spawn::{claimed_forever, spawn_reserved_static, spawn_root_static, spawn_static},
     wakers::counting_waker,

@@ -88,7 +88,7 @@ mod tests {
         io::{AsyncRead, AsyncReadExt, ReadExactError},
         net::TcpStream,
         testing::{
-            EventLoopTestingExt, TestContext, TestLoop, TestStorage, assert_yields, is_readable,
+            EventLoopTestingExt, FdTestingExt, TestContext, TestLoop, TestStorage, assert_yields,
             raw_accept,
         },
     };
@@ -259,9 +259,9 @@ mod tests {
         assert_eq!(event_loop.run_until_events(), [1]);
 
         rustix::io::write(&peer, b"hello ").unwrap();
-        assert!(is_readable(&event_loop, 1000));
+        assert!(event_loop.wait_readable_blocking(1000));
         assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
-        assert!(!is_readable(&event_loop, 0));
+        assert!(!event_loop.is_readable_now());
         assert_yields!(event_loop.events(), []);
 
         rustix::io::write(&peer, b"world").unwrap();

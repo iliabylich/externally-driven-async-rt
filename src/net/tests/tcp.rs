@@ -16,7 +16,7 @@ use crate::{
     Selector,
     io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpStream},
-    testing::{self, EventLoopTestingExt, TestLoop, TestStorage, is_writable, raw_accept},
+    testing::{self, EventLoopTestingExt, FdTestingExt, TestLoop, TestStorage, raw_accept},
 };
 
 const LOCALHOST: SocketAddr =
@@ -106,7 +106,7 @@ fn listener_accepts_a_raw_client() {
         Ok(()) | Err(Errno::INPROGRESS) => {}
         Err(errno) => panic!("{errno}"),
     }
-    assert!(is_writable(&client, 2000), "never connected");
+    assert!(client.wait_writable_blocking(2000), "never connected");
     assert_eq!(rustix::io::write(&client, b"ping").unwrap(), 4);
     event_loop.run_until_events::<1>();
     let mut buf = [0; 4];

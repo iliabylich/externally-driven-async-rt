@@ -10,8 +10,8 @@ use rustix::{fd::AsRawFd, io::Errno};
 use crate::{
     Error, EventLoop, LoopStorage, Selector,
     testing::{
-        DispatchOnDrop, EventLoopTestingExt, FlagOnDrop, TEST_EVENTS, TEST_FDS, TEST_TASK_SIZE,
-        TEST_TASKS, TEST_TIMERS, TestContext, TestLoop, TestStorage, assert_yields, is_readable,
+        DispatchOnDrop, EventLoopTestingExt, FdTestingExt, FlagOnDrop, TEST_EVENTS, TEST_FDS,
+        TEST_TASK_SIZE, TEST_TASKS, TEST_TIMERS, TestContext, TestLoop, TestStorage, assert_yields,
         socketpair, wait_readable,
     },
 };
@@ -62,7 +62,7 @@ fn idle_loop_is_not_readable_and_drains_to_nothing() {
         async |_| pending().await,
     )
     .unwrap();
-    assert!(!is_readable(&event_loop, 0));
+    assert!(!event_loop.is_readable_now());
     assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
     assert_yields!(event_loop.events(), []);
 }
@@ -98,7 +98,7 @@ fn root_finishing_inside_a_drain() {
         event_loop.drain_events_without_blocking(),
         Err(Error::RootFinished)
     );
-    assert!(!is_readable(&event_loop, 0));
+    assert!(!event_loop.is_readable_now());
 }
 
 #[test]
@@ -128,7 +128,7 @@ fn root_progresses_across_drains() {
         event_loop.wake_by_writing(&tx);
         assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
         assert_yields!(event_loop.events(), [i]);
-        assert!(!is_readable(&event_loop, 0));
+        assert!(!event_loop.is_readable_now());
     }
 }
 
@@ -165,7 +165,7 @@ fn two_loops_on_one_thread_are_independent() {
     .unwrap();
 
     first.wake_by_writing(&tx1);
-    assert!(!is_readable(&second, 0));
+    assert!(!second.is_readable_now());
     assert_eq!(second.drain_events_without_blocking(), Ok(()));
     assert_eq!(
         first.drain_events_without_blocking(),

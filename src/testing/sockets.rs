@@ -3,7 +3,7 @@ use rustix::{
     net::{AddressFamily, SocketFlags, SocketType},
 };
 
-use crate::testing::is_readable;
+use crate::testing::FdTestingExt;
 
 pub(crate) fn socketpair() -> (OwnedFd, OwnedFd) {
     let (a, b) = rustix::net::socketpair(
@@ -25,7 +25,7 @@ pub(crate) fn raw_socket(family: AddressFamily, ty: SocketType) -> OwnedFd {
 }
 
 pub(crate) fn raw_accept(listener: &OwnedFd) -> OwnedFd {
-    assert!(is_readable(listener, 2000), "nobody connected");
+    assert!(listener.wait_readable_blocking(2000), "nobody connected");
     let fd = rustix::net::accept(listener).unwrap();
     rustix::io::ioctl_fionbio(&fd, true).unwrap();
     fd

@@ -15,7 +15,7 @@ use crate::{
     io::{IoIndex, IoRegistration},
     selector::Direction,
     testing::{
-        EventLoopTestingExt, TestContext, TestLoop, TestStorage, assert_yields, is_readable,
+        EventLoopTestingExt, FdTestingExt, TestContext, TestLoop, TestStorage, assert_yields,
         socketpair,
     },
 };
@@ -66,10 +66,6 @@ fn drain_receive_buffer(fd: &OwnedFd) {
     while rustix::io::read(fd, &mut buf).is_ok() {}
 }
 
-fn registrations(event_loop: &TestLoop) -> usize {
-    event_loop.ctx.storage.io_waiters.count()
-}
-
 #[test]
 #[cfg_attr(miri, ignore)]
 fn read_waits_until_the_peer_writes() {
@@ -88,14 +84,14 @@ fn read_waits_until_the_peer_writes() {
         },
     )
     .unwrap();
-    assert_eq!(registrations(&event_loop), 1);
-    assert!(!is_readable(&event_loop, 0));
+    assert_eq!(event_loop.registrations(), 1);
+    assert!(!event_loop.is_readable_now());
 
     rustix::io::write(&tx, b"abc").unwrap();
-    assert!(is_readable(&event_loop, 1000));
+    assert!(event_loop.wait_readable_blocking(1000));
     assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
     assert_yields!(event_loop.events(), [3]);
-    assert_eq!(registrations(&event_loop), 0);
+    assert_eq!(event_loop.registrations(), 0);
 }
 
 #[test]
@@ -117,7 +113,7 @@ fn write_waits_on_a_full_buffer() {
     )
     .unwrap();
     assert_yields!(event_loop.events(), []);
-    assert!(!is_readable(&event_loop, 0));
+    assert!(!event_loop.is_readable_now());
 
     drain_receive_buffer(&rx);
     event_loop.run_until_root_finishes();
@@ -161,16 +157,16 @@ fn read_and_write_wait_on_one_fd_at_the_same_time() {
         },
     )
     .unwrap();
-    assert_eq!(registrations(&event_loop), 1);
-    assert!(!is_readable(&event_loop, 0));
+    assert_eq!(event_loop.registrations(), 1);
+    assert!(!event_loop.is_readable_now());
 
     rustix::io::write(&b, b"abc").unwrap();
-    assert!(is_readable(&event_loop, 1000));
+    assert!(event_loop.wait_readable_blocking(1000));
     assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
     assert_yields!(event_loop.events(), [3]);
 
     drain_receive_buffer(&b);
-    assert!(is_readable(&event_loop, 1000));
+    assert!(event_loop.wait_readable_blocking(1000));
     assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
     assert_yields!(event_loop.events(), [101]);
 }
@@ -195,7 +191,7 @@ fn dropping_a_pending_wait_deregisters() {
     drop(registration);
     assert_eq!(ctx.storage.io_waiters.count(), 0);
     rustix::io::write(&tx, b"abc").unwrap();
-    assert!(!is_readable(selector.as_fd(), 0));
+    assert!(!selector.as_fd().is_readable_now());
 }
 
 #[test]
@@ -214,7 +210,7 @@ fn wait_survives_a_spurious_poll() {
     assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
     ctx.flush().unwrap();
     rustix::io::write(&tx, b"abc").unwrap();
-    assert!(is_readable(selector.as_fd(), 1000));
+    assert!(selector.as_fd().wait_readable_blocking(1000));
     ctx.process_selector_events().unwrap();
     assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Ready(()));
 }
@@ -243,7 +239,7 @@ fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
     assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
     ctx.flush().unwrap();
     rustix::io::write(&tx, b"abc").unwrap();
-    assert!(is_readable(selector.as_fd(), 1000));
+    assert!(selector.as_fd().wait_readable_blocking(1000));
     ctx.process_selector_events().unwrap();
     assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Ready(()));
 }
@@ -265,7 +261,7 @@ fn sequential_registrations_reuse_the_slot() {
         assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
         ctx.flush().unwrap();
         rustix::io::write(&tx, b"x").unwrap();
-        assert!(is_readable(selector.as_fd(), 1000));
+        assert!(selector.as_fd().wait_readable_blocking(1000));
         ctx.process_selector_events().unwrap();
         assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Ready(()));
     }

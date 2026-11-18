@@ -10,7 +10,7 @@ use crate::{
     Selector,
     notify::{Notification, Notified},
     testing::{
-        EventLoopTestingExt, TestLoop, TestStorage, assert_yields, counting_waker, is_readable,
+        EventLoopTestingExt, FdTestingExt, TestLoop, TestStorage, assert_yields, counting_waker,
     },
 };
 
@@ -32,15 +32,15 @@ fn notify_makes_the_loop_readable_and_wakes_the_waiter() {
         },
     )
     .unwrap();
-    assert!(!is_readable(&event_loop, 0));
+    assert!(!event_loop.is_readable_now());
 
     event_loop.notify().unwrap();
     assert_eq!(event_loop.run_until_events(), [1]);
-    assert!(!is_readable(&event_loop, 0));
+    assert!(!event_loop.is_readable_now());
 
     event_loop.notify().unwrap();
     assert_eq!(event_loop.run_until_events(), [2]);
-    assert!(!is_readable(&event_loop, 0));
+    assert!(!event_loop.is_readable_now());
 }
 
 #[test]
@@ -66,7 +66,7 @@ fn notifications_coalesce() {
     event_loop.notify().unwrap();
     event_loop.notify().unwrap();
     assert_eq!(event_loop.run_until_events(), [1]);
-    assert!(!is_readable(&event_loop, 0));
+    assert!(!event_loop.is_readable_now());
 }
 
 #[test]
@@ -90,7 +90,7 @@ fn notification_without_a_waiter_is_kept() {
     .unwrap();
 
     event_loop.notify().unwrap();
-    assert!(is_readable(&event_loop, 0));
+    assert!(event_loop.is_readable_now());
     assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
     assert_yields!(event_loop.events(), []);
 

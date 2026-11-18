@@ -13,14 +13,6 @@ use crate::{
     },
 };
 
-fn registrations(event_loop: &TestLoop) -> usize {
-    event_loop.ctx.storage.io_waiters.count()
-}
-
-fn has_timers(event_loop: &TestLoop) -> bool {
-    event_loop.ctx.storage.timers.next_deadline().is_some()
-}
-
 #[test]
 #[cfg_attr(miri, ignore)]
 fn future_finishing_first_wins() {
@@ -41,13 +33,13 @@ fn future_finishing_first_wins() {
         },
     )
     .unwrap();
-    assert!(has_timers(&event_loop));
-    assert_eq!(registrations(&event_loop), 1);
+    assert!(event_loop.has_timers());
+    assert_eq!(event_loop.registrations(), 1);
     event_loop.wake_by_writing(&tx);
     assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
     assert_yields!(event_loop.events(), [1]);
-    assert!(!has_timers(&event_loop));
-    assert_eq!(registrations(&event_loop), 0);
+    assert!(!event_loop.has_timers());
+    assert_eq!(event_loop.registrations(), 0);
 }
 
 #[test]
@@ -71,8 +63,8 @@ fn elapsing_drops_the_future() {
     )
     .unwrap();
     assert_eq!(event_loop.run_until_events(), [0]);
-    assert!(!has_timers(&event_loop));
-    assert_eq!(registrations(&event_loop), 0);
+    assert!(!event_loop.has_timers());
+    assert_eq!(event_loop.registrations(), 0);
 }
 
 #[test]
@@ -95,7 +87,7 @@ fn ready_future_beats_a_zero_timeout() {
     )
     .unwrap();
     assert_yields!(event_loop.events(), [1]);
-    assert!(!has_timers(&event_loop));
+    assert!(!event_loop.has_timers());
 }
 
 #[test]
