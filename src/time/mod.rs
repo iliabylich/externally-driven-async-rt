@@ -7,9 +7,5 @@ mod timers_full_error;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::{
-    instant::Instant,
-    timer_entry::{TimerEntry, TimerIndex},
-    timers::Timers,
-};
+pub(crate) use self::{instant::Instant, timers::Timers};
 pub use self::{sleep::Sleep, timers_full_error::TimersFullError};

@@ -53,10 +53,16 @@ impl<E, const N: usize> EventQueue<E, N> {
         let next = index.wrapping_add(1);
         if next == N { 0 } else { next }
     }
+
+    pub(crate) fn iter<'a>(&'a self) -> impl Iterator<Item = E> {
+        core::iter::from_fn(|| self.pop())
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::testing::assert_yields;
+
     use super::EventQueue;
 
     #[test]
@@ -65,7 +71,7 @@ mod tests {
         assert_eq!(queue.push(1), Ok(()));
         assert_eq!(queue.push(2), Ok(()));
         assert_eq!(queue.push(3), Ok(()));
-        assert!(core::iter::from_fn(|| queue.pop()).eq([1, 2, 3]));
+        assert_yields!(queue.iter(), [1, 2, 3]);
     }
 
     #[test]
@@ -74,7 +80,7 @@ mod tests {
         assert_eq!(queue.push(1), Ok(()));
         assert_eq!(queue.push(2), Ok(()));
         assert_eq!(queue.push(3), Err(3));
-        assert!(core::iter::from_fn(|| queue.pop()).eq([1, 2]));
+        assert_yields!(queue.iter(), [1, 2]);
     }
 
     #[test]
@@ -85,7 +91,7 @@ mod tests {
         assert_eq!(queue.pop(), Some(1));
         assert_eq!(queue.push(3), Ok(()));
         assert_eq!(queue.push(4), Err(4));
-        assert!(core::iter::from_fn(|| queue.pop()).eq([2, 3]));
+        assert_yields!(queue.iter(), [2, 3]);
     }
 
     #[test]
@@ -94,6 +100,6 @@ mod tests {
         assert_eq!(queue.push(()), Ok(()));
         assert_eq!(queue.push(()), Ok(()));
         assert_eq!(queue.push(()), Err(()));
-        assert_eq!(core::iter::from_fn(|| queue.pop()).count(), 2);
+        assert_yields!(queue.iter(), [(), ()]);
     }
 }

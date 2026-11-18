@@ -113,6 +113,11 @@ impl<const N: usize> WakeQueue<N> {
             .find(|&id| waker.data() == self.waker(id).data())
             .expect("the waker comes from `waker`")
     }
+
+    #[cfg(test)]
+    fn iter(&self) -> impl Iterator<Item = u32> {
+        core::iter::from_fn(|| self.pop())
+    }
 }
 
 fn vtable<const N: usize>() -> &'static RawWakerVTable {
@@ -150,10 +155,6 @@ const fn drop_waker(_: *const ()) {}
 mod tests {
     use crate::{tasks::WakeQueue, testing::assert_yields};
 
-    fn drain<const N: usize>(queue: &WakeQueue<N>) -> impl Iterator<Item = u32> + '_ {
-        core::iter::from_fn(|| queue.pop())
-    }
-
     #[test]
     fn pops_in_push_order() {
         let queue = WakeQueue::<4>::new();
@@ -161,7 +162,7 @@ mod tests {
             queue.push(slot);
         }
         assert!(!queue.is_empty());
-        assert_yields!(drain(&queue), [2, 0, 3]);
+        assert_yields!(queue.iter(), [2, 0, 3]);
         assert!(queue.is_empty());
     }
 
@@ -171,9 +172,9 @@ mod tests {
         queue.push(0);
         queue.push(1);
         queue.push(0);
-        assert_yields!(drain(&queue), [0, 1]);
+        assert_yields!(queue.iter(), [0, 1]);
         queue.push(0);
-        assert_yields!(drain(&queue), [0]);
+        assert_yields!(queue.iter(), [0]);
     }
 
     #[test]
@@ -183,7 +184,7 @@ mod tests {
         queue.push(1);
         assert_eq!(queue.pop(), Some(0));
         queue.push(0);
-        assert_yields!(drain(&queue), [1, 0]);
+        assert_yields!(queue.iter(), [1, 0]);
     }
 
     #[test]
@@ -192,11 +193,11 @@ mod tests {
         assert!(QUEUE.claim());
         let waker = QUEUE.waker(1);
         waker.wake_by_ref();
-        assert_yields!(drain(&QUEUE), [1]);
+        assert_yields!(QUEUE.iter(), [1]);
         let clone = waker.clone();
         drop(waker);
         clone.wake();
-        assert_yields!(drain(&QUEUE), [1]);
+        assert_yields!(QUEUE.iter(), [1]);
     }
 
     #[test]
@@ -207,7 +208,7 @@ mod tests {
         waker.wake_by_ref();
         waker.wake_by_ref();
         waker.wake();
-        assert_yields!(drain(&QUEUE), [0]);
+        assert_yields!(QUEUE.iter(), [0]);
     }
 
     #[test]
@@ -219,7 +220,7 @@ mod tests {
         waker.wake_by_ref();
         assert_eq!(QUEUE.pop(), Some(1));
         waker.wake();
-        assert_yields!(drain(&QUEUE), [0]);
+        assert_yields!(QUEUE.iter(), [0]);
     }
 
     #[test]

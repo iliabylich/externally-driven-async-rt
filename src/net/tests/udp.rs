@@ -105,7 +105,7 @@ fn connected_socket_reports_a_refused_peer() {
 #[cfg_attr(miri, ignore)]
 fn waiting_on_more_sockets_than_fds_fails() {
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = EventLoop::new(
+    let event_loop = EventLoop::new(
         {
             static STORAGE: LoopStorage<NetError, 1, 1, 64, 1024, 1, 1> = LoopStorage::new();
             &STORAGE

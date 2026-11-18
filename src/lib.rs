@@ -16,7 +16,6 @@ mod context;
 mod conversions;
 mod event_loop;
 mod event_queue;
-mod events_iter;
 /// IO traits, implemented by streams from [`net`].
 pub mod io;
 /// A module that implements TCP/UDP/Unix sockets.
@@ -36,7 +35,6 @@ mod waker_slot;
 
 pub use context::Context;
 pub use event_loop::{Error, EventLoop};
-pub use events_iter::EventsIter;
 pub use notify::Notified;
 pub use select::{Either2, Either3, select2, select3};
 pub use selector::Selector;

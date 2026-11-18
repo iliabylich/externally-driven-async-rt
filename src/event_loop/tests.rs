@@ -32,7 +32,7 @@ fn root_finishing_during_new_is_an_error() {
 #[test]
 fn events_dispatched_during_new_are_queued() {
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
+    let event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
@@ -197,7 +197,7 @@ fn panic_propagates_out_of_drain() {
 #[test]
 fn dispatching_into_a_full_queue_returns_the_event() {
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
+    let event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage = TestStorage::new();
             &STORAGE
@@ -219,7 +219,7 @@ fn dispatching_into_a_full_queue_returns_the_event() {
 fn root_future_bigger_than_task_size_is_fine() {
     let data = [7u8; 3 * TEST_TASK_SIZE];
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = EventLoop::new(
+    let event_loop = EventLoop::new(
         {
             static STORAGE: LoopStorage<
                 u32,
@@ -438,7 +438,7 @@ fn errors_display_their_cause() {
 fn spawning_into_a_full_pool_fails_without_calling_the_closure() {
     static CALLED: AtomicBool = AtomicBool::new(false);
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = EventLoop::new(
+    let event_loop = EventLoop::new(
         {
             static STORAGE: LoopStorage<u32, 1, 1, 64, 1024, 1, 1> = LoopStorage::new();
             &STORAGE

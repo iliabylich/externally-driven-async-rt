@@ -102,7 +102,7 @@ mod tests {
     #[test]
     fn spawned_task_can_spawn_and_join() {
         let mut selector = Selector::new().unwrap();
-        let mut event_loop = TestLoop::new(
+        let event_loop = TestLoop::new(
             {
                 static STORAGE: TestStorage = TestStorage::new();
                 &STORAGE

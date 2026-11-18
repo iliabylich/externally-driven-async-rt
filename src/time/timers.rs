@@ -2,7 +2,10 @@ use core::{cell::Cell, task::Waker};
 
 use crate::{
     pool::ObjectPool,
-    time::{Instant, TimerEntry, TimerIndex, TimersFullError},
+    time::{
+        Instant, TimersFullError,
+        timer_entry::{TimerEntry, TimerIndex},
+    },
 };
 
 #[must_use]

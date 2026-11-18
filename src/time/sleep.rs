@@ -1,6 +1,9 @@
 use core::{future::Future, pin::Pin, task::Poll};
 
-use crate::time::{Instant, TimerEntry, TimerIndex, Timers, TimersFullError};
+use crate::time::{
+    Instant, Timers, TimersFullError,
+    timer_entry::{TimerEntry, TimerIndex},
+};
 
 /// A sleep future.
 #[must_use = "futures do nothing unless you `.await` or poll them"]
@@ -119,7 +122,7 @@ mod tests {
         sleep_blocking(Duration::from_millis(30));
         wake_expired_timers(&ctx.storage.timers);
         assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Finished);
-        assert_yields!(core::iter::from_fn(|| ctx.storage.events.pop()), [10, 20, 30]);
+        assert_yields!(ctx.storage.events.iter(), [10, 20, 30]);
         ctx.clear();
     }
 

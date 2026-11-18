@@ -229,7 +229,7 @@ fn connect_to_a_missing_path_fails() {
     let path = TempPath::new("missing");
     let addr = path.addr();
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
+    let event_loop = TestLoop::new(
         {
             static STORAGE: TestStorage<NetError> = TestStorage::new();
             &STORAGE

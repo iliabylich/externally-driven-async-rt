@@ -89,12 +89,12 @@ fn notification_without_a_waiter_is_kept() {
 
     ctx.storage.notification.fire();
     assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
-    assert_yields!(core::iter::from_fn(|| ctx.storage.events.pop()), []);
+    assert_yields!(ctx.storage.events.iter(), []);
 
     sleep_blocking(Duration::from_millis(1));
     wake_expired_timers(&ctx.storage.timers);
     assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
-    assert_yields!(core::iter::from_fn(|| ctx.storage.events.pop()), [1, 2]);
+    assert_yields!(ctx.storage.events.iter(), [1, 2]);
     ctx.clear();
 }
 

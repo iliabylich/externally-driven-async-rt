@@ -6,7 +6,6 @@ pub use self::error::Error;
 
 use crate::{
     context::Context,
-    events_iter::EventsIter,
     selector::Selector,
     storage::LoopStorage,
     tasks::{Root, RootStatus},
@@ -117,8 +116,8 @@ impl<
     /// Returns an iterator that pops events pushed by [`Context::dispatch`](crate::Context::dispatch).
     ///
     /// This is the way to pass data from the event loop to the external world.
-    pub const fn events(&mut self) -> EventsIter<'_, E, EVENTS> {
-        EventsIter::new(&self.ctx.storage.events)
+    pub fn events(&self) -> impl Iterator<Item = E> {
+        self.ctx.storage.events.iter()
     }
 }
 
