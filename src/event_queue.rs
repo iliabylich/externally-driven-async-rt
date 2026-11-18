@@ -54,7 +54,7 @@ impl<E, const N: usize> EventQueue<E, N> {
         if next == N { 0 } else { next }
     }
 
-    pub(crate) fn iter<'a>(&'a self) -> impl Iterator<Item = E> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = E> {
         core::iter::from_fn(|| self.pop())
     }
 }
