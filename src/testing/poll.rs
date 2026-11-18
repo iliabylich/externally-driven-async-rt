@@ -21,7 +21,8 @@ pub(crate) fn sleep_blocking(duration: Duration) {
 }
 
 pub(crate) async fn wait_readable(ctx: &TestContext<'_>, fd: &OwnedFd) {
-    let mut registration = IoRegistration::new(ctx, fd.as_fd(), &Cell::new(None), Direction::Read);
+    let mut registration =
+        IoRegistration::new(ctx, fd.as_fd(), &Cell::new(None), Direction::Read).unwrap();
     while !fd.is_readable_now() {
         registration.wait().await;
     }

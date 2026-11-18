@@ -15,8 +15,8 @@ use rustix::{
 
 use crate::{
     context::Context,
-    io::{IoIndex, IoRegistration},
-    net::retry::Retry,
+    io::{FdsFullError, IoIndex, IoRegistration},
+    net::{NetError, retry::Retry},
     selector::Direction,
     strace::{syscall, syscall_end, syscall_start},
 };
@@ -134,7 +134,7 @@ impl Socket {
     >(
         ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         addr: &A,
-    ) -> rustix::io::Result<Self> {
+    ) -> Result<Self, NetError> {
         let socket = Self::new(addr.as_any().address_family(), SocketType::STREAM)?;
         syscall_start!("connect", socket.0, addr.as_any());
         let result = rustix::net::connect(&socket.0, addr);
@@ -142,9 +142,9 @@ impl Socket {
         match result {
             Ok(()) => return Ok(socket),
             Err(Errno::INPROGRESS | Errno::INTR) => {}
-            Err(errno) => return Err(errno),
+            Err(errno) => return Err(errno.into()),
         }
-        IoRegistration::new(ctx, socket.0.as_fd(), &socket.1, Direction::Write)
+        IoRegistration::new(ctx, socket.0.as_fd(), &socket.1, Direction::Write)?
             .wait()
             .await;
         syscall_start!("getsockopt", socket.0, "SOL_SOCKET", "SO_ERROR");
@@ -165,7 +165,7 @@ impl Socket {
     >(
         &self,
         ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    ) -> rustix::io::Result<(Self, Option<SocketAddrAny>)> {
+    ) -> Result<(Self, Option<SocketAddrAny>), NetError> {
         let (fd, addr) = self
             .retry(ctx, Direction::Read, |fd| {
                 syscall_start!("accept", fd);
@@ -192,7 +192,7 @@ impl Socket {
         &'a self,
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
-    ) -> impl Future<Output = rustix::io::Result<usize>> {
+    ) -> impl Future<Output = Result<usize, NetError>> {
         self.retry(ctx, Direction::Read, move |fd| {
             syscall_start!("read", fd);
             let result = rustix::io::read(fd, &mut *buf);
@@ -214,7 +214,7 @@ impl Socket {
         &'a self,
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
-    ) -> impl Future<Output = rustix::io::Result<usize>> {
+    ) -> impl Future<Output = Result<usize, NetError>> {
         self.retry(ctx, Direction::Write, move |fd| {
             syscall_start!("send", fd, buf, buf.len(), STREAM_SEND_FLAGS);
             let result = rustix::net::send(fd, buf, STREAM_SEND_FLAGS);
@@ -236,7 +236,7 @@ impl Socket {
         &'a self,
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
-    ) -> impl Future<Output = rustix::io::Result<usize>> {
+    ) -> impl Future<Output = Result<usize, NetError>> {
         self.retry(ctx, Direction::Write, move |fd| {
             syscall_start!("send", fd, buf, buf.len(), SendFlags::empty());
             let result = rustix::net::send(fd, buf, SendFlags::empty());
@@ -257,7 +257,7 @@ impl Socket {
         &self,
         ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &mut [u8],
-    ) -> rustix::io::Result<usize> {
+    ) -> Result<usize, NetError> {
         let (len, _) = self
             .retry(ctx, Direction::Read, |fd| {
                 syscall_start!("recv", fd);
@@ -289,7 +289,7 @@ impl Socket {
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
         addr: &'a A,
-    ) -> impl Future<Output = rustix::io::Result<usize>> {
+    ) -> impl Future<Output = Result<usize, NetError>> {
         self.retry(ctx, Direction::Write, move |fd| {
             syscall_start!(
                 "sendto",
@@ -317,7 +317,7 @@ impl Socket {
         &self,
         ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &mut [u8],
-    ) -> rustix::io::Result<(usize, Option<SocketAddrAny>)> {
+    ) -> Result<(usize, Option<SocketAddrAny>), NetError> {
         let (len, _, addr) = self
             .retry(ctx, Direction::Read, |fd| {
                 syscall_start!("recvfrom", fd);
@@ -396,9 +396,10 @@ impl Socket {
         &self,
         ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         direction: Direction,
-    ) {
-        let mut registration = IoRegistration::new(ctx, self.0.as_fd(), &self.1, direction);
+    ) -> Result<(), FdsFullError> {
+        let mut registration = IoRegistration::new(ctx, self.0.as_fd(), &self.1, direction)?;
         registration.wait().await;
+        Ok(())
     }
 
     pub(crate) fn try_read(&self, buf: &mut [u8]) -> rustix::io::Result<usize> {

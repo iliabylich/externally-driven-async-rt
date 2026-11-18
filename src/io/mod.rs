@@ -2,6 +2,7 @@ mod async_read;
 mod async_read_ext;
 mod async_write;
 mod async_write_ext;
+mod fds_full_error;
 mod frame_reader;
 mod frame_writer;
 mod io_registration;
@@ -15,6 +16,7 @@ pub use self::{
     async_read_ext::{AsyncReadExt, ReadExactError},
     async_write::AsyncWrite,
     async_write_ext::{AsyncWriteExt, WriteAllError},
+    fds_full_error::FdsFullError,
     frame_reader::{FrameReader, FrameReaderError},
     frame_writer::{FrameWriter, FrameWriterError},
 };

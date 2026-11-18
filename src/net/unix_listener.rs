@@ -2,7 +2,7 @@ use rustix::net::{AddressFamily, SocketAddrUnix, SocketType};
 
 use crate::{
     context::Context,
-    net::{UnixStream, socket::Socket},
+    net::{NetError, UnixStream, socket::Socket},
 };
 
 /// A Unix stream listener.
@@ -28,7 +28,7 @@ impl UnixListener {
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails.
+    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
     ///
     /// # Cancel safety
     ///
@@ -44,7 +44,7 @@ impl UnixListener {
     >(
         &mut self,
         ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    ) -> rustix::io::Result<(UnixStream, SocketAddrUnix)> {
+    ) -> Result<(UnixStream, SocketAddrUnix), NetError> {
         let (socket, addr) = self.socket.accept(ctx).await?;
         let addr = match addr {
             Some(addr) => addr.try_into()?,

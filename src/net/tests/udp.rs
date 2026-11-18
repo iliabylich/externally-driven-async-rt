@@ -10,9 +10,10 @@ use rustix::{
 };
 
 use crate::{
-    Selector,
-    net::UdpSocket,
-    testing::{EventLoopTestingExt, TestLoop, TestStorage, raw_socket},
+    Either2, EventLoop, LoopStorage, Selector,
+    net::{NetError, UdpSocket},
+    select2,
+    testing::{EventLoopTestingExt, TestLoop, TestStorage, assert_yields, raw_socket},
 };
 
 const LOCALHOST: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
@@ -75,7 +76,7 @@ fn connected_socket_reports_a_refused_peer() {
     let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
-            static STORAGE: TestStorage = TestStorage::new();
+            static STORAGE: TestStorage<NetError> = TestStorage::new();
             &STORAGE
         },
         &mut selector,
@@ -84,18 +85,48 @@ fn connected_socket_reports_a_refused_peer() {
             let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
             socket.connect(closed).unwrap();
             socket.send(&ctx, b"x").await.unwrap();
-            let errno = socket.recv(&ctx, &mut buf).await.err().unwrap();
-            ctx.dispatch(errno.raw_os_error() as u32).unwrap();
+            let err = socket.recv(&ctx, &mut buf).await.err().unwrap();
+            ctx.dispatch(err).unwrap();
 
             let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
             socket.connect(closed).unwrap();
             socket.send(&ctx, b"x").await.unwrap();
-            let errno = socket.recv_from(&ctx, &mut buf).await.err().unwrap();
-            ctx.dispatch(errno.raw_os_error() as u32).unwrap();
+            let err = socket.recv_from(&ctx, &mut buf).await.err().unwrap();
+            ctx.dispatch(err).unwrap();
             pending::<()>().await;
         },
     )
     .unwrap();
-    let refused = Errno::CONNREFUSED.raw_os_error() as u32;
+    let refused = NetError::Os(Errno::CONNREFUSED);
     assert_eq!(event_loop.run_until_events(), [refused, refused]);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn waiting_on_more_sockets_than_fds_fails() {
+    let mut selector = Selector::new().unwrap();
+    let mut event_loop = EventLoop::new(
+        {
+            static STORAGE: LoopStorage<NetError, 1, 1, 64, 1024, 1, 1> = LoopStorage::new();
+            &STORAGE
+        },
+        &mut selector,
+        async |ctx| {
+            let mut first = UdpSocket::bind(LOCALHOST).unwrap();
+            let mut second = UdpSocket::bind(LOCALHOST).unwrap();
+            let (mut first_buf, mut second_buf) = ([0; 1], [0; 1]);
+            let Either2::Right(result) = select2(
+                first.recv(&ctx, &mut first_buf),
+                second.recv(&ctx, &mut second_buf),
+            )
+            .await
+            else {
+                panic!("nothing is sent to the first socket");
+            };
+            ctx.dispatch(result.unwrap_err()).unwrap();
+            pending::<()>().await;
+        },
+    )
+    .unwrap();
+    assert_yields!(event_loop.events(), [NetError::FdsFull]);
 }

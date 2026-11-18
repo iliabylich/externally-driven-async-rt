@@ -7,7 +7,7 @@ use rustix::{
 
 use crate::{
     context::Context,
-    net::{TcpStream, socket::Socket},
+    net::{NetError, TcpStream, socket::Socket},
 };
 
 /// A TCP listener.
@@ -34,7 +34,7 @@ impl TcpListener {
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails.
+    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
     ///
     /// # Cancel safety
     ///
@@ -50,7 +50,7 @@ impl TcpListener {
     >(
         &mut self,
         ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    ) -> rustix::io::Result<(TcpStream, SocketAddr)> {
+    ) -> Result<(TcpStream, SocketAddr), NetError> {
         let (socket, addr) = self.socket.accept(ctx).await?;
         Ok((
             TcpStream::new(socket),

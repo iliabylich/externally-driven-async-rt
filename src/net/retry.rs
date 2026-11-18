@@ -13,6 +13,7 @@ use rustix::{
 use crate::{
     context::Context,
     io::{IoIndex, IoRegistration},
+    net::NetError,
     selector::Direction,
 };
 
@@ -82,13 +83,19 @@ impl<
     F: FnMut(&OwnedFd) -> rustix::io::Result<T> + Unpin,
 > Future for Retry<'_, '_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, F>
 {
-    type Output = rustix::io::Result<T>;
+    type Output = Result<T, NetError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        let registration = this.registration.get_or_insert_with(|| {
-            IoRegistration::new(this.ctx, this.fd.as_fd(), this.cached, this.direction)
-        });
+        let registration = match &mut this.registration {
+            Some(registration) => registration,
+            None => {
+                match IoRegistration::new(this.ctx, this.fd.as_fd(), this.cached, this.direction) {
+                    Ok(registration) => this.registration.insert(registration),
+                    Err(err) => return Poll::Ready(Err(err.into())),
+                }
+            }
+        };
         loop {
             if this.waiting && registration.poll_wait(&mut this.waiting, cx).is_pending() {
                 return Poll::Pending;
@@ -100,7 +107,7 @@ impl<
                         return Poll::Pending;
                     }
                 }
-                result => return Poll::Ready(result),
+                result => return Poll::Ready(result.map_err(NetError::Os)),
             }
         }
     }

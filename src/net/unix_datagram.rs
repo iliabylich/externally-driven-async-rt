@@ -1,6 +1,9 @@
 use rustix::net::{AddressFamily, SocketAddrUnix, SocketType};
 
-use crate::{context::Context, net::socket::Socket};
+use crate::{
+    context::Context,
+    net::{NetError, socket::Socket},
+};
 
 /// A Unix datagram socket.
 #[must_use]
@@ -34,7 +37,7 @@ impl UnixDatagram {
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails.
+    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
     ///
     /// # Cancel safety
     ///
@@ -53,7 +56,7 @@ impl UnixDatagram {
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
         addr: &'a SocketAddrUnix,
-    ) -> impl Future<Output = rustix::io::Result<usize>> {
+    ) -> impl Future<Output = Result<usize, NetError>> {
         self.socket.send_to(ctx, buf, addr)
     }
 
@@ -62,7 +65,7 @@ impl UnixDatagram {
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails.
+    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
     ///
     /// # Cancel safety
     ///
@@ -80,7 +83,7 @@ impl UnixDatagram {
         &'a mut self,
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
-    ) -> impl Future<Output = rustix::io::Result<(usize, SocketAddrUnix)>> {
+    ) -> impl Future<Output = Result<(usize, SocketAddrUnix), NetError>> {
         let recv = self.socket.recv_from(ctx, buf);
         async move {
             let (len, addr) = recv.await?;
@@ -105,7 +108,7 @@ impl UnixDatagram {
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails.
+    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
     ///
     /// # Cancel safety
     ///
@@ -123,7 +126,7 @@ impl UnixDatagram {
         &'a mut self,
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
-    ) -> impl Future<Output = rustix::io::Result<usize>> {
+    ) -> impl Future<Output = Result<usize, NetError>> {
         self.socket.send(ctx, buf)
     }
 
@@ -131,7 +134,7 @@ impl UnixDatagram {
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails.
+    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
     ///
     /// # Cancel safety
     ///
@@ -149,7 +152,7 @@ impl UnixDatagram {
         &'a mut self,
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
-    ) -> impl Future<Output = rustix::io::Result<usize>> {
+    ) -> impl Future<Output = Result<usize, NetError>> {
         self.socket.recv(ctx, buf)
     }
 

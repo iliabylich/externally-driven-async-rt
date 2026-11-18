@@ -3,7 +3,7 @@ use rustix::net::{Shutdown, SocketAddrUnix};
 use crate::{
     context::Context,
     io::{AsyncRead, AsyncWrite},
-    net::{BorrowedReadHalf, BorrowedWriteHalf, socket::Socket},
+    net::{BorrowedReadHalf, BorrowedWriteHalf, NetError, socket::Socket},
 };
 
 /// A Unix stream.
@@ -21,7 +21,7 @@ impl UnixStream {
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails.
+    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
     ///
     /// # Cancel safety
     ///
@@ -37,7 +37,7 @@ impl UnixStream {
     >(
         ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         addr: &SocketAddrUnix,
-    ) -> rustix::io::Result<Self> {
+    ) -> Result<Self, NetError> {
         let socket = Socket::connect_stream(ctx, addr).await?;
         Ok(Self { socket })
     }
@@ -83,7 +83,7 @@ impl UnixStream {
 }
 
 impl AsyncRead for UnixStream {
-    type Error = rustix::io::Errno;
+    type Error = NetError;
 
     fn read<
         'a,
@@ -98,13 +98,13 @@ impl AsyncRead for UnixStream {
         &'a mut self,
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
-    ) -> impl Future<Output = rustix::io::Result<usize>> {
+    ) -> impl Future<Output = Result<usize, NetError>> {
         self.socket.read(ctx, buf)
     }
 }
 
 impl AsyncWrite for UnixStream {
-    type Error = rustix::io::Errno;
+    type Error = NetError;
 
     fn write<
         'a,
@@ -119,7 +119,7 @@ impl AsyncWrite for UnixStream {
         &'a mut self,
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
-    ) -> impl Future<Output = rustix::io::Result<usize>> {
+    ) -> impl Future<Output = Result<usize, NetError>> {
         self.socket.write(ctx, buf)
     }
 
@@ -135,7 +135,7 @@ impl AsyncWrite for UnixStream {
     >(
         &'a mut self,
         _ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    ) -> impl Future<Output = rustix::io::Result<()>> {
+    ) -> impl Future<Output = Result<(), NetError>> {
         core::future::ready(Ok(()))
     }
 }

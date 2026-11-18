@@ -1,4 +1,9 @@
-use crate::{context::Context, io::AsyncRead, net::socket::Socket, selector::Direction};
+use crate::{
+    context::Context,
+    io::{AsyncRead, FdsFullError},
+    net::{NetError, socket::Socket},
+    selector::Direction,
+};
 
 /// Read half of a TCP/Unix stream.
 #[must_use]
@@ -16,6 +21,10 @@ impl<'s> BorrowedReadHalf<'s> {
     /// The stream may still turn out to be not readable, so [`try_read`](Self::try_read)
     /// can return [`Errno::AGAIN`](rustix::io::Errno::AGAIN) after it.
     ///
+    /// # Errors
+    ///
+    /// Returns an error if all `FDS` fd slots are taken.
+    ///
     /// # Cancel safety
     ///
     /// This method is cancel safe.
@@ -30,8 +39,8 @@ impl<'s> BorrowedReadHalf<'s> {
     >(
         &self,
         ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    ) {
-        self.socket.ready(ctx, Direction::Read).await;
+    ) -> Result<(), FdsFullError> {
+        self.socket.ready(ctx, Direction::Read).await
     }
 
     /// Reads into a given buffer without waiting, returns the number of read bytes.
@@ -48,7 +57,7 @@ impl<'s> BorrowedReadHalf<'s> {
 }
 
 impl AsyncRead for BorrowedReadHalf<'_> {
-    type Error = rustix::io::Errno;
+    type Error = NetError;
 
     fn read<
         'a,
@@ -63,7 +72,7 @@ impl AsyncRead for BorrowedReadHalf<'_> {
         &'a mut self,
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
-    ) -> impl Future<Output = rustix::io::Result<usize>> {
+    ) -> impl Future<Output = Result<usize, NetError>> {
         self.socket.read(ctx, buf)
     }
 }

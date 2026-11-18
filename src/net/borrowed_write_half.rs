@@ -1,4 +1,9 @@
-use crate::{context::Context, io::AsyncWrite, net::socket::Socket, selector::Direction};
+use crate::{
+    context::Context,
+    io::{AsyncWrite, FdsFullError},
+    net::{NetError, socket::Socket},
+    selector::Direction,
+};
 
 /// Write half of a TCP/Unix stream.
 #[must_use]
@@ -16,6 +21,10 @@ impl<'s> BorrowedWriteHalf<'s> {
     /// The stream may still turn out to be not writable, so [`try_write`](Self::try_write)
     /// can return [`Errno::AGAIN`](rustix::io::Errno::AGAIN) after it.
     ///
+    /// # Errors
+    ///
+    /// Returns an error if all `FDS` fd slots are taken.
+    ///
     /// # Cancel safety
     ///
     /// This method is cancel safe.
@@ -30,8 +39,8 @@ impl<'s> BorrowedWriteHalf<'s> {
     >(
         &self,
         ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    ) {
-        self.socket.ready(ctx, Direction::Write).await;
+    ) -> Result<(), FdsFullError> {
+        self.socket.ready(ctx, Direction::Write).await
     }
 
     /// Writes from a given buffer without waiting, returns the number of written bytes.
@@ -46,7 +55,7 @@ impl<'s> BorrowedWriteHalf<'s> {
 }
 
 impl AsyncWrite for BorrowedWriteHalf<'_> {
-    type Error = rustix::io::Errno;
+    type Error = NetError;
 
     fn write<
         'a,
@@ -61,7 +70,7 @@ impl AsyncWrite for BorrowedWriteHalf<'_> {
         &'a mut self,
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
-    ) -> impl Future<Output = rustix::io::Result<usize>> {
+    ) -> impl Future<Output = Result<usize, NetError>> {
         self.socket.write(ctx, buf)
     }
 
@@ -77,7 +86,7 @@ impl AsyncWrite for BorrowedWriteHalf<'_> {
     >(
         &'a mut self,
         _ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    ) -> impl Future<Output = rustix::io::Result<()>> {
+    ) -> impl Future<Output = Result<(), NetError>> {
         core::future::ready(Ok(()))
     }
 }

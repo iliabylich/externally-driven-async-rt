@@ -1,5 +1,6 @@
 mod borrowed_read_half;
 mod borrowed_write_half;
+mod net_error;
 mod retry;
 mod socket;
 mod tcp_listener;
@@ -11,7 +12,7 @@ mod unix_stream;
 
 pub use self::{
     borrowed_read_half::BorrowedReadHalf, borrowed_write_half::BorrowedWriteHalf,
-    tcp_listener::TcpListener, tcp_stream::TcpStream, udp_socket::UdpSocket,
+    net_error::NetError, tcp_listener::TcpListener, tcp_stream::TcpStream, udp_socket::UdpSocket,
     unix_datagram::UnixDatagram, unix_listener::UnixListener, unix_stream::UnixStream,
 };
 

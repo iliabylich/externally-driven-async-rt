@@ -15,7 +15,7 @@ use rustix::{
 use crate::{
     Selector,
     io::{AsyncRead, AsyncWrite},
-    net::{TcpListener, TcpStream},
+    net::{NetError, TcpListener, TcpStream},
     testing::{self, EventLoopTestingExt, FdTestingExt, TestLoop, TestStorage, raw_accept},
 };
 
@@ -121,20 +121,20 @@ fn connect_to_a_closed_port_fails() {
     let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
-            static STORAGE: TestStorage = TestStorage::new();
+            static STORAGE: TestStorage<NetError> = TestStorage::new();
             &STORAGE
         },
         &mut selector,
         async move |ctx| {
-            let errno = TcpStream::connect(&ctx, addr).await.err().unwrap();
-            ctx.dispatch(errno.raw_os_error() as u32).unwrap();
+            let err = TcpStream::connect(&ctx, addr).await.err().unwrap();
+            ctx.dispatch(err).unwrap();
             pending::<()>().await;
         },
     )
     .unwrap();
     assert_eq!(
         event_loop.run_until_events(),
-        [Errno::CONNREFUSED.raw_os_error() as u32]
+        [NetError::Os(Errno::CONNREFUSED)]
     );
 }
 
@@ -240,10 +240,10 @@ fn split_halves_wait_for_readiness_and_try_io() {
             let mut buf = [0; 5];
             assert_eq!(rx.try_read(&mut buf), Err(Errno::AGAIN));
 
-            tx.writable(&ctx).await;
+            tx.writable(&ctx).await.unwrap();
             assert_eq!(tx.try_write(b"hello").unwrap(), 5);
 
-            rx.readable(&ctx).await;
+            rx.readable(&ctx).await.unwrap();
             assert_eq!(rx.try_read(&mut buf).unwrap(), 5);
             assert_eq!(&buf, b"world");
             ctx.dispatch(1).unwrap();

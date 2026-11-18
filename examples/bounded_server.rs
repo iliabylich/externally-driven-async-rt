@@ -11,7 +11,7 @@ use core::{net::SocketAddr, time::Duration};
 use externally_driven_async_rt::{
     Context, Error, EventLoop, LoopStorage, Selector,
     io::{AsyncRead, AsyncWriteExt, WriteAllError},
-    net::{TcpListener, TcpStream},
+    net::{NetError, TcpListener, TcpStream},
 };
 
 use rustix::{
@@ -53,9 +53,9 @@ enum Event {
     RequestTooLong(SocketAddr),
     Disconnected {
         peer: SocketAddr,
-        error: Option<Errno>,
+        error: Option<NetError>,
     },
-    AcceptFailed(Errno),
+    AcceptFailed(NetError),
     Tick,
 }
 
@@ -161,7 +161,7 @@ async fn exchange(
     stream: &mut TcpStream,
     buf: &mut [u8; MAX_REQUEST_LEN],
     len: &mut usize,
-) -> rustix::io::Result<Exchange> {
+) -> Result<Exchange, NetError> {
     let end = loop {
         if let Some(newline) = buf[..*len].iter().position(|byte| *byte == b'\n') {
             break newline + 1;

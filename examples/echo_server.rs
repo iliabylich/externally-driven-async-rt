@@ -12,7 +12,7 @@ use std::os::fd::AsFd;
 use externally_driven_async_rt::{
     Context, Error, EventLoop, LoopStorage, Selector,
     io::{AsyncRead, AsyncWriteExt, WriteAllError},
-    net::{TcpListener, TcpStream},
+    net::{NetError, TcpListener, TcpStream},
 };
 
 use rustix::{
@@ -50,9 +50,9 @@ enum Event {
     },
     Disconnected {
         peer: SocketAddr,
-        error: Option<Errno>,
+        error: Option<NetError>,
     },
-    AcceptFailed(Errno),
+    AcceptFailed(NetError),
     Tick,
 }
 
@@ -120,7 +120,7 @@ async fn echo(
     ctx: &ServerContext<'_>,
     mut stream: TcpStream,
     peer: SocketAddr,
-) -> rustix::io::Result<()> {
+) -> Result<(), NetError> {
     let mut buf = [0; 512];
     loop {
         let len = stream.read(ctx, &mut buf).await?;

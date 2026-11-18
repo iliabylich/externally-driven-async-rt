@@ -8,7 +8,7 @@ use rustix::{
 use crate::{
     Selector,
     io::{AsyncRead, AsyncWrite},
-    net::{UnixDatagram, UnixListener, UnixStream},
+    net::{NetError, UnixDatagram, UnixListener, UnixStream},
     testing::{EventLoopTestingExt, TestLoop, TestStorage, assert_yields, raw_accept, raw_socket},
 };
 
@@ -231,18 +231,18 @@ fn connect_to_a_missing_path_fails() {
     let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
-            static STORAGE: TestStorage = TestStorage::new();
+            static STORAGE: TestStorage<NetError> = TestStorage::new();
             &STORAGE
         },
         &mut selector,
         async move |ctx| {
-            let errno = UnixStream::connect(&ctx, &addr).await.err().unwrap();
-            ctx.dispatch(errno.raw_os_error() as u32).unwrap();
+            let err = UnixStream::connect(&ctx, &addr).await.err().unwrap();
+            ctx.dispatch(err).unwrap();
             pending::<()>().await;
         },
     )
     .unwrap();
-    assert_yields!(event_loop.events(), [Errno::NOENT.raw_os_error() as u32]);
+    assert_yields!(event_loop.events(), [NetError::Os(Errno::NOENT)]);
 }
 
 #[test]

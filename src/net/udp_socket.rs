@@ -5,7 +5,10 @@ use rustix::{
     net::{SocketType, addr::SocketAddrArg},
 };
 
-use crate::{context::Context, net::socket::Socket};
+use crate::{
+    context::Context,
+    net::{NetError, socket::Socket},
+};
 
 /// A UDP socket.
 #[must_use]
@@ -29,7 +32,7 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails.
+    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
     ///
     /// # Cancel safety
     ///
@@ -47,7 +50,7 @@ impl UdpSocket {
         ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &[u8],
         addr: SocketAddr,
-    ) -> rustix::io::Result<usize> {
+    ) -> Result<usize, NetError> {
         self.socket.send_to(ctx, buf, &addr).await
     }
 
@@ -55,7 +58,7 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails.
+    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
     ///
     /// # Cancel safety
     ///
@@ -73,7 +76,7 @@ impl UdpSocket {
         &'a mut self,
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
-    ) -> impl Future<Output = rustix::io::Result<(usize, SocketAddr)>> {
+    ) -> impl Future<Output = Result<(usize, SocketAddr), NetError>> {
         let recv = self.socket.recv_from(ctx, buf);
         async move {
             let (len, addr) = recv.await?;
@@ -94,7 +97,7 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails.
+    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
     ///
     /// # Cancel safety
     ///
@@ -112,7 +115,7 @@ impl UdpSocket {
         &'a mut self,
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
-    ) -> impl Future<Output = rustix::io::Result<usize>> {
+    ) -> impl Future<Output = Result<usize, NetError>> {
         self.socket.send(ctx, buf)
     }
 
@@ -120,7 +123,7 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails.
+    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
     ///
     /// # Cancel safety
     ///
@@ -138,7 +141,7 @@ impl UdpSocket {
         &'a mut self,
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
-    ) -> impl Future<Output = rustix::io::Result<usize>> {
+    ) -> impl Future<Output = Result<usize, NetError>> {
         self.socket.recv(ctx, buf)
     }
 

@@ -4,7 +4,7 @@ use rustix::fd::{AsRawFd, BorrowedFd};
 
 use crate::{
     context::Context,
-    io::{IoIndex, IoWaiter, IoWaiters, Wait},
+    io::{FdsFullError, IoIndex, IoWaiter, IoWaiters, Wait},
     selector::{Direction, Selector},
 };
 
@@ -30,18 +30,18 @@ impl<'a, const FDS: usize> IoRegistration<'a, FDS> {
         fd: BorrowedFd<'a>,
         cached: &Cell<Option<IoIndex>>,
         direction: Direction,
-    ) -> Self {
+    ) -> Result<Self, FdsFullError> {
         let (index, io) = ctx
             .storage
             .io_waiters
-            .register(cached, fd.as_raw_fd(), direction);
-        Self {
+            .register(cached, fd.as_raw_fd(), direction)?;
+        Ok(Self {
             io_waiters: &ctx.storage.io_waiters,
             selector: ctx.selector,
             index,
             io,
             direction,
-        }
+        })
     }
 
     pub(crate) const fn wait(&mut self) -> Wait<'_, 'a, FDS> {
