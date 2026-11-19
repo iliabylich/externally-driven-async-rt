@@ -26,26 +26,27 @@ impl<const N: usize> IoWaiters<N> {
         fd: RawFd,
         direction: Direction,
     ) -> Result<(IoIndex, &IoWaiter), FdsFullError> {
-        let (index, io) = match cached
-            .get()
-            .and_then(|index| Some((index, self.pool.get(index)?)))
+        if let Some(index) = cached.get()
+            && let Some(io) = self.get(index)
+            && io.fd() == fd
         {
-            Some((idx, io)) if io.fd() == fd => (idx, io),
-            _ => self.alloc(fd)?,
-        };
-        cached.set(Some(index));
+            io.register(direction);
+            return Ok((index, io));
+        }
+        let (index, io) = self.pool.alloc().ok_or(FdsFullError)?;
+        io.reset(fd);
         io.register(direction);
+        cached.set(Some(index));
         Ok((index, io))
     }
 
-    fn alloc(&self, fd: RawFd) -> Result<(IoIndex, &IoWaiter), FdsFullError> {
-        let (index, io) = self.pool.alloc().ok_or(FdsFullError)?;
-        io.reset(fd);
-        Ok((index, io))
+    fn get(&self, index: IoIndex) -> Option<&IoWaiter> {
+        let (current, io) = self.pool.get(index.idx);
+        (current == index).then_some(io)
     }
 
     pub(crate) fn release(&self, index: IoIndex, direction: Direction) -> Option<IoChange> {
-        let io = self.pool.get(index)?;
+        let io = self.get(index)?;
         let change = io.release(index, direction);
         if !io.is_registered() {
             self.pool.free(index);
@@ -54,7 +55,7 @@ impl<const N: usize> IoWaiters<N> {
     }
 
     pub(crate) fn wake_ready(&self, index: IoIndex, ready: Directions) {
-        if let Some(io) = self.pool.get(index) {
+        if let Some(io) = self.get(index) {
             io.wake(ready);
         }
     }

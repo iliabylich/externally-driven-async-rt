@@ -35,7 +35,8 @@ impl<const N: usize> Timers<N> {
     }
 
     pub(crate) fn release(&self, index: TimerIndex) {
-        if let Some(timer) = self.pool.get(index) {
+        let (current, timer) = self.pool.get(index.idx);
+        if current == index {
             timer.take_waker();
             self.pool.free(index);
         }

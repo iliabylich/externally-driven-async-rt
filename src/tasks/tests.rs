@@ -5,7 +5,7 @@ use core::{
 };
 
 use crate::{
-    tasks::{JoinStatus, Root, RootStatus, TaskEntry, TaskId, Tasks, TasksFullError},
+    tasks::{JoinStatus, Root, RootStatus, TaskId, Tasks, TasksFullError},
     testing::{
         FixedFuture, FlagOnDrop, TasksStorage, spawn_reserved_static, spawn_root_static,
         spawn_static,
@@ -20,7 +20,8 @@ fn contains<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: us
     tasks: &Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
     id: TaskId<TASK_SIZE>,
 ) -> bool {
-    tasks.pool.get(id).is_some_and(TaskEntry::has_task)
+    let (current, entry) = tasks.pool.get(id.idx);
+    current == id && entry.has_task()
 }
 
 fn waker<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>(

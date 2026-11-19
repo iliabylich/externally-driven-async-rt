@@ -99,28 +99,11 @@ impl<T, const N: usize> ObjectPool<T, N> {
         self.free_head.set(Some(free.idx));
     }
 
-    pub(crate) fn get(&self, index: VersionedIndex<T>) -> Option<&T> {
-        let slot = self
-            .slot_at(index.idx)
-            .unwrap_or_else(|| unreachable!("index {} is out of bounds", index.idx));
-
-        let used = slot.used()?;
-        if used.slot.version() == index.version {
-            Some(used.value)
-        } else {
-            None
-        }
-    }
-
-    pub(crate) fn get_at(&self, idx: u32) -> Option<(VersionedIndex<T>, &T)> {
-        let slot = self
-            .slot_at(idx)
-            .unwrap_or_else(|| unreachable!("index {idx} is out of bounds"));
-        let used = slot.used()?;
-        Some((
-            VersionedIndex::new(used.idx, used.slot.version()),
-            used.value,
-        ))
+    pub(crate) fn get(&self, idx: u32) -> (VersionedIndex<T>, &T) {
+        let Some(slot) = self.slot_at(idx) else {
+            unreachable!("index {idx} is out of bounds");
+        };
+        (VersionedIndex::new(idx, slot.slot.version()), slot.value)
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (VersionedIndex<T>, &T)> {

@@ -17,7 +17,8 @@ fn value<T: Copy, const N: usize>(
     pool: &ObjectPool<Cell<T>, N>,
     index: VersionedIndex<Cell<T>>,
 ) -> Option<T> {
-    pool.get(index).map(Cell::get)
+    let (current, value) = pool.get(index.idx);
+    (current == index).then(|| value.get())
 }
 
 #[test]
@@ -27,7 +28,7 @@ fn highly_aligned_slots_are_aligned() {
     let pool = &ObjectPool::<Aligned, 3>::new([const { Aligned(Cell::new(0)) }; 3]);
     let (index, slot) = pool.alloc().unwrap();
     slot.0.set(7);
-    let value = pool.get(index).unwrap();
+    let (_, value) = pool.get(index.idx);
     assert_eq!(value.0.get(), 7);
     let value: *const Aligned = value;
     assert_eq!(value.addr() % 64, 0);
@@ -40,10 +41,10 @@ fn alloc_get_free() {
     let b = alloc(pool, "b").unwrap();
     assert_ne!(a, b);
     assert_eq!(value(pool, a), Some("a"));
-    pool.get(b).unwrap().set("B");
+    pool.get(b.idx).1.set("B");
     assert_eq!(value(pool, b), Some("B"));
     pool.free(b);
-    assert!(pool.get(b).is_none());
+    assert_eq!(value(pool, b), None);
     assert_eq!(value(pool, a), Some("a"));
 }
 
@@ -65,7 +66,7 @@ fn index_round_trips_through_pack_unpack() {
     let index = alloc(pool, 2).unwrap();
     assert_eq!(VersionedIndex::unpack(index.pack()), index);
     assert_ne!(index.pack(), first.pack());
-    assert!(pool.get(VersionedIndex::unpack(first.pack())).is_none());
+    assert_eq!(value(pool, VersionedIndex::unpack(first.pack())), None);
 }
 
 #[test]
@@ -82,7 +83,7 @@ fn freed_slot_is_reused_with_a_new_version() {
     pool.free(old);
     let new = alloc(pool, 2).unwrap();
     assert_ne!(old, new);
-    assert!(pool.get(old).is_none());
+    assert_eq!(value(pool, old), None);
     assert_eq!(value(pool, new), Some(2));
 }
 
@@ -140,7 +141,8 @@ fn occupied_list_stays_consistent() {
             let position = (step as usize * 7) % live_count;
             let (index, value) = live.iter().flatten().nth(position).copied().unwrap();
             live[index.idx as usize] = None;
-            assert_eq!(pool.get(index).map(Cell::get), Some(value));
+            let (current, slot) = pool.get(index.idx);
+            assert_eq!((current, slot.get()), (index, value));
             pool.free(index);
         } else if let Some(index) = alloc(pool, next_value) {
             live[index.idx as usize] = Some((index, next_value));
@@ -154,14 +156,14 @@ fn occupied_list_stays_consistent() {
 }
 
 #[test]
-fn get_at_finds_the_current_occupant_of_a_slot() {
+fn get_returns_the_current_handle_of_a_slot() {
     let pool = &ObjectPool::<Cell<u32>, 1>::new([const { Cell::new(0) }; 1]);
-    assert!(pool.get_at(0).is_none());
     let first = alloc(pool, 1).unwrap();
+    assert_eq!(pool.get(0).0, first);
     pool.free(first);
-    assert!(pool.get_at(0).is_none());
+    assert_ne!(pool.get(0).0, first);
     let second = alloc(pool, 2).unwrap();
-    let (index, value) = pool.get_at(0).unwrap();
+    let (index, value) = pool.get(0);
     assert_eq!(index, second);
     assert_eq!(value.get(), 2);
 }

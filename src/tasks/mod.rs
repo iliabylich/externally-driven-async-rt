@@ -58,8 +58,8 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
     }
 
     pub(crate) fn set_join_waiter(&self, id: TaskId<TASK_SIZE>, waker: &Waker) -> JoinStatus {
-        match self.pool.get(id) {
-            Some(entry) if entry.has_task() => {
+        match self.pool.get(id.idx) {
+            (current, entry) if current == id && entry.has_task() => {
                 entry.set_join_waiter(waker);
                 JoinStatus::Running
             }
@@ -68,7 +68,8 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
     }
 
     pub(crate) fn clear_join_waiter(&self, id: TaskId<TASK_SIZE>) {
-        if let Some(entry) = self.pool.get(id) {
+        let (current, entry) = self.pool.get(id.idx);
+        if current == id {
             entry.take_join_waiter();
         }
     }
@@ -153,9 +154,7 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
             let Some(slot) = self.queue.pop() else {
                 return RootStatus::Running;
             };
-            let Some((id, entry)) = self.pool.get_at(slot) else {
-                continue;
-            };
+            let (id, entry) = self.pool.get(slot);
             if !entry.has_task() {
                 continue;
             }
