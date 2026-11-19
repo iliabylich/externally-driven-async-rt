@@ -36,7 +36,6 @@ pub(crate) struct Retry<
     direction: Direction,
     op: F,
     registration: Option<IoRegistration<'a, FDS>>,
-    waiting: bool,
 }
 
 impl<
@@ -66,7 +65,6 @@ impl<
             direction,
             op,
             registration: None,
-            waiting: false,
         }
     }
 }
@@ -88,7 +86,12 @@ impl<
     fn poll(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         let registration = match &mut this.registration {
-            Some(registration) => registration,
+            Some(registration) => {
+                if registration.poll_wait(cx).is_pending() {
+                    return Poll::Pending;
+                }
+                registration
+            }
             None => {
                 match IoRegistration::new(this.ctx, this.fd.as_fd(), this.cached, this.direction) {
                     Ok(registration) => this.registration.insert(registration),
@@ -97,36 +100,15 @@ impl<
             }
         };
         loop {
-            if this.waiting && registration.poll_wait(&mut this.waiting, cx).is_pending() {
-                return Poll::Pending;
-            }
             match (this.op)(this.fd) {
                 Err(Errno::INTR) => {}
                 Err(Errno::AGAIN) => {
-                    if registration.poll_wait(&mut this.waiting, cx).is_pending() {
+                    if registration.poll_wait(cx).is_pending() {
                         return Poll::Pending;
                     }
                 }
                 result => return Poll::Ready(result.map_err(NetError::Os)),
             }
-        }
-    }
-}
-
-impl<
-    E: 'static,
-    const EVENTS: usize,
-    const TASKS: usize,
-    const TASK_SIZE: usize,
-    const ROOT_TASK_SIZE: usize,
-    const TIMERS: usize,
-    const FDS: usize,
-    F,
-> Drop for Retry<'_, '_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, F>
-{
-    fn drop(&mut self) {
-        if let Some(registration) = &self.registration {
-            registration.cancel_wait(self.waiting);
         }
     }
 }

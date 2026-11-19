@@ -15,6 +15,7 @@ pub(crate) struct IoRegistration<'a, const FDS: usize> {
     index: IoIndex,
     io: &'a IoWaiter,
     direction: Direction,
+    waiting: bool,
 }
 
 impl<'a, const FDS: usize> IoRegistration<'a, FDS> {
@@ -41,6 +42,7 @@ impl<'a, const FDS: usize> IoRegistration<'a, FDS> {
             index,
             io,
             direction,
+            waiting: false,
         })
     }
 
@@ -48,19 +50,20 @@ impl<'a, const FDS: usize> IoRegistration<'a, FDS> {
         Wait::new(self)
     }
 
-    pub(crate) fn poll_wait(&self, waiting: &mut bool, cx: &core::task::Context<'_>) -> Poll<()> {
+    pub(crate) fn poll_wait(&mut self, cx: &core::task::Context<'_>) -> Poll<()> {
         let waker = self.io.waker(self.direction);
-        if *waiting && !waker.is_set() {
-            *waiting = false;
+        if self.waiting && !waker.is_set() {
+            self.waiting = false;
             return Poll::Ready(());
         }
         waker.store(cx.waker());
-        *waiting = true;
+        self.waiting = true;
         Poll::Pending
     }
 
-    pub(crate) fn cancel_wait(&self, waiting: bool) {
-        if waiting {
+    pub(crate) fn cancel_wait(&mut self) {
+        if self.waiting {
+            self.waiting = false;
             self.io.waker(self.direction).take();
         }
     }
