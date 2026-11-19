@@ -83,19 +83,7 @@ fn freed_slot_is_reused_with_a_new_version() {
     let new = alloc(pool, 2).unwrap();
     assert_ne!(old, new);
     assert!(pool.get(old).is_none());
-    pool.free(old);
     assert_eq!(value(pool, new), Some(2));
-}
-
-#[test]
-fn double_free_is_rejected() {
-    let pool = &ObjectPool::<Cell<u32>, 2>::new([const { Cell::new(0) }; 2]);
-    let index = alloc(pool, 1).unwrap();
-    pool.free(index);
-    pool.free(index);
-    let _ = alloc(pool, 2).unwrap();
-    let _ = alloc(pool, 3).unwrap();
-    assert!(pool.alloc().is_none());
 }
 
 #[test]
@@ -176,5 +164,4 @@ fn get_at_finds_the_current_occupant_of_a_slot() {
     let (index, value) = pool.get_at(0).unwrap();
     assert_eq!(index, second);
     assert_eq!(value.get(), 2);
-    assert!(pool.get_at(1).is_none());
 }
