@@ -70,9 +70,7 @@ impl IoWaiter {
         self.armed.set(self.interest());
     }
 
-    pub(crate) fn clear(&self) {
-        self.registered.set(Directions::Empty);
-        self.armed.set(Directions::Empty);
+    pub(crate) fn drop_wakers(&self) {
         self.reader.take();
         self.writer.take();
     }

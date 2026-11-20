@@ -43,9 +43,9 @@ impl<const N: usize> Timers<N> {
         self.pool.free(index);
     }
 
-    pub(crate) fn clear(&self) {
-        for (index, _) in self.pool.iter() {
-            self.release(index);
+    pub(crate) fn drop_wakers(&self) {
+        for (_, timer) in self.pool.iter() {
+            timer.take_waker();
         }
     }
 
@@ -195,5 +195,18 @@ mod tests {
             timers.next_deadline(),
             Some(now + Duration::from_millis(20))
         );
+    }
+
+    #[test]
+    fn releasing_after_dropping_wakers_frees_the_slot() {
+        let drops = Cell::new(0);
+        let timers = &Timers::<1>::new();
+        let waker = counting_waker(&drops);
+        let (index, _) = timers.alloc(Instant::now(), &waker).unwrap();
+        timers.drop_wakers();
+        assert_eq!(drops.get(), 1);
+        assert_eq!(timers.next_deadline(), None);
+        timers.release(index);
+        assert!(timers.alloc(Instant::now(), &waker).is_ok());
     }
 }

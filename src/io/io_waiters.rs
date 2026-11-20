@@ -56,10 +56,9 @@ impl<const N: usize> IoWaiters<N> {
         }
     }
 
-    pub(crate) fn clear(&self) {
-        for (fd, io) in self.map.iter() {
-            io.clear();
-            self.map.remove(fd);
+    pub(crate) fn drop_wakers(&self) {
+        for (_, io) in self.map.iter() {
+            io.drop_wakers();
         }
     }
 
@@ -198,5 +197,20 @@ mod tests {
             io_waiters.register(4, Direction::Read).err(),
             Some(FdsFullError)
         );
+    }
+
+    #[test]
+    fn releasing_after_dropping_wakers_removes_the_fd() {
+        let io_waiters = &IoWaiters::<1>::new();
+        let io = io_waiters.register(3, Direction::Read).unwrap();
+        io_waiters.register(3, Direction::Write).unwrap();
+        io.waker(Direction::Read).store(Waker::noop());
+        io.waker(Direction::Write).store(Waker::noop());
+        io_waiters.drop_wakers();
+        assert!(!io.waker(Direction::Read).is_set());
+        assert!(!io.waker(Direction::Write).is_set());
+        assert_eq!(io_waiters.release(3, Direction::Read), None);
+        assert_eq!(io_waiters.release(3, Direction::Write), None);
+        assert_eq!(io_waiters.count(), 0);
     }
 }
