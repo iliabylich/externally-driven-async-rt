@@ -99,7 +99,7 @@ impl AsyncRead for UnixStream {
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket.read(ctx, buf)
+        self.socket.recv(ctx, buf)
     }
 }
 
@@ -120,7 +120,7 @@ impl AsyncWrite for UnixStream {
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket.write(ctx, buf)
+        self.socket.send(ctx, buf)
     }
 
     fn flush<

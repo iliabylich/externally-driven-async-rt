@@ -52,7 +52,7 @@ impl<'s> BorrowedReadHalf<'s> {
     /// Returns [`Errno::AGAIN`](rustix::io::Errno::AGAIN) if the stream is not readable,
     /// or an error if the syscall fails.
     pub fn try_read(&self, buf: &mut [u8]) -> rustix::io::Result<usize> {
-        self.socket.try_read(buf)
+        self.socket.try_recv(buf)
     }
 }
 
@@ -73,7 +73,7 @@ impl AsyncRead for BorrowedReadHalf<'_> {
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket.read(ctx, buf)
+        self.socket.recv(ctx, buf)
     }
 }
 

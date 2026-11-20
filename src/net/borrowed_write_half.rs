@@ -50,7 +50,7 @@ impl<'s> BorrowedWriteHalf<'s> {
     /// Returns [`Errno::AGAIN`](rustix::io::Errno::AGAIN) if the stream is not writable,
     /// or an error if the syscall fails.
     pub fn try_write(&self, buf: &[u8]) -> rustix::io::Result<usize> {
-        self.socket.try_write(buf)
+        self.socket.try_send(buf)
     }
 }
 
@@ -71,7 +71,7 @@ impl AsyncWrite for BorrowedWriteHalf<'_> {
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket.write(ctx, buf)
+        self.socket.send(ctx, buf)
     }
 
     fn flush<

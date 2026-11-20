@@ -23,9 +23,9 @@ use crate::{
 
 const LISTEN_BACKLOG: i32 = 1024;
 #[cfg(target_os = "macos")]
-const STREAM_SEND_FLAGS: SendFlags = SendFlags::empty();
+const SEND_FLAGS: SendFlags = SendFlags::empty();
 #[cfg(any(target_os = "linux", target_os = "android"))]
-const STREAM_SEND_FLAGS: SendFlags = SendFlags::NOSIGNAL;
+const SEND_FLAGS: SendFlags = SendFlags::NOSIGNAL;
 
 #[must_use]
 pub(crate) struct Socket(OwnedFd);
@@ -179,50 +179,6 @@ impl Socket {
         Ok((socket, addr))
     }
 
-    pub(crate) fn read<
-        'a,
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
-        &'a self,
-        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-        buf: &'a mut [u8],
-    ) -> impl Future<Output = Result<usize, NetError>> {
-        self.retry(ctx, Direction::Read, move |fd| {
-            syscall_start!("read", fd);
-            let result = rustix::io::read(fd, &mut *buf);
-            syscall_end!(result; &buf[..result.unwrap_or(0)], buf.len());
-            result
-        })
-    }
-
-    pub(crate) fn write<
-        'a,
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
-        &'a self,
-        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-        buf: &'a [u8],
-    ) -> impl Future<Output = Result<usize, NetError>> {
-        self.retry(ctx, Direction::Write, move |fd| {
-            syscall_start!("send", fd, buf, buf.len(), STREAM_SEND_FLAGS);
-            let result = rustix::net::send(fd, buf, STREAM_SEND_FLAGS);
-            syscall_end!(result);
-            result
-        })
-    }
-
     pub(crate) fn send<
         'a,
         E: 'static,
@@ -238,14 +194,15 @@ impl Socket {
         buf: &'a [u8],
     ) -> impl Future<Output = Result<usize, NetError>> {
         self.retry(ctx, Direction::Write, move |fd| {
-            syscall_start!("send", fd, buf, buf.len(), SendFlags::empty());
-            let result = rustix::net::send(fd, buf, SendFlags::empty());
+            syscall_start!("send", fd, buf, buf.len(), SEND_FLAGS);
+            let result = rustix::net::send(fd, buf, SEND_FLAGS);
             syscall_end!(result);
             result
         })
     }
 
-    pub(crate) async fn recv<
+    pub(crate) fn recv<
+        'a,
         E: 'static,
         const EVENTS: usize,
         const TASKS: usize,
@@ -254,24 +211,21 @@ impl Socket {
         const TIMERS: usize,
         const FDS: usize,
     >(
-        &self,
-        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-        buf: &mut [u8],
-    ) -> Result<usize, NetError> {
-        let (len, _) = self
-            .retry(ctx, Direction::Read, |fd| {
-                syscall_start!("recv", fd);
-                let result = rustix::net::recv(fd, &mut *buf, RecvFlags::empty());
-                syscall_end!(
-                    result;
-                    &buf[..result.map_or(0, |(len, _)| len)],
-                    buf.len(),
-                    RecvFlags::empty(),
-                );
-                result
-            })
-            .await?;
-        Ok(len)
+        &'a self,
+        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        buf: &'a mut [u8],
+    ) -> impl Future<Output = Result<usize, NetError>> {
+        self.retry(ctx, Direction::Read, move |fd| {
+            syscall_start!("recv", fd);
+            let result = rustix::net::recv(fd, &mut *buf, RecvFlags::empty());
+            syscall_end!(
+                result;
+                &buf[..result.map_or(0, |(len, _)| len)],
+                buf.len(),
+                RecvFlags::empty(),
+            );
+            result.map(|(len, _)| len)
+        })
     }
 
     pub(crate) fn send_to<
@@ -402,21 +356,28 @@ impl Socket {
         Ok(())
     }
 
-    pub(crate) fn try_read(&self, buf: &mut [u8]) -> rustix::io::Result<usize> {
+    pub(crate) fn try_recv(&self, buf: &mut [u8]) -> rustix::io::Result<usize> {
         loop {
-            syscall_start!("read", self.0);
-            let result = rustix::io::read(&self.0, &mut *buf);
-            syscall_end!(result; &buf[..result.unwrap_or(0)], buf.len());
-            if result != Err(Errno::INTR) {
-                return result;
+            syscall_start!("recv", self.0);
+            let result = rustix::net::recv(&self.0, &mut *buf, RecvFlags::empty());
+            syscall_end!(
+                result;
+                &buf[..result.map_or(0, |(len, _)| len)],
+                buf.len(),
+                RecvFlags::empty(),
+            );
+            match result {
+                Ok((len, _)) => return Ok(len),
+                Err(Errno::INTR) => {}
+                Err(errno) => return Err(errno),
             }
         }
     }
 
-    pub(crate) fn try_write(&self, buf: &[u8]) -> rustix::io::Result<usize> {
+    pub(crate) fn try_send(&self, buf: &[u8]) -> rustix::io::Result<usize> {
         loop {
-            syscall_start!("send", self.0, buf, buf.len(), STREAM_SEND_FLAGS);
-            let result = rustix::net::send(&self.0, buf, STREAM_SEND_FLAGS);
+            syscall_start!("send", self.0, buf, buf.len(), SEND_FLAGS);
+            let result = rustix::net::send(&self.0, buf, SEND_FLAGS);
             syscall_end!(result);
             if result != Err(Errno::INTR) {
                 return result;
