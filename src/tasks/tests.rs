@@ -5,7 +5,7 @@ use core::{
 };
 
 use crate::{
-    tasks::{JoinStatus, Root, RootStatus, TaskId, Tasks, TasksFullError},
+    tasks::{Root, RootStatus, TaskId, Tasks, TasksFullError},
     testing::{
         FixedFuture, FlagOnDrop, TasksStorage, spawn_reserved_static, spawn_root_static,
         spawn_static,
@@ -38,18 +38,12 @@ fn dropping_a_task_drops_its_future_and_finishes_it() {
     let tasks = &STORAGE.tasks;
     let id = spawn_static(tasks, FlagOnDrop::new(&DROPPED)).unwrap();
     assert!(contains(tasks, id));
-    assert_eq!(
-        tasks.set_join_waiter(id, Waker::noop()),
-        JoinStatus::Running
-    );
+    assert_eq!(tasks.set_join_waiter(id, Waker::noop()), Poll::Pending);
     tasks.drop_all();
     assert!(DROPPED.load(Relaxed));
     assert!(!contains(tasks, id));
     assert_eq!(tasks.pool.iter().count(), 0);
-    assert_eq!(
-        tasks.set_join_waiter(id, Waker::noop()),
-        JoinStatus::Finished
-    );
+    assert_eq!(tasks.set_join_waiter(id, Waker::noop()), Poll::Ready(()));
 }
 
 #[test]
@@ -61,10 +55,7 @@ fn finished_task_id_never_matches_a_reused_slot() {
     let second = spawn_static(tasks, async {}).unwrap();
     assert_ne!(first, second);
     assert!(!contains(tasks, first));
-    assert_eq!(
-        tasks.set_join_waiter(first, Waker::noop()),
-        JoinStatus::Finished
-    );
+    assert_eq!(tasks.set_join_waiter(first, Waker::noop()), Poll::Ready(()));
 }
 
 #[test]
@@ -87,7 +78,7 @@ fn a_task_spawned_while_one_is_dropped_gets_another_slot() {
             assert!(!contains(self.tasks, self.id));
             assert_eq!(
                 self.tasks.set_join_waiter(self.id, Waker::noop()),
-                JoinStatus::Finished
+                Poll::Ready(())
             );
             let spawned = spawn_static(self.tasks, async {}).unwrap();
             assert_ne!(spawned.idx, self.id.idx);

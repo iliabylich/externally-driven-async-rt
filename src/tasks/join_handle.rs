@@ -1,6 +1,6 @@
 use core::{future::Future, marker::PhantomData, pin::Pin, task::Poll};
 
-use crate::tasks::{JoinStatus, TaskId, Tasks};
+use crate::tasks::{TaskId, Tasks};
 
 /// A join handle of the spawned task, resolves once the task is finished.
 ///
@@ -33,10 +33,7 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> Fu
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<()> {
-        match self.tasks.set_join_waiter(self.id, cx.waker()) {
-            JoinStatus::Running => Poll::Pending,
-            JoinStatus::Finished => Poll::Ready(()),
-        }
+        self.tasks.set_join_waiter(self.id, cx.waker())
     }
 }
 

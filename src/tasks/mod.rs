@@ -1,6 +1,5 @@
 mod aligned16;
 mod join_handle;
-mod join_status;
 mod reserve_task;
 mod root;
 mod root_status;
@@ -13,7 +12,10 @@ mod task_slot;
 mod tasks_full_error;
 mod wake_queue;
 
-use core::{cell::Cell, task::Waker};
+use core::{
+    cell::Cell,
+    task::{Poll, Waker},
+};
 
 use self::{aligned16::Aligned16, task_memory::TaskMemory, task_slot::TaskSlot};
 pub use self::{
@@ -22,7 +24,6 @@ pub use self::{
     tasks_full_error::TasksFullError,
 };
 pub(crate) use self::{
-    join_status::JoinStatus,
     root::Root,
     root_status::RootStatus,
     task::Task,
@@ -57,13 +58,13 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         self.root.get()
     }
 
-    pub(crate) fn set_join_waiter(&self, id: TaskId<TASK_SIZE>, waker: &Waker) -> JoinStatus {
+    pub(crate) fn set_join_waiter(&self, id: TaskId<TASK_SIZE>, waker: &Waker) -> Poll<()> {
         match self.pool.get(id.idx) {
             (current, entry) if current == id && entry.has_task() => {
                 entry.set_join_waiter(waker);
-                JoinStatus::Running
+                Poll::Pending
             }
-            _ => JoinStatus::Finished,
+            _ => Poll::Ready(()),
         }
     }
 
