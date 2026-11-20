@@ -36,10 +36,11 @@ impl<const N: usize> Timers<N> {
 
     pub(crate) fn release(&self, index: TimerIndex) {
         let (current, timer) = self.pool.get(index.idx);
-        if current == index {
-            timer.take_waker();
-            self.pool.free(index);
+        if current != index {
+            unreachable!("releasing stale timer {index:?}, the slot is now {current:?}");
         }
+        timer.take_waker();
+        self.pool.free(index);
     }
 
     pub(crate) fn clear(&self) {
@@ -98,8 +99,6 @@ mod tests {
         timers.release(index);
         assert_eq!(drops.get(), 1);
         assert_eq!(timers.next_deadline(), None);
-        timers.release(index);
-        assert_eq!(drops.get(), 1);
     }
 
     #[test]
