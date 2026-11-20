@@ -29,10 +29,9 @@ impl<const N: usize> IoWaiters<N> {
     }
 
     pub(crate) fn release(&self, fd: RawFd, direction: Direction) -> Option<IoChange> {
-        let io = self
-            .map
-            .get(fd)
-            .unwrap_or_else(|| unreachable!("releasing fd {fd} that is not registered"));
+        let Some(io) = self.map.get(fd) else {
+            unreachable!("releasing fd {fd} that is not registered")
+        };
         let change = io.release(fd, direction);
         if !io.is_registered() {
             self.map.remove(fd);

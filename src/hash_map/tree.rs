@@ -70,9 +70,9 @@ impl<K: Copy + Eq + Hash, const N: usize> Tree<K, N> {
 
     pub(crate) fn remove(&self, key: K) -> u32 {
         let link = self.link(key);
-        let idx = link
-            .get()
-            .unwrap_or_else(|| unreachable!("removing a key that is not in the tree"));
+        let Some(idx) = link.get() else {
+            unreachable!("removing a key that is not in the tree")
+        };
         let node = self.node(idx);
         let replacement = self.left_most_set_leaf(idx);
         if let Some((replacement_parent_slot, replacement_idx)) = replacement {
@@ -95,9 +95,10 @@ impl<K: Copy + Eq + Hash, const N: usize> Tree<K, N> {
     }
 
     fn node(&self, idx: u32) -> &Node<K> {
-        self.nodes
-            .get(u32_to_usize(idx))
-            .unwrap_or_else(|| unreachable!("node {idx} is out of bounds"))
+        let Some(node) = self.nodes.get(u32_to_usize(idx)) else {
+            unreachable!("node {idx} is out of bounds")
+        };
+        node
     }
 
     fn left_most_set_leaf(&self, idx: u32) -> Option<(&Cell<Option<u32>>, u32)> {
@@ -113,10 +114,9 @@ impl<K: Copy + Eq + Hash, const N: usize> Tree<K, N> {
         let mut link = &self.root;
         while let Some(idx) = link.get() {
             let node = self.node(idx);
-            let key = node
-                .key
-                .get()
-                .unwrap_or_else(|| unreachable!("a linked node has no key"));
+            let Some(key) = node.key.get() else {
+                unreachable!("a linked node has no key")
+            };
             if key == key_to_find {
                 break;
             }

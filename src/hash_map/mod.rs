@@ -48,10 +48,9 @@ impl<K: Copy + Eq + Hash, V, const N: usize> HashMap<K, V, N> {
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (K, &V)> {
         self.pool.iter().map(|(VersionedIndex { idx, .. }, value)| {
-            let key = self
-                .tree
-                .key(idx)
-                .unwrap_or_else(|| unreachable!("{idx} is allocated but has no key"));
+            let Some(key) = self.tree.key(idx) else {
+                unreachable!("{idx} is allocated but has no key")
+            };
             (key, value)
         })
     }

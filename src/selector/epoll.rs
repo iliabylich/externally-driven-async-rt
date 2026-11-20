@@ -131,9 +131,10 @@ impl EpollSelector {
             TIMER_DATA => self.consume_timer(),
             NOTIFY_DATA => self.consume_notify(),
             data => {
-                let fd = u32::try_from(data)
-                    .unwrap_or_else(|_| unreachable!("event data {data} is not an fd"))
-                    .cast_signed();
+                let Ok(fd) = u32::try_from(data) else {
+                    unreachable!("event data {data} is not an fd");
+                };
+                let fd = fd.cast_signed();
                 let ready = Self::ready(event.flags);
                 Ok((ready != Directions::Empty).then_some(SelectorEvent::Io { fd, ready }))
             }

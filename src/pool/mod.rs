@@ -38,17 +38,23 @@ impl<T, const N: usize> ObjectPool<T, N> {
     }
 
     fn free_slot_at(&self, idx: u32) -> FreeSlotView<'_, T> {
-        self.slot_at(idx)
-            .unwrap_or_else(|| unreachable!("the free list points outside the pool"))
-            .free()
-            .unwrap_or_else(|| unreachable!("the free list points at an used slot"))
+        let Some(slot) = self.slot_at(idx) else {
+            unreachable!("the free list points outside the pool")
+        };
+        let Some(free) = slot.free() else {
+            unreachable!("the free list points at an used slot")
+        };
+        free
     }
 
     fn used_slot_at(&self, idx: u32) -> UsedSlotView<'_, T> {
-        self.slot_at(idx)
-            .unwrap_or_else(|| unreachable!("the used list points outside the pool"))
-            .used()
-            .unwrap_or_else(|| unreachable!("the used list points at a vacant slot"))
+        let Some(slot) = self.slot_at(idx) else {
+            unreachable!("the used list points outside the pool")
+        };
+        let Some(used) = slot.used() else {
+            unreachable!("the used list points at a vacant slot")
+        };
+        used
     }
 
     fn free_head(&self) -> Option<FreeSlotView<'_, T>> {
