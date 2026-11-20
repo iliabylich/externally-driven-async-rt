@@ -38,16 +38,16 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
     fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         let tasks = this.tasks;
-        if let Some((id, entry)) = tasks.reserve() {
+        if let Some((id, entry)) = tasks.pool.alloc() {
             if this.waiting {
-                tasks.clear_slot_waiter();
+                tasks.slot_waiter.take();
                 this.waiting = false;
             }
             Poll::Ready(Ok(TaskReservation::new(tasks, this.claimed, id, entry)))
-        } else if !this.waiting && tasks.has_slot_waiter() {
+        } else if !this.waiting && tasks.slot_waiter.is_set() {
             Poll::Ready(Err(SlotWaiterTakenError))
         } else {
-            tasks.set_slot_waiter(cx.waker());
+            tasks.slot_waiter.store(cx.waker());
             this.waiting = true;
             Poll::Pending
         }
@@ -59,7 +59,7 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> Dr
 {
     fn drop(&mut self) {
         if self.waiting {
-            self.tasks.clear_slot_waiter();
+            self.tasks.slot_waiter.take();
         }
     }
 }
@@ -107,10 +107,10 @@ mod tests {
         let _ = spawn_static(tasks, async {}).unwrap();
         let mut reserve = ReserveTask::new(tasks, claimed_forever());
         assert!(!poll(&mut reserve));
-        assert!(tasks.has_slot_waiter());
+        assert!(tasks.slot_waiter.is_set());
         let _ = tasks.run_ready();
         assert!(poll(&mut reserve));
-        assert!(!tasks.has_slot_waiter());
+        assert!(!tasks.slot_waiter.is_set());
     }
 
     #[test]
@@ -122,7 +122,7 @@ mod tests {
         let mut second = ReserveTask::new(tasks, claimed_forever());
         assert!(!poll(&mut first));
         assert_eq!(poll_err(&mut second), Some(SlotWaiterTakenError));
-        assert!(tasks.has_slot_waiter());
+        assert!(tasks.slot_waiter.is_set());
         let _ = tasks.run_ready();
         assert!(poll(&mut first));
     }

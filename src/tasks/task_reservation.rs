@@ -89,7 +89,7 @@ mod tests {
         static STORAGE: TasksStorage<1, 64, 0> = TasksStorage::new();
         static RAN: AtomicBool = AtomicBool::new(false);
         let tasks = &STORAGE.tasks;
-        let (id, entry) = tasks.reserve().unwrap();
+        let (id, entry) = tasks.pool.alloc().unwrap();
         let mut handle = TaskReservation::new(tasks, claimed_forever(), id, entry)
             .spawn(async { RAN.store(true, Relaxed) });
         let _ = tasks.run_ready();
@@ -105,14 +105,14 @@ mod tests {
         assert!(tasks.queue.claim());
         let waiter = spawn_static(tasks, pending()).unwrap();
         let _ = tasks.run_ready();
-        let (id, entry) = tasks.reserve().unwrap();
+        let (id, entry) = tasks.pool.alloc().unwrap();
         let reservation = TaskReservation::new(tasks, claimed_forever(), id, entry);
         let mut reserve = ReserveTask::new(tasks, claimed_forever());
         let waker = tasks.queue.waker(waiter.idx);
         let mut cx = Context::from_waker(&waker);
         assert!(Pin::new(&mut reserve).poll(&mut cx).is_pending());
         drop(reservation);
-        assert!(tasks.has_ready());
+        assert!(!tasks.queue.is_empty());
         assert!(Pin::new(&mut reserve).poll(&mut cx).is_ready());
     }
 
@@ -120,7 +120,7 @@ mod tests {
     fn a_reserved_slot_is_not_handed_to_spawn() {
         static STORAGE: TasksStorage<1, 64, 0> = TasksStorage::new();
         let tasks = &STORAGE.tasks;
-        let (id, entry) = tasks.reserve().unwrap();
+        let (id, entry) = tasks.pool.alloc().unwrap();
         let _reservation = TaskReservation::new(tasks, claimed_forever(), id, entry);
         assert_eq!(spawn_static(tasks, async {}), Err(TasksFullError));
     }

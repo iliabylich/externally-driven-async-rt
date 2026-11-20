@@ -53,10 +53,6 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         }
     }
 
-    pub(crate) const fn root(&self) -> Root<TASK_SIZE> {
-        self.root.get()
-    }
-
     pub(crate) fn set_join_waiter(&self, id: TaskId<TASK_SIZE>, waker: &Waker) -> Poll<()> {
         match self.pool.get(id.idx) {
             (current, entry) if current == id && entry.has_task() => {
@@ -74,10 +70,6 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         }
     }
 
-    pub(crate) fn has_ready(&self) -> bool {
-        !self.queue.is_empty()
-    }
-
     pub(crate) fn spawn<'a, Fut>(
         &'static self,
         claimed: Claimed<'a>,
@@ -86,7 +78,7 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
     where
         Fut: Future<Output = ()> + 'a,
     {
-        let (id, entry) = self.reserve().ok_or(TasksFullError)?;
+        let (id, entry) = self.pool.alloc().ok_or(TasksFullError)?;
         entry.write(claimed, f());
         self.queue.push(id.idx);
         Ok(id)
@@ -121,25 +113,9 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         self.queue.push(id.idx);
     }
 
-    pub(crate) fn reserve(&self) -> Option<(TaskId<TASK_SIZE>, &TaskEntry<TASK_SIZE>)> {
-        self.pool.alloc()
-    }
-
     pub(crate) fn release(&self, id: TaskId<TASK_SIZE>) {
         self.pool.free(id);
         self.slot_waiter.wake_by_ref();
-    }
-
-    pub(crate) fn has_slot_waiter(&self) -> bool {
-        self.slot_waiter.is_set()
-    }
-
-    pub(crate) fn set_slot_waiter(&self, waker: &Waker) {
-        self.slot_waiter.store(waker);
-    }
-
-    pub(crate) fn clear_slot_waiter(&self) {
-        self.slot_waiter.take();
     }
 
     fn free(&self, id: TaskId<TASK_SIZE>, entry: &TaskEntry<TASK_SIZE>) -> Option<Waker> {

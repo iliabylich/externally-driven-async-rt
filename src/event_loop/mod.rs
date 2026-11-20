@@ -81,12 +81,12 @@ impl<
     /// 2. root future completed
     pub fn drain_events_without_blocking(&mut self) -> Result<(), Error> {
         let ctx = self.ctx;
-        if matches!(ctx.storage.tasks.root(), Root::Finished) {
+        if matches!(ctx.storage.tasks.root.get(), Root::Finished) {
             return Err(Error::RootFinished);
         }
         loop {
             ctx.process_selector_events()?;
-            if !ctx.storage.tasks.has_ready() {
+            if ctx.storage.tasks.queue.is_empty() {
                 break;
             }
             if ctx.storage.tasks.run_ready() == RootStatus::Finished {

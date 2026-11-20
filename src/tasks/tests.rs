@@ -88,7 +88,7 @@ fn a_task_spawned_while_one_is_dropped_gets_another_slot() {
     static STORAGE: Storage<2> = Storage::new();
 
     let tasks = &STORAGE.tasks;
-    let (id, entry) = tasks.reserve().unwrap();
+    let (id, entry) = tasks.pool.alloc().unwrap();
     let spawn_on_drop = SpawnOnDrop { tasks, id };
     spawn_reserved_static(tasks, id, entry, async move {
         let _spawn_on_drop = spawn_on_drop;
@@ -154,7 +154,7 @@ fn root_region_holds_a_root_bigger_than_a_slab_block() {
         _flag: FlagOnDrop::new(&DROPPED),
     };
     spawn_root_static(tasks, root);
-    let Root::Running(id) = tasks.root() else {
+    let Root::Running(id) = tasks.root.get() else {
         panic!("spawning the root makes it running");
     };
     let sibling = spawn_static(tasks, async {}).unwrap();
@@ -201,7 +201,7 @@ fn a_stale_wake_of_a_freed_slot_polls_nothing() {
     let _ = tasks.run_ready();
     waker.wake();
     assert_eq!(tasks.run_ready(), RootStatus::Running);
-    assert!(!tasks.has_ready());
+    assert!(tasks.queue.is_empty());
 }
 
 #[test]
@@ -213,7 +213,7 @@ fn a_stale_wake_of_a_reserved_slot_is_skipped() {
     let id = spawn_static(tasks, async {}).unwrap();
     let waker = waker(tasks, id);
     let _ = tasks.run_ready();
-    let (id, entry) = tasks.reserve().unwrap();
+    let (id, entry) = tasks.pool.alloc().unwrap();
     waker.wake();
     assert_eq!(tasks.run_ready(), RootStatus::Running);
     spawn_reserved_static(tasks, id, entry, counting(&POLLS));
@@ -246,7 +246,7 @@ fn a_task_dropped_while_queued_is_skipped() {
     tasks.drop_all();
     assert!(DROPPED.load(Relaxed));
     assert_eq!(tasks.run_ready(), RootStatus::Running);
-    assert!(!tasks.has_ready());
+    assert!(tasks.queue.is_empty());
 }
 
 #[test]
@@ -314,9 +314,9 @@ fn spawning_into_a_reserved_slot_queues_the_task() {
     static STORAGE: Storage<1> = Storage::new();
     static POLLS: AtomicU32 = AtomicU32::new(0);
     let tasks = &STORAGE.tasks;
-    let (id, entry) = tasks.reserve().unwrap();
+    let (id, entry) = tasks.pool.alloc().unwrap();
     assert!(!contains(tasks, id));
-    assert!(tasks.reserve().is_none());
+    assert!(tasks.pool.alloc().is_none());
     spawn_reserved_static(tasks, id, entry, counting(&POLLS));
     let _ = tasks.run_ready();
     assert_eq!(POLLS.load(Relaxed), 1);
@@ -331,12 +331,12 @@ fn releasing_a_slot_wakes_the_slot_waiter() {
     assert!(tasks.queue.claim());
     let waiter = spawn_static(tasks, counting(&POLLS)).unwrap();
     let _ = tasks.run_ready();
-    tasks.set_slot_waiter(&waker(tasks, waiter));
-    let (id, _) = tasks.reserve().unwrap();
+    tasks.slot_waiter.store(&waker(tasks, waiter));
+    let (id, _) = tasks.pool.alloc().unwrap();
     tasks.release(id);
     let _ = tasks.run_ready();
     assert_eq!(POLLS.load(Relaxed), 2);
-    assert!(tasks.has_slot_waiter());
+    assert!(tasks.slot_waiter.is_set());
 }
 
 #[test]
@@ -347,7 +347,7 @@ fn finishing_a_task_wakes_the_slot_waiter() {
     assert!(tasks.queue.claim());
     let waiter = spawn_static(tasks, counting(&POLLS)).unwrap();
     let _ = tasks.run_ready();
-    tasks.set_slot_waiter(&waker(tasks, waiter));
+    tasks.slot_waiter.store(&waker(tasks, waiter));
     let _ = spawn_static(tasks, async {}).unwrap();
     let _ = tasks.run_ready();
     assert_eq!(POLLS.load(Relaxed), 2);
