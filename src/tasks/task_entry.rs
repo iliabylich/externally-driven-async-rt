@@ -35,19 +35,18 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
         self.occupy(task);
     }
 
-    fn peek<R>(&self, f: impl FnOnce(&TaskSlot) -> R) -> R {
-        let slot = self.task.take();
-        let result = f(&slot);
-        self.task.set(slot);
-        result
-    }
-
     pub(crate) fn has_task(&self) -> bool {
-        self.peek(|slot| !matches!(slot, TaskSlot::Empty))
+        let slot = self.task.take();
+        let has_task = !matches!(slot, TaskSlot::Empty);
+        self.task.set(slot);
+        has_task
     }
 
     pub(crate) fn is_idle(&self) -> bool {
-        self.peek(|slot| matches!(slot, TaskSlot::Idle(_)))
+        let slot = self.task.take();
+        let is_idle = matches!(slot, TaskSlot::Idle(_));
+        self.task.set(slot);
+        is_idle
     }
 
     pub(crate) fn occupy(&self, task: Task) {
