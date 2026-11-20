@@ -136,10 +136,7 @@ impl Socket {
         addr: &A,
     ) -> Result<Self, NetError> {
         let socket = Self::new(addr.as_any().address_family(), SocketType::STREAM)?;
-        syscall_start!("connect", socket.0, addr.as_any());
-        let result = rustix::net::connect(&socket.0, addr);
-        syscall_end!(result);
-        match result {
+        match socket.connect(addr) {
             Ok(()) => return Ok(socket),
             Err(Errno::INPROGRESS | Errno::INTR) => {}
             Err(errno) => return Err(errno.into()),
