@@ -17,8 +17,7 @@ fn value<T: Copy, const N: usize>(
     pool: &ObjectPool<Cell<T>, N>,
     index: VersionedIndex<Cell<T>>,
 ) -> Option<T> {
-    let (current, value) = pool.get(index.idx);
-    (current == index).then(|| value.get())
+    pool.get_versioned(index).map(Cell::get)
 }
 
 #[test]
@@ -142,6 +141,18 @@ fn occupied_list_stays_consistent() {
             assert_eq!(live[index.idx as usize], Some((index, value.get())));
         }
     }
+}
+
+#[test]
+fn get_versioned_finds_only_the_current_handle() {
+    let pool = &ObjectPool::<Cell<u32>, 1>::new([const { Cell::new(0) }; 1]);
+    let first = alloc(pool, 1).unwrap();
+    assert_eq!(pool.get_versioned(first).map(Cell::get), Some(1));
+    pool.free(first);
+    assert!(pool.get_versioned(first).is_none());
+    let second = alloc(pool, 2).unwrap();
+    assert!(pool.get_versioned(first).is_none());
+    assert_eq!(pool.get_versioned(second).map(Cell::get), Some(2));
 }
 
 #[test]

@@ -20,8 +20,10 @@ fn contains<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: us
     tasks: &Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
     id: TaskId<TASK_SIZE>,
 ) -> bool {
-    let (current, entry) = tasks.pool.get(id.idx);
-    current == id && entry.has_task()
+    let Some(entry) = tasks.pool.get_versioned(id) else {
+        return false;
+    };
+    entry.has_task()
 }
 
 fn waker<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>(

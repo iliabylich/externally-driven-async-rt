@@ -106,6 +106,11 @@ impl<T, const N: usize> ObjectPool<T, N> {
         (VersionedIndex::new(idx, slot.slot.version()), slot.value)
     }
 
+    pub(crate) fn get_versioned(&self, index: VersionedIndex<T>) -> Option<&T> {
+        let (current, value) = self.get(index.idx);
+        (current == index).then_some(value)
+    }
+
     pub(crate) fn iter(&self) -> impl Iterator<Item = (VersionedIndex<T>, &T)> {
         let mut cursor = self.used_head.get();
         core::iter::from_fn(move || {
