@@ -18,10 +18,10 @@ impl TimerEntry {
         }
     }
 
-    pub(crate) fn arm(&self, deadline: Instant, seq: u64, waker: Waker) {
+    pub(crate) fn arm(&self, deadline: Instant, seq: u64, waker: &Waker) {
         self.deadline.set(deadline);
         self.seq.set(seq);
-        self.waker.set(waker);
+        self.waker.store(waker);
     }
 
     pub(crate) const fn deadline(&self) -> Instant {

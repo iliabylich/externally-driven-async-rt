@@ -12,17 +12,16 @@ fn clearing_drops_live_wakers() {
         static STORAGE: SmallStorage = SmallStorage::new();
         STORAGE.claim(&selector).unwrap()
     };
-    let _ = ctx
-        .storage
-        .timers
-        .alloc(Instant::now(), counting_waker(&drops));
+    let timer_waker = counting_waker(&drops);
+    let _ = ctx.storage.timers.alloc(Instant::now(), &timer_waker);
+    drop(timer_waker);
     let io = ctx.storage.io_waiters.register(3, Direction::Read).unwrap();
     let io_waker = counting_waker(&drops);
     io.waker(Direction::Read).store(&io_waker);
     drop(io_waker);
-    assert_eq!(drops.get(), 1);
+    assert_eq!(drops.get(), 2);
     ctx.clear();
-    assert_eq!(drops.get(), 3);
+    assert_eq!(drops.get(), 4);
 }
 
 #[test]

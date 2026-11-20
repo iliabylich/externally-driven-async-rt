@@ -17,7 +17,7 @@ impl WakerSlot {
         }
     }
 
-    pub(crate) fn set(&self, waker: Waker) {
+    fn set(&self, waker: Waker) {
         self.0.set(Some(waker));
     }
 
