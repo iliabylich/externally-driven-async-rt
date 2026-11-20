@@ -47,24 +47,6 @@ impl<
     const FDS: usize,
 > Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
-    pub(crate) fn claim(
-        storage: &'static LoopStorage<E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-        selector: &'a Selector,
-    ) -> Option<Self> {
-        if !storage.tasks.queue.claim() {
-            return None;
-        }
-        Some(Self {
-            storage,
-            selector,
-            // SAFETY: claiming the queue above fails unless this is the storage's first claim, so
-            // these tasks belong to this loop alone. Only the `EventLoop<'a>` that owns this claim
-            // polls and drops them, and it drops them all before `'a` ends or, if leaked, never
-            // touches them again.
-            claimed: unsafe { Claimed::new() },
-        })
-    }
-
     /// Pushes given `event` into the queue that [`EventLoop::events`](crate::EventLoop::events)
     /// pops from.
     ///

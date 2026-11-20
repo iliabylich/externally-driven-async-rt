@@ -1,6 +1,6 @@
 use crate::{
-    context::Context, event_queue::EventQueue, io::IoWaiters, notify::Notification,
-    selector::Selector, tasks::Tasks, time::Timers,
+    claimed::Claimed, context::Context, event_queue::EventQueue, io::IoWaiters,
+    notify::Notification, selector::Selector, tasks::Tasks, time::Timers,
 };
 
 /// The main pre-allocated storage that [`EventLoop`](crate::EventLoop) needs.
@@ -24,7 +24,7 @@ pub struct LoopStorage<
 }
 
 // SAFETY: a storage has no public methods, so other threads can only pass `&LoopStorage` around.
-// The crate touches it only through a `Context`, which only `Context::claim`
+// The crate touches it only through a `Context`, which only `LoopStorage::claim`
 // creates, and that succeeds once ever, on the thread that runs the claiming loop (claiming the
 // tasks claims their `WakeQueue`, which panics the second time); `EventLoop` and `Context` are
 // `!Send`, so everything but the wakers stays on that thread, and wakers only touch the atomic
@@ -66,7 +66,18 @@ impl<
         &'static self,
         selector: &'a Selector,
     ) -> Option<Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>> {
-        Context::claim(self, selector)
+        if !self.tasks.queue.claim() {
+            return None;
+        }
+        Some(Context {
+            storage: self,
+            selector,
+            // SAFETY: claiming the queue above fails unless this is the storage's first claim, so
+            // these tasks belong to this loop alone. Only the `EventLoop<'a>` that owns this claim
+            // polls and drops them, and it drops them all before `'a` ends or, if leaked, never
+            // touches them again.
+            claimed: unsafe { Claimed::new() },
+        })
     }
 }
 
