@@ -117,9 +117,14 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         self.slot_waiter.wake_by_ref();
     }
 
-    fn free(&self, id: TaskId<TASK_SIZE>, entry: &TaskEntry<TASK_SIZE>) -> Option<Waker> {
+    fn free(
+        &self,
+        id: TaskId<TASK_SIZE>,
+        entry: &TaskEntry<TASK_SIZE>,
+        task: Task,
+    ) -> Option<Waker> {
         let join_waiter = entry.take_join_waiter();
-        entry.drop_task();
+        drop(task);
         self.release(id);
         join_waiter
     }
@@ -130,15 +135,12 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
                 return RootStatus::Running;
             };
             let (id, entry) = self.pool.get(slot);
-            if !entry.has_task() {
-                continue;
-            }
             let waker = self.queue.waker(slot);
             let mut cx = core::task::Context::from_waker(&waker);
-            if entry.poll(&mut cx).is_pending() {
+            let Some(Poll::Ready(task)) = entry.poll(&mut cx) else {
                 continue;
-            }
-            if let Some(join_waiter) = self.free(id, entry) {
+            };
+            if let Some(join_waiter) = self.free(id, entry, task) {
                 join_waiter.wake();
             }
             if let Root::Running(root) = self.root.get()
@@ -151,8 +153,12 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
     }
 
     pub(crate) fn drop_all(&self) {
-        while let Some((id, entry)) = self.pool.iter().find(|(_, entry)| entry.is_idle()) {
-            self.free(id, entry);
+        while let Some((id, entry, task)) = self
+            .pool
+            .iter()
+            .find_map(|(id, entry)| Some((id, entry, entry.take_idle()?)))
+        {
+            self.free(id, entry, task);
         }
     }
 }

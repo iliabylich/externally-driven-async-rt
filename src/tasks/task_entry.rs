@@ -42,34 +42,36 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
         has_task
     }
 
-    pub(crate) fn is_idle(&self) -> bool {
-        let slot = self.task.take();
-        let is_idle = matches!(slot, TaskSlot::Idle(_));
-        self.task.set(slot);
-        is_idle
-    }
-
     pub(crate) fn occupy(&self, task: Task) {
         self.task.set(TaskSlot::Idle(task));
         self.join_waiter.take();
     }
 
-    pub(crate) fn poll(&self, cx: &mut Context<'_>) -> Poll<()> {
+    pub(crate) fn poll(&self, cx: &mut Context<'_>) -> Option<Poll<Task>> {
         let mut task = match self.task.replace(TaskSlot::Polling) {
             TaskSlot::Idle(task) => task,
             TaskSlot::Polling => unreachable!("a task can't be polled re-entrantly"),
-            TaskSlot::Empty => unreachable!("an allocated task always has a future"),
+            TaskSlot::Empty => {
+                self.task.set(TaskSlot::Empty);
+                return None;
+            }
         };
-        let poll = task.poll(cx);
-        self.task.set(TaskSlot::Idle(task));
-        poll
+        if task.poll(cx).is_pending() {
+            self.task.set(TaskSlot::Idle(task));
+            return Some(Poll::Pending);
+        }
+        self.task.set(TaskSlot::Empty);
+        Some(Poll::Ready(task))
     }
 
-    pub(crate) fn drop_task(&self) {
-        let TaskSlot::Idle(task) = self.task.replace(TaskSlot::Empty) else {
-            unreachable!("only an idle task is dropped");
-        };
-        drop(task);
+    pub(crate) fn take_idle(&self) -> Option<Task> {
+        match self.task.take() {
+            TaskSlot::Idle(task) => Some(task),
+            slot => {
+                self.task.set(slot);
+                None
+            }
+        }
     }
 
     pub(crate) fn set_join_waiter(&self, waker: &Waker) {
