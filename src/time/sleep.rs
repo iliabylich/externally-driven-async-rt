@@ -102,11 +102,11 @@ mod tests {
     #[test]
     fn sleeps_complete_in_deadline_order() {
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = {
+        let (ctx, root): (TestContext<'_>, _) = {
             static STORAGE: TestStorage = TestStorage::new();
             STORAGE.claim(&selector).unwrap()
         };
-        ctx.storage.tasks.spawn_root(ctx.claimed, async move {
+        ctx.storage.tasks.spawn_root(root, ctx.claimed, async move {
             let handles = [30, 10, 20].map(|ms| {
                 ctx.spawn(async move |ctx| {
                     ctx.sleep(Duration::from_millis(ms)).await.unwrap();

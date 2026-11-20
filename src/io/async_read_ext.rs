@@ -145,7 +145,7 @@ mod tests {
         buf: &mut [u8],
     ) -> Poll<Result<(), ReadExactError<Errno>>> {
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = storage.claim(&selector).unwrap();
+        let ctx: TestContext<'_> = storage.claim(&selector).unwrap().0;
         let mut cx = Context::from_waker(Waker::noop());
         pin!(reader.read_exact(&ctx, buf)).poll(&mut cx)
     }

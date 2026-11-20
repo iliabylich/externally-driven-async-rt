@@ -5,7 +5,7 @@ use core::{
 };
 
 use crate::{
-    tasks::{Root, RootStatus, TaskId, Tasks},
+    tasks::{RootStatus, TaskId, Tasks},
     testing::{
         FixedFuture, FlagOnDrop, TasksStorage, spawn_reserved_static, spawn_root_static,
         spawn_static,
@@ -149,26 +149,13 @@ fn root_region_holds_a_root_bigger_than_a_slab_block() {
         data: [3; 9000],
         _flag: FlagOnDrop::new(&DROPPED),
     };
-    spawn_root_static(tasks, root);
-    let Root::Running(id) = tasks.root.get() else {
-        panic!("spawning the root makes it running");
-    };
-    let sibling = spawn_static(tasks, async {}).unwrap();
-    assert_ne!(sibling.idx, id.idx);
+    spawn_root_static(tasks, tasks.queue.claim().unwrap(), root);
+    let _ = spawn_static(tasks, async {}).unwrap();
     assert_eq!(tasks.run_ready(), RootStatus::Running);
-    assert!(contains(tasks, id));
+    assert!(tasks.root.has_task());
     assert!(!DROPPED.load(Relaxed));
     tasks.drop_all();
     assert!(DROPPED.load(Relaxed));
-}
-
-#[test]
-#[should_panic(expected = "the root is already spawned")]
-fn spawning_a_second_root_panics() {
-    static STORAGE: Storage<2> = Storage::new();
-    let tasks = &STORAGE.tasks;
-    spawn_root_static(tasks, core::future::pending::<()>());
-    spawn_root_static(tasks, core::future::pending::<()>());
 }
 
 fn counting(polls: &AtomicU32) -> impl Future<Output = ()> {
@@ -191,7 +178,7 @@ fn finished_task_is_removed() {
 fn a_stale_wake_of_a_freed_slot_polls_nothing() {
     static STORAGE: Storage<1> = Storage::new();
     let tasks = &STORAGE.tasks;
-    assert!(tasks.queue.claim());
+    assert!(tasks.queue.claim().is_some());
     let id = spawn_static(tasks, async {}).unwrap();
     let waker = waker(tasks, id);
     let _ = tasks.run_ready();
@@ -205,7 +192,7 @@ fn a_stale_wake_of_a_reserved_slot_is_skipped() {
     static STORAGE: Storage<1> = Storage::new();
     static POLLS: AtomicU32 = AtomicU32::new(0);
     let tasks = &STORAGE.tasks;
-    assert!(tasks.queue.claim());
+    assert!(tasks.queue.claim().is_some());
     let id = spawn_static(tasks, async {}).unwrap();
     let waker = waker(tasks, id);
     let _ = tasks.run_ready();
@@ -222,7 +209,7 @@ fn a_stale_wake_of_a_reused_slot_polls_its_new_task() {
     static STORAGE: Storage<1> = Storage::new();
     static POLLS: AtomicU32 = AtomicU32::new(0);
     let tasks = &STORAGE.tasks;
-    assert!(tasks.queue.claim());
+    assert!(tasks.queue.claim().is_some());
     let id = spawn_static(tasks, async {}).unwrap();
     let waker = waker(tasks, id);
     let _ = tasks.run_ready();
@@ -238,7 +225,7 @@ fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
     static STORAGE: Storage<1> = Storage::new();
     static POLLS: AtomicU32 = AtomicU32::new(0);
     let tasks = &STORAGE.tasks;
-    assert!(tasks.queue.claim());
+    assert!(tasks.queue.claim().is_some());
     let _ = spawn_static(
         tasks,
         poll_fn(|cx| {
@@ -273,7 +260,7 @@ fn join_waiter_is_woken_when_the_task_finishes() {
     static STORAGE: Storage<2> = Storage::new();
     static POLLS: AtomicU32 = AtomicU32::new(0);
     let tasks = &STORAGE.tasks;
-    assert!(tasks.queue.claim());
+    assert!(tasks.queue.claim().is_some());
     let waiter = spawn_static(tasks, counting(&POLLS)).unwrap();
     let task = spawn_static(tasks, async {}).unwrap();
     let _ = tasks.set_join_waiter(task, &waker(tasks, waiter));
@@ -283,14 +270,14 @@ fn join_waiter_is_woken_when_the_task_finishes() {
 
 #[test]
 fn root_finishing_stops_the_run() {
-    static STORAGE: Storage<2> = Storage::new();
+    static STORAGE: TasksStorage<2, TASK_SIZE, 64> = TasksStorage::new();
     static POLLS: AtomicU32 = AtomicU32::new(0);
     let tasks = &STORAGE.tasks;
-    let root = spawn_static(tasks, async {}).unwrap();
-    tasks.root.set(Root::Running(root));
+    spawn_root_static(tasks, tasks.queue.claim().unwrap(), async {});
     let _ = spawn_static(tasks, counting(&POLLS)).unwrap();
     assert_eq!(tasks.run_ready(), RootStatus::Finished);
     assert_eq!(POLLS.load(Relaxed), 0);
+    assert!(!tasks.root.has_task());
 }
 
 #[test]
@@ -298,7 +285,7 @@ fn releasing_a_slot_wakes_the_slot_waiter() {
     static STORAGE: Storage<2> = Storage::new();
     static POLLS: AtomicU32 = AtomicU32::new(0);
     let tasks = &STORAGE.tasks;
-    assert!(tasks.queue.claim());
+    assert!(tasks.queue.claim().is_some());
     let waiter = spawn_static(tasks, counting(&POLLS)).unwrap();
     let _ = tasks.run_ready();
     tasks.slot_waiter.store(&waker(tasks, waiter));
@@ -314,7 +301,7 @@ fn finishing_a_task_wakes_the_slot_waiter() {
     static STORAGE: Storage<2> = Storage::new();
     static POLLS: AtomicU32 = AtomicU32::new(0);
     let tasks = &STORAGE.tasks;
-    assert!(tasks.queue.claim());
+    assert!(tasks.queue.claim().is_some());
     let waiter = spawn_static(tasks, counting(&POLLS)).unwrap();
     let _ = tasks.run_ready();
     tasks.slot_waiter.store(&waker(tasks, waiter));

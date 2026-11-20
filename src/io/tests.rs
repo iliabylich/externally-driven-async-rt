@@ -164,7 +164,7 @@ fn dropping_a_pending_wait_deregisters() {
     let selector = Selector::new().unwrap();
     let ctx = {
         static STORAGE: IoStorage = IoStorage::new();
-        STORAGE.claim(&selector).unwrap()
+        STORAGE.claim(&selector).unwrap().0
     };
     let (rx, tx) = socketpair();
     let mut cx = core::task::Context::from_waker(Waker::noop());
@@ -185,7 +185,7 @@ fn wait_survives_a_spurious_poll() {
     let selector = Selector::new().unwrap();
     let ctx = {
         static STORAGE: IoStorage = IoStorage::new();
-        STORAGE.claim(&selector).unwrap()
+        STORAGE.claim(&selector).unwrap().0
     };
     let (rx, tx) = socketpair();
     let mut cx = core::task::Context::from_waker(Waker::noop());
@@ -206,7 +206,7 @@ fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
     let selector = Selector::new().unwrap();
     let ctx = {
         static STORAGE: IoStorage = IoStorage::new();
-        STORAGE.claim(&selector).unwrap()
+        STORAGE.claim(&selector).unwrap().0
     };
     let mut cx = core::task::Context::from_waker(Waker::noop());
     let (old_rx, _old_tx) = socketpair();
@@ -235,7 +235,7 @@ fn sequential_registrations_reuse_the_slot() {
     let selector = Selector::new().unwrap();
     let ctx = {
         static STORAGE: IoStorage = IoStorage::new();
-        STORAGE.claim(&selector).unwrap()
+        STORAGE.claim(&selector).unwrap().0
     };
     let (rx, tx) = socketpair();
     let mut cx = core::task::Context::from_waker(Waker::noop());

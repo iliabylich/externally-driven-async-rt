@@ -1,4 +1,5 @@
 mod link;
+mod woken;
 
 use core::{
     mem::offset_of,
@@ -7,7 +8,8 @@ use core::{
 };
 
 use self::link::Link;
-use crate::{conversions::u32_to_usize, sys::ThreadId};
+pub(crate) use self::woken::Woken;
+use crate::{conversions::u32_to_usize, sys::ThreadId, tasks::RootSlot};
 
 const NONE: u32 = u32::MAX;
 const UNCLAIMED: usize = 0;
@@ -16,12 +18,14 @@ fn decode(slot: u32) -> Option<u32> {
     (slot != NONE).then_some(slot)
 }
 
+#[repr(C)]
 #[must_use]
 pub(crate) struct WakeQueue<const N: usize> {
     owner: AtomicUsize,
     head: AtomicU32,
     tail: AtomicU32,
     links: [Link; N],
+    root: Link,
 }
 
 impl<const N: usize> WakeQueue<N> {
@@ -31,6 +35,11 @@ impl<const N: usize> WakeQueue<N> {
             assert!(
                 N < 0xFFFF_FFFF,
                 "wake queue capacity must be less than u32::MAX"
+            );
+            assert!(
+                offset_of!(Self, root)
+                    == offset_of!(Self, links).wrapping_add(size_of::<[Link; N]>()),
+                "the root link must directly follow the task links"
             );
         }
         let mut links = [const { Link::new(0) }; N];
@@ -46,14 +55,15 @@ impl<const N: usize> WakeQueue<N> {
             head: AtomicU32::new(NONE),
             tail: AtomicU32::new(NONE),
             links,
+            root: Link::new(slot),
         }
     }
 
-    #[must_use]
-    pub(crate) fn claim(&self) -> bool {
+    pub(crate) fn claim(&self) -> Option<RootSlot> {
         self.owner
             .compare_exchange(UNCLAIMED, ThreadId::current().to_raw(), Relaxed, Relaxed)
-            .is_ok()
+            .ok()
+            .map(|_| RootSlot::new())
     }
 
     pub(crate) fn waker(&'static self, slot: u32) -> Waker {
@@ -69,20 +79,36 @@ impl<const N: usize> WakeQueue<N> {
         unsafe { Waker::from_raw(RawWaker::new(link.cast(), vtable::<N>())) }
     }
 
-    fn link(&self, slot: u32) -> &Link {
+    pub(crate) fn root_waker(&'static self) -> Waker {
+        let link = core::ptr::from_ref(self)
+            .wrapping_byte_add(offset_of!(Self, root))
+            .cast::<Link>();
+        // SAFETY: the vtable functions below uphold the `RawWaker` contract for a pointer to the
+        // root link of a queue that is never freed, derived from a pointer to the whole queue.
+        unsafe { Waker::from_raw(RawWaker::new(link.cast(), vtable::<N>())) }
+    }
+
+    fn task_link(&self, slot: u32) -> &Link {
         let Some(link) = self.links.get(u32_to_usize(slot)) else {
             unreachable!("slot {slot} is out of bounds");
         };
         link
     }
 
-    pub(crate) fn push(&self, slot: u32) {
-        let link = self.link(slot);
+    fn link(&self, slot: u32) -> &Link {
+        if slot == self.root.slot() {
+            return &self.root;
+        }
+        self.task_link(slot)
+    }
+
+    fn enqueue(&self, link: &Link) {
         if link.is_queued() {
             return;
         }
         link.set_queued(true);
         link.set_next(NONE);
+        let slot = link.slot();
         match decode(self.tail.load(Relaxed)) {
             Some(tail) => self.link(tail).set_next(slot),
             None => self.head.store(slot, Relaxed),
@@ -90,7 +116,15 @@ impl<const N: usize> WakeQueue<N> {
         self.tail.store(slot, Relaxed);
     }
 
-    pub(crate) fn pop(&self) -> Option<u32> {
+    pub(crate) fn push(&self, slot: u32) {
+        self.enqueue(self.task_link(slot));
+    }
+
+    pub(crate) fn push_root(&self) {
+        self.enqueue(&self.root);
+    }
+
+    pub(crate) fn pop(&self) -> Option<Woken> {
         let slot = decode(self.head.load(Relaxed))?;
         let link = self.link(slot);
         let next = link.next();
@@ -100,7 +134,10 @@ impl<const N: usize> WakeQueue<N> {
         }
         link.set_queued(false);
         link.set_next(NONE);
-        Some(slot)
+        if slot == self.root.slot() {
+            return Some(Woken::Root);
+        }
+        Some(Woken::Task(slot))
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -115,7 +152,7 @@ impl<const N: usize> WakeQueue<N> {
     }
 
     #[cfg(test)]
-    fn iter(&self) -> impl Iterator<Item = u32> {
+    fn iter(&self) -> impl Iterator<Item = Woken> {
         core::iter::from_fn(|| self.pop())
     }
 }
@@ -130,9 +167,10 @@ fn clone<const N: usize>(ptr: *const ()) -> RawWaker {
 
 unsafe fn wake<const N: usize>(ptr: *const ()) {
     let link = ptr.cast::<Link>();
-    // SAFETY: `ptr` comes from `WakeQueue::waker`: it points to `links[slot]` of a queue that is
-    // never freed, and carries the provenance of the whole queue, so stepping back by `slot`
-    // links and by the offset of `links` lands on that queue.
+    // SAFETY: `ptr` comes from `WakeQueue::waker` or `WakeQueue::root_waker`: it points to
+    // `links[slot]`, or to `root` whose slot is `N` and which directly follows `links` (asserted
+    // in `new`), of a queue that is never freed, and carries the provenance of the whole queue,
+    // so stepping back by `slot` links and by the offset of `links` lands on that queue.
     let (slot, queue) = unsafe {
         let slot = (*link).slot();
         let queue = link
@@ -146,14 +184,17 @@ unsafe fn wake<const N: usize>(ptr: *const ()) {
         ThreadId::current().to_raw(),
         "a Waker must only be woken on the thread of its EventLoop"
     );
-    queue.push(slot);
+    queue.enqueue(queue.link(slot));
 }
 
 const fn drop_waker(_: *const ()) {}
 
 #[cfg(test)]
 mod tests {
-    use crate::{tasks::WakeQueue, testing::assert_yields};
+    use crate::{
+        tasks::{WakeQueue, Woken},
+        testing::assert_yields,
+    };
 
     #[test]
     fn pops_in_push_order() {
@@ -162,7 +203,10 @@ mod tests {
             queue.push(slot);
         }
         assert!(!queue.is_empty());
-        assert_yields!(queue.iter(), [2, 0, 3]);
+        assert_yields!(
+            queue.iter(),
+            [Woken::Task(2), Woken::Task(0), Woken::Task(3)]
+        );
         assert!(queue.is_empty());
     }
 
@@ -172,9 +216,9 @@ mod tests {
         queue.push(0);
         queue.push(1);
         queue.push(0);
-        assert_yields!(queue.iter(), [0, 1]);
+        assert_yields!(queue.iter(), [Woken::Task(0), Woken::Task(1)]);
         queue.push(0);
-        assert_yields!(queue.iter(), [0]);
+        assert_yields!(queue.iter(), [Woken::Task(0)]);
     }
 
     #[test]
@@ -182,51 +226,51 @@ mod tests {
         let queue = WakeQueue::<2>::new();
         queue.push(0);
         queue.push(1);
-        assert_eq!(queue.pop(), Some(0));
+        assert_eq!(queue.pop(), Some(Woken::Task(0)));
         queue.push(0);
-        assert_yields!(queue.iter(), [1, 0]);
+        assert_yields!(queue.iter(), [Woken::Task(1), Woken::Task(0)]);
     }
 
     #[test]
     fn waking_pushes_the_slot() {
         static QUEUE: WakeQueue<2> = WakeQueue::new();
-        assert!(QUEUE.claim());
+        assert!(QUEUE.claim().is_some());
         let waker = QUEUE.waker(1);
         waker.wake_by_ref();
-        assert_yields!(QUEUE.iter(), [1]);
+        assert_yields!(QUEUE.iter(), [Woken::Task(1)]);
         let clone = waker.clone();
         drop(waker);
         clone.wake();
-        assert_yields!(QUEUE.iter(), [1]);
+        assert_yields!(QUEUE.iter(), [Woken::Task(1)]);
     }
 
     #[test]
     fn duplicate_wakes_queue_the_slot_once() {
         static QUEUE: WakeQueue<2> = WakeQueue::new();
-        assert!(QUEUE.claim());
+        assert!(QUEUE.claim().is_some());
         let waker = QUEUE.waker(0);
         waker.wake_by_ref();
         waker.wake_by_ref();
         waker.wake();
-        assert_yields!(QUEUE.iter(), [0]);
+        assert_yields!(QUEUE.iter(), [Woken::Task(0)]);
     }
 
     #[test]
     fn waking_after_the_queue_was_mutated() {
         static QUEUE: WakeQueue<2> = WakeQueue::new();
-        assert!(QUEUE.claim());
+        assert!(QUEUE.claim().is_some());
         let waker = QUEUE.waker(0);
         QUEUE.push(1);
         waker.wake_by_ref();
-        assert_eq!(QUEUE.pop(), Some(1));
+        assert_eq!(QUEUE.pop(), Some(Woken::Task(1)));
         waker.wake();
-        assert_yields!(QUEUE.iter(), [0]);
+        assert_yields!(QUEUE.iter(), [Woken::Task(0)]);
     }
 
     #[test]
     fn dropping_does_not_wake() {
         static QUEUE: WakeQueue<2> = WakeQueue::new();
-        assert!(QUEUE.claim());
+        assert!(QUEUE.claim().is_some());
         let waker = QUEUE.waker(0);
         drop(waker.clone());
         drop(waker);
@@ -236,7 +280,21 @@ mod tests {
     #[test]
     fn claiming_twice_fails() {
         let queue = WakeQueue::<1>::new();
-        assert!(queue.claim());
-        assert!(!queue.claim());
+        assert!(queue.claim().is_some());
+        assert!(queue.claim().is_none());
+    }
+
+    #[test]
+    fn waking_the_root_queues_it_in_order() {
+        static QUEUE: WakeQueue<2> = WakeQueue::new();
+        assert!(QUEUE.claim().is_some());
+        let root = QUEUE.root_waker();
+        QUEUE.push(1);
+        root.wake_by_ref();
+        QUEUE.push(0);
+        let clone = root.clone();
+        drop(root);
+        clone.wake();
+        assert_yields!(QUEUE.iter(), [Woken::Task(1), Woken::Root, Woken::Task(0)]);
     }
 }

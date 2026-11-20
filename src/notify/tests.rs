@@ -74,11 +74,11 @@ fn notifications_coalesce() {
 #[test]
 fn notification_without_a_waiter_is_kept() {
     let selector = Selector::new().unwrap();
-    let ctx: TestContext<'_> = {
+    let (ctx, root): (TestContext<'_>, _) = {
         static STORAGE: TestStorage = TestStorage::new();
         STORAGE.claim(&selector).unwrap()
     };
-    ctx.storage.tasks.spawn_root(ctx.claimed, async move {
+    ctx.storage.tasks.spawn_root(root, ctx.claimed, async move {
         ctx.sleep(Duration::from_millis(1)).await.unwrap();
         ctx.dispatch(1).unwrap();
         ctx.notified().await;

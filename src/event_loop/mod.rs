@@ -4,12 +4,7 @@ use rustix::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
 pub use self::error::Error;
 
-use crate::{
-    context::Context,
-    selector::Selector,
-    storage::LoopStorage,
-    tasks::{Root, RootStatus},
-};
+use crate::{context::Context, selector::Selector, storage::LoopStorage, tasks::RootStatus};
 
 /// The main type, an event loop.
 #[must_use]
@@ -58,9 +53,9 @@ impl<
         F: FnOnce(Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
-        let ctx = storage.claim(selector).ok_or(Error::StorageAlreadyUsed)?;
+        let (ctx, root) = storage.claim(selector).ok_or(Error::StorageAlreadyUsed)?;
         let event_loop = Self { ctx };
-        ctx.storage.tasks.spawn_root(ctx.claimed, f(ctx));
+        ctx.storage.tasks.spawn_root(root, ctx.claimed, f(ctx));
         match ctx.storage.tasks.run_ready() {
             RootStatus::Running => {}
             RootStatus::Finished => return Err(Error::RootFinished),
@@ -81,7 +76,7 @@ impl<
     /// 2. root future completed
     pub fn drain_events_without_blocking(&mut self) -> Result<(), Error> {
         let ctx = self.ctx;
-        if matches!(ctx.storage.tasks.root.get(), Root::Finished) {
+        if !ctx.storage.tasks.root.has_task() {
             return Err(Error::RootFinished);
         }
         loop {

@@ -79,19 +79,16 @@ mod tests {
         task::{Context, Poll, Waker},
     };
 
-    use crate::{
-        tasks::Task,
-        testing::{FlagOnDrop, TasksStorage, claimed_forever},
-    };
+    use crate::testing::{FlagOnDrop, TasksStorage, claimed_forever};
 
     type Storage = TasksStorage<1, 0, 64>;
 
     #[test]
     fn polls_in_place_while_the_owner_moves() {
         static STORAGE: Storage = Storage::new();
+        let root = &STORAGE.tasks.root;
         let mut polled_once = false;
-        let mut task = Task::write(
-            &STORAGE.tasks.root_region,
+        root.write(
             claimed_forever(),
             core::future::poll_fn(move |_| {
                 if polled_once {
@@ -102,6 +99,7 @@ mod tests {
                 }
             }),
         );
+        let mut task = root.take_idle().unwrap();
         let mut cx = Context::from_waker(Waker::noop());
         assert_eq!(task.poll(&mut cx), Poll::Pending);
         let mut moved = [task];
@@ -112,29 +110,28 @@ mod tests {
     fn dropping_drops_the_future_in_place() {
         static STORAGE: Storage = Storage::new();
         static DROPPED: AtomicBool = AtomicBool::new(false);
-        let task = Task::write(
-            &STORAGE.tasks.root_region,
-            claimed_forever(),
-            FlagOnDrop::new(&DROPPED),
-        );
-        drop(task);
+        let root = &STORAGE.tasks.root;
+        root.write(claimed_forever(), FlagOnDrop::new(&DROPPED));
+        drop(root.take_idle().unwrap());
         assert!(DROPPED.load(Relaxed));
     }
 
     #[test]
     fn dropping_frees_the_memory_for_the_next_write() {
         static STORAGE: Storage = Storage::new();
-        let memory = &STORAGE.tasks.root_region;
-        drop(Task::write(memory, claimed_forever(), async {}));
-        drop(Task::write(memory, claimed_forever(), async {}));
+        let root = &STORAGE.tasks.root;
+        root.write(claimed_forever(), async {});
+        drop(root.take_idle().unwrap());
+        root.write(claimed_forever(), async {});
+        drop(root.take_idle().unwrap());
     }
 
     #[test]
     #[should_panic(expected = "the task memory is already occupied")]
     fn writing_into_occupied_memory_panics() {
         static STORAGE: Storage = Storage::new();
-        let memory = &STORAGE.tasks.root_region;
-        let _first = Task::write(memory, claimed_forever(), async {});
-        let _second = Task::write(memory, claimed_forever(), async {});
+        let root = &STORAGE.tasks.root;
+        root.write(claimed_forever(), async {});
+        root.write(claimed_forever(), async {});
     }
 }

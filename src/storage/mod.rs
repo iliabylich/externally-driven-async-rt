@@ -1,6 +1,12 @@
 use crate::{
-    claimed::Claimed, context::Context, event_queue::EventQueue, io::IoWaiters,
-    notify::Notification, selector::Selector, tasks::Tasks, time::Timers,
+    claimed::Claimed,
+    context::Context,
+    event_queue::EventQueue,
+    io::IoWaiters,
+    notify::Notification,
+    selector::Selector,
+    tasks::{RootSlot, Tasks},
+    time::Timers,
 };
 
 /// The main pre-allocated storage that [`EventLoop`](crate::EventLoop) needs.
@@ -65,11 +71,12 @@ impl<
     pub(crate) fn claim<'a>(
         &'static self,
         selector: &'a Selector,
-    ) -> Option<Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>> {
-        if !self.tasks.queue.claim() {
-            return None;
-        }
-        Some(Context {
+    ) -> Option<(
+        Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        RootSlot,
+    )> {
+        let root = self.tasks.queue.claim()?;
+        let ctx = Context {
             storage: self,
             selector,
             // SAFETY: claiming the queue above fails unless this is the storage's first claim, so
@@ -77,7 +84,8 @@ impl<
             // polls and drops them, and it drops them all before `'a` ends or, if leaked, never
             // touches them again.
             claimed: unsafe { Claimed::new() },
-        })
+        };
+        Some((ctx, root))
     }
 }
 

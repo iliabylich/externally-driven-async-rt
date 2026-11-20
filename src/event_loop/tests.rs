@@ -445,6 +445,7 @@ fn spawning_into_a_full_pool_fails_without_calling_the_closure() {
         },
         &mut selector,
         async |ctx| {
+            let _running = ctx.spawn(async |_| pending().await).unwrap();
             let spawned = ctx.spawn(|_| {
                 CALLED.store(true, Relaxed);
                 async {}

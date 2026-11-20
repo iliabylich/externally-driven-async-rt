@@ -1,6 +1,6 @@
 mod join_handle;
 mod reserve_task;
-mod root;
+mod root_slot;
 mod root_status;
 mod slot_waiter_taken_error;
 mod task;
@@ -11,10 +11,7 @@ mod task_slot;
 mod tasks_full_error;
 mod wake_queue;
 
-use core::{
-    cell::Cell,
-    task::{Poll, Waker},
-};
+use core::task::{Poll, Waker};
 
 pub use self::{
     join_handle::JoinHandle, reserve_task::ReserveTask,
@@ -22,11 +19,11 @@ pub use self::{
     tasks_full_error::TasksFullError,
 };
 pub(crate) use self::{
-    root::Root,
+    root_slot::RootSlot,
     root_status::RootStatus,
     task::Task,
     task_entry::{TaskEntry, TaskId},
-    wake_queue::WakeQueue,
+    wake_queue::{WakeQueue, Woken},
 };
 use self::{task_memory::TaskMemory, task_slot::TaskSlot};
 use crate::{claimed::Claimed, pool::ObjectPool, waker_slot::WakerSlot};
@@ -35,8 +32,7 @@ use crate::{claimed::Claimed, pool::ObjectPool, waker_slot::WakerSlot};
 pub(crate) struct Tasks<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> {
     pub(crate) pool: ObjectPool<TaskEntry<TASK_SIZE>, TASKS>,
     pub(crate) queue: WakeQueue<TASKS>,
-    pub(crate) root_region: TaskMemory<ROOT_TASK_SIZE>,
-    pub(crate) root: Cell<Root<TASK_SIZE>>,
+    pub(crate) root: TaskEntry<ROOT_TASK_SIZE>,
     pub(crate) slot_waiter: WakerSlot,
 }
 
@@ -47,8 +43,7 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         Self {
             pool: ObjectPool::new([const { TaskEntry::new() }; TASKS]),
             queue: WakeQueue::new(),
-            root_region: TaskMemory::new(),
-            root: Cell::new(Root::Unset),
+            root: TaskEntry::new(),
             slot_waiter: WakerSlot::new(),
         }
     }
@@ -83,20 +78,12 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         Ok(id)
     }
 
-    pub(crate) fn spawn_root<'a, Fut>(&'static self, claimed: Claimed<'a>, future: Fut)
+    pub(crate) fn spawn_root<'a, Fut>(&'static self, _: RootSlot, claimed: Claimed<'a>, future: Fut)
     where
         Fut: Future<Output = ()> + 'a,
     {
-        if !matches!(self.root.get(), Root::Unset) {
-            unreachable!("the root is already spawned");
-        }
-        let Some((id, entry)) = self.pool.alloc() else {
-            unreachable!("the root is the first task, the pool has room for it");
-        };
-        let task = Task::write(&self.root_region, claimed, future);
-        entry.occupy(task);
-        self.queue.push(id.idx);
-        self.root.set(Root::Running(id));
+        self.root.write(claimed, future);
+        self.queue.push_root();
     }
 
     pub(crate) fn spawn_reserved<'a, Fut>(
@@ -131,28 +118,44 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
 
     pub(crate) fn run_ready(&'static self) -> RootStatus {
         loop {
-            let Some(slot) = self.queue.pop() else {
-                return RootStatus::Running;
-            };
-            let (id, entry) = self.pool.get(slot);
-            let waker = self.queue.waker(slot);
-            let mut cx = core::task::Context::from_waker(&waker);
-            let Some(Poll::Ready(task)) = entry.poll(&mut cx) else {
-                continue;
-            };
-            if let Some(join_waiter) = self.free(id, entry, task) {
-                join_waiter.wake();
-            }
-            if let Root::Running(root) = self.root.get()
-                && id == root
-            {
-                self.root.set(Root::Finished);
-                return RootStatus::Finished;
+            match self.queue.pop() {
+                None => return RootStatus::Running,
+                Some(Woken::Root) => {
+                    if self.run_root() == RootStatus::Finished {
+                        return RootStatus::Finished;
+                    }
+                }
+                Some(Woken::Task(slot)) => self.run_task(slot),
             }
         }
     }
 
+    fn run_root(&'static self) -> RootStatus {
+        let waker = self.queue.root_waker();
+        let mut cx = core::task::Context::from_waker(&waker);
+        let Some(Poll::Ready(task)) = self.root.poll(&mut cx) else {
+            return RootStatus::Running;
+        };
+        drop(task);
+        RootStatus::Finished
+    }
+
+    fn run_task(&'static self, slot: u32) {
+        let (id, entry) = self.pool.get(slot);
+        let waker = self.queue.waker(slot);
+        let mut cx = core::task::Context::from_waker(&waker);
+        let Some(Poll::Ready(task)) = entry.poll(&mut cx) else {
+            return;
+        };
+        if let Some(join_waiter) = self.free(id, entry, task) {
+            join_waiter.wake();
+        }
+    }
+
     pub(crate) fn drop_all(&self) {
+        if let Some(task) = self.root.take_idle() {
+            drop(task);
+        }
         while let Some((id, entry, task)) = self
             .pool
             .iter()

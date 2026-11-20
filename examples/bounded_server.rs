@@ -24,7 +24,7 @@ const MAX_REQUEST_LEN: usize = 64;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 const EVENTS: usize = 256;
-const TASKS: usize = MAX_CLIENTS + 2;
+const TASKS: usize = MAX_CLIENTS + 1;
 const TASK_SIZE: usize = 2048;
 const ROOT_TASK_SIZE: usize = 1024;
 const TIMERS: usize = MAX_CLIENTS + 2;

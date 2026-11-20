@@ -158,7 +158,7 @@ mod tests {
     fn reads_consecutive_frames_from_partial_reads() {
         static STORAGE: TestStorage = TestStorage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap();
+        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
         let mut reader = FrameReader::<_, 5>::new(Chunks {
             chunks: &[b"hel", b"lo", b"wor", b"ld"],
             end: None,
@@ -178,7 +178,7 @@ mod tests {
     fn resumes_a_cancelled_read() {
         static STORAGE: TestStorage = TestStorage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap();
+        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
         let mut reader = FrameReader::<_, 5>::new(Chunks {
             chunks: &[b"he", b"l"],
             end: None,
@@ -197,7 +197,7 @@ mod tests {
     fn returns_none_when_the_stream_ends_between_frames() {
         static STORAGE: TestStorage = TestStorage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap();
+        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
         let mut reader = FrameReader::<_, 5>::new(Chunks {
             chunks: &[b"hello"],
             end: Some(Ok(0)),
@@ -214,7 +214,7 @@ mod tests {
     fn fails_when_the_stream_ends_in_the_middle_of_a_frame() {
         static STORAGE: TestStorage = TestStorage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap();
+        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
         let mut reader = FrameReader::<_, 5>::new(Chunks {
             chunks: &[b"hel"],
             end: Some(Ok(0)),
@@ -230,7 +230,7 @@ mod tests {
     fn returns_syscall_errors() {
         static STORAGE: TestStorage = TestStorage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap();
+        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
         let mut reader = FrameReader::<_, 5>::new(Chunks {
             chunks: &[],
             end: Some(Err(Errno::CONNRESET)),

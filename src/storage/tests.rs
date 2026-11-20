@@ -10,7 +10,7 @@ fn clearing_drops_live_wakers() {
     let selector = Selector::new().unwrap();
     let ctx = {
         static STORAGE: SmallStorage = SmallStorage::new();
-        STORAGE.claim(&selector).unwrap()
+        STORAGE.claim(&selector).unwrap().0
     };
     let timer_waker = counting_waker(&drops);
     let _ = ctx.storage.timers.alloc(Instant::now(), &timer_waker);

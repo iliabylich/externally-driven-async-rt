@@ -17,11 +17,11 @@ use crate::{
 #[test]
 fn future_finishing_first_wins() {
     let selector = Selector::new().unwrap();
-    let ctx: TestContext<'_> = {
+    let (ctx, root): (TestContext<'_>, _) = {
         static STORAGE: TestStorage = TestStorage::new();
         STORAGE.claim(&selector).unwrap()
     };
-    ctx.storage.tasks.spawn_root(ctx.claimed, async move {
+    ctx.storage.tasks.spawn_root(root, ctx.claimed, async move {
         let result = ctx
             .timeout(Duration::from_secs(60), ctx.notified())
             .await
@@ -42,11 +42,11 @@ fn future_finishing_first_wins() {
 fn elapsing_drops_the_future() {
     static DROPPED: AtomicBool = AtomicBool::new(false);
     let selector = Selector::new().unwrap();
-    let ctx: TestContext<'_> = {
+    let (ctx, root): (TestContext<'_>, _) = {
         static STORAGE: TestStorage = TestStorage::new();
         STORAGE.claim(&selector).unwrap()
     };
-    ctx.storage.tasks.spawn_root(ctx.claimed, async move {
+    ctx.storage.tasks.spawn_root(root, ctx.claimed, async move {
         let result = ctx
             .timeout(Duration::from_millis(1), async {
                 let _flag = FlagOnDrop::new(&DROPPED);
@@ -72,7 +72,7 @@ fn elapsing_drops_the_future() {
 fn ready_future_beats_a_zero_timeout() {
     static STORAGE: TestStorage = TestStorage::new();
     let selector = Selector::new().unwrap();
-    let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap();
+    let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
     let mut cx = Context::from_waker(Waker::noop());
     let mut timeout = pin!(ctx.timeout(Duration::ZERO, async {
         let value = 1;
@@ -88,7 +88,7 @@ fn ready_future_beats_a_zero_timeout() {
 fn pending_pinned_future_keeps_its_timer_until_dropped() {
     static STORAGE: TestStorage = TestStorage::new();
     let selector = Selector::new().unwrap();
-    let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap();
+    let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
     let mut cx = Context::from_waker(Waker::noop());
     {
         let mut timeout = pin!(ctx.timeout(Duration::from_secs(60), async {

@@ -42,7 +42,7 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
         has_task
     }
 
-    pub(crate) fn occupy(&self, task: Task) {
+    fn occupy(&self, task: Task) {
         self.task.set(TaskSlot::Idle(task));
         self.join_waiter.take();
     }
