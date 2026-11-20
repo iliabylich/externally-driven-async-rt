@@ -28,18 +28,13 @@ impl DummySelector {
         unreachable!("no selector under Miri")
     }
 
-    pub(crate) fn arm_timer(&self, _: Instant) {
-        unreachable!("no selector under Miri")
-    }
-
-    pub(crate) fn disarm_timer(&self) {}
-
     pub(crate) fn flush(
         &self,
         io_changes: impl IntoIterator<Item = IoChange>,
+        deadline: Option<Instant>,
     ) -> rustix::io::Result<()> {
         assert!(
-            io_changes.into_iter().next().is_none(),
+            io_changes.into_iter().next().is_none() && deadline.is_none(),
             "no selector under Miri"
         );
         Ok(())

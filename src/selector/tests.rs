@@ -85,7 +85,7 @@ fn drain_receive_buffer(fd: &OwnedFd) {
 fn nothing_armed_produces_no_events() {
     let selector = Selector::new().unwrap();
     let (_rx, tx) = socketpair();
-    selector.flush([]).unwrap();
+    selector.flush([], None).unwrap();
     rustix::io::write(&tx, b"x").unwrap();
     assert!(!selector.as_fd().is_readable_now());
     assert_yields!(events(&selector), []);
@@ -96,7 +96,9 @@ fn nothing_armed_produces_no_events() {
 fn armed_write_is_reported_with_its_token() {
     let selector = Selector::new().unwrap();
     let (a, _b) = socketpair();
-    selector.flush([arm(1, &a, Direction::Write)]).unwrap();
+    selector
+        .flush([arm(1, &a, Direction::Write)], None)
+        .unwrap();
     assert_yields!(events(&selector), [ready(1, Direction::Write)]);
 }
 
@@ -105,7 +107,9 @@ fn armed_write_is_reported_with_its_token() {
 fn read_interest_is_one_shot() {
     let selector = Selector::new().unwrap();
     let (rx, tx) = socketpair();
-    selector.flush([arm(2, &rx, Direction::Read)]).unwrap();
+    selector
+        .flush([arm(2, &rx, Direction::Read)], None)
+        .unwrap();
 
     rustix::io::write(&tx, b"hello").unwrap();
     assert_yields!(events(&selector), [ready(2, Direction::Read)]);
@@ -113,7 +117,9 @@ fn read_interest_is_one_shot() {
     assert!(!selector.as_fd().is_readable_now());
     assert_yields!(events(&selector), []);
 
-    selector.flush([arm(2, &rx, Direction::Read)]).unwrap();
+    selector
+        .flush([arm(2, &rx, Direction::Read)], None)
+        .unwrap();
     assert_yields!(events(&selector), [ready(2, Direction::Read)]);
 }
 
@@ -123,7 +129,9 @@ fn data_that_arrived_before_arming_is_reported() {
     let selector = Selector::new().unwrap();
     let (rx, tx) = socketpair();
     rustix::io::write(&tx, b"early").unwrap();
-    selector.flush([arm(3, &rx, Direction::Read)]).unwrap();
+    selector
+        .flush([arm(3, &rx, Direction::Read)], None)
+        .unwrap();
     assert_yields!(events(&selector), [ready(3, Direction::Read)]);
 }
 
@@ -132,8 +140,10 @@ fn data_that_arrived_before_arming_is_reported() {
 fn disarming_prevents_events() {
     let selector = Selector::new().unwrap();
     let (rx, tx) = socketpair();
-    selector.flush([arm(4, &rx, Direction::Read)]).unwrap();
-    selector.flush([disarm(4, &rx)]).unwrap();
+    selector
+        .flush([arm(4, &rx, Direction::Read)], None)
+        .unwrap();
+    selector.flush([disarm(4, &rx)], None).unwrap();
     rustix::io::write(&tx, b"x").unwrap();
     assert!(!selector.as_fd().is_readable_now());
 }
@@ -143,7 +153,9 @@ fn disarming_prevents_events() {
 fn apply_now_deletes_an_armed_filter_without_flush() {
     let selector = Selector::new().unwrap();
     let (rx, tx) = socketpair();
-    selector.flush([arm(5, &rx, Direction::Read)]).unwrap();
+    selector
+        .flush([arm(5, &rx, Direction::Read)], None)
+        .unwrap();
     selector.apply_now(disarm(5, &rx)).unwrap();
     rustix::io::write(&tx, b"x").unwrap();
     assert!(!selector.as_fd().is_readable_now());
@@ -154,7 +166,9 @@ fn apply_now_deletes_an_armed_filter_without_flush() {
 fn deleted_then_closed_fd_produces_no_events() {
     let selector = Selector::new().unwrap();
     let (rx, tx) = socketpair();
-    selector.flush([arm(6, &rx, Direction::Read)]).unwrap();
+    selector
+        .flush([arm(6, &rx, Direction::Read)], None)
+        .unwrap();
     selector.apply_now(disarm(6, &rx)).unwrap();
     drop(rx);
     rustix::io::write(&tx, b"x").ok();
@@ -166,7 +180,9 @@ fn deleted_then_closed_fd_produces_no_events() {
 fn disarming_a_filter_that_already_fired_is_ok() {
     let selector = Selector::new().unwrap();
     let (a, _b) = socketpair();
-    selector.flush([arm(7, &a, Direction::Write)]).unwrap();
+    selector
+        .flush([arm(7, &a, Direction::Write)], None)
+        .unwrap();
     assert_yields!(events(&selector), [ready(7, Direction::Write)]);
     selector.apply_now(disarm(7, &a)).unwrap();
 }
@@ -176,12 +192,16 @@ fn disarming_a_filter_that_already_fired_is_ok() {
 fn reused_fd_number_reports_the_new_token() {
     let selector = Selector::new().unwrap();
     let (a, _b) = socketpair();
-    selector.flush([arm(8, &a, Direction::Write)]).unwrap();
+    selector
+        .flush([arm(8, &a, Direction::Write)], None)
+        .unwrap();
     selector.apply_now(disarm(8, &a)).unwrap();
     drop(a);
 
     let (c, _d) = socketpair();
-    selector.flush([arm(9, &c, Direction::Write)]).unwrap();
+    selector
+        .flush([arm(9, &c, Direction::Write)], None)
+        .unwrap();
     assert_yields!(events(&selector), [ready(9, Direction::Write)]);
 }
 
@@ -191,7 +211,7 @@ fn read_and_write_on_one_fd_are_both_reported() {
     let selector = Selector::new().unwrap();
     let (a, b) = socketpair();
     rustix::io::write(&b, b"x").unwrap();
-    selector.flush([arm_both(10, &a)]).unwrap();
+    selector.flush([arm_both(10, &a)], None).unwrap();
     assert_eq!(ready_directions(&selector, 10), Directions::Both);
 }
 
@@ -201,8 +221,10 @@ fn arming_one_direction_keeps_the_other() {
     let selector = Selector::new().unwrap();
     let (a, b) = socketpair();
     fill_send_buffer(&a);
-    selector.flush([arm(11, &a, Direction::Read)]).unwrap();
-    selector.flush([arm_both(11, &a)]).unwrap();
+    selector
+        .flush([arm(11, &a, Direction::Read)], None)
+        .unwrap();
+    selector.flush([arm_both(11, &a)], None).unwrap();
     assert!(!selector.as_fd().is_readable_now());
 
     rustix::io::write(&b, b"x").unwrap();
@@ -215,7 +237,7 @@ fn releasing_one_direction_keeps_the_other() {
     let selector = Selector::new().unwrap();
     let (a, b) = socketpair();
     fill_send_buffer(&a);
-    selector.flush([arm_both(12, &a)]).unwrap();
+    selector.flush([arm_both(12, &a)], None).unwrap();
     assert!(!selector.as_fd().is_readable_now());
 
     selector.apply_now(arm(12, &a, Direction::Write)).unwrap();
@@ -239,11 +261,15 @@ fn changes_and_events_beyond_one_batch_are_all_delivered() {
             .map(|(i, fd)| arm(i, fd, Direction::Write))
     };
 
-    selector.flush(arm_first(4)).unwrap();
+    selector.flush(arm_first(4), None).unwrap();
     assert_eq!(events(&selector).count(), 4);
 
-    selector.arm_timer(Instant::now() + Duration::from_secs(10));
-    selector.flush(arm_first(fds.len())).unwrap();
+    selector
+        .flush(
+            arm_first(fds.len()),
+            Some(Instant::now() + Duration::from_secs(10)),
+        )
+        .unwrap();
     assert_eq!(events(&selector).count(), fds.len());
 }
 
@@ -252,8 +278,9 @@ fn changes_and_events_beyond_one_batch_are_all_delivered() {
 fn timer_fires_after_flush() {
     let selector = Selector::new().unwrap();
     let start = Instant::now();
-    selector.arm_timer(start + Duration::from_millis(20));
-    selector.flush([]).unwrap();
+    selector
+        .flush([], Some(start + Duration::from_millis(20)))
+        .unwrap();
     assert!(selector.as_fd().wait_readable_blocking(500));
     assert!(Instant::now().saturating_duration_since(start) >= Duration::from_millis(20));
     assert_yields!(events(&selector), [SelectorEvent::Timer]);
@@ -262,35 +289,12 @@ fn timer_fires_after_flush() {
 
 #[test]
 #[cfg_attr(miri, ignore)]
-fn timer_is_not_armed_without_flush() {
-    let selector = Selector::new().unwrap();
-    selector.arm_timer(Instant::now() + Duration::from_millis(1));
-    assert!(!selector.as_fd().wait_readable_blocking(50));
-}
-
-#[test]
-#[cfg_attr(miri, ignore)]
-fn last_timer_change_before_flush_wins() {
-    let selector = Selector::new().unwrap();
-    selector.arm_timer(Instant::now() + Duration::from_millis(1));
-    selector.arm_timer(Instant::now() + Duration::from_secs(10));
-    selector.flush([]).unwrap();
-    assert!(!selector.as_fd().wait_readable_blocking(50));
-
-    selector.arm_timer(Instant::now() + Duration::from_millis(10));
-    selector.flush([]).unwrap();
-    assert!(selector.as_fd().wait_readable_blocking(500));
-    assert_yields!(events(&selector), [SelectorEvent::Timer]);
-}
-
-#[test]
-#[cfg_attr(miri, ignore)]
 fn disarm_prevents_firing() {
     let selector = Selector::new().unwrap();
-    selector.arm_timer(Instant::now() + Duration::from_millis(10));
-    selector.flush([]).unwrap();
-    selector.disarm_timer();
-    selector.flush([]).unwrap();
+    selector
+        .flush([], Some(Instant::now() + Duration::from_millis(10)))
+        .unwrap();
+    selector.flush([], None).unwrap();
     assert!(!selector.as_fd().wait_readable_blocking(50));
     assert_yields!(events(&selector), []);
 }
@@ -299,11 +303,9 @@ fn disarm_prevents_firing() {
 #[cfg_attr(miri, ignore)]
 fn disarm_after_timer_fired_is_ok() {
     let selector = Selector::new().unwrap();
-    selector.arm_timer(Instant::now() + Duration::ZERO);
-    selector.flush([]).unwrap();
+    selector.flush([], Some(Instant::now())).unwrap();
     assert!(selector.as_fd().wait_readable_blocking(500));
-    selector.disarm_timer();
-    selector.flush([]).unwrap();
+    selector.flush([], None).unwrap();
     assert_yields!(events(&selector), []);
 }
 
@@ -311,6 +313,5 @@ fn disarm_after_timer_fired_is_ok() {
 #[cfg_attr(miri, ignore)]
 fn disarm_when_never_armed_is_ok() {
     let selector = Selector::new().unwrap();
-    selector.disarm_timer();
-    selector.flush([]).unwrap();
+    selector.flush([], None).unwrap();
 }

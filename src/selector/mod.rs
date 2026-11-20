@@ -52,14 +52,6 @@ impl Selector {
         self.backend.apply_now(change)
     }
 
-    pub(crate) fn arm_timer(&self, deadline: Instant) {
-        self.backend.arm_timer(deadline);
-    }
-
-    pub(crate) fn disarm_timer(&self) {
-        self.backend.disarm_timer();
-    }
-
     pub(crate) fn notify(&self) -> rustix::io::Result<()> {
         self.backend.notify()
     }
@@ -67,8 +59,9 @@ impl Selector {
     pub(crate) fn flush(
         &self,
         io_changes: impl IntoIterator<Item = IoChange>,
+        deadline: Option<Instant>,
     ) -> rustix::io::Result<()> {
-        self.backend.flush(io_changes)
+        self.backend.flush(io_changes, deadline)
     }
 
     pub(crate) fn poll_nonblocking(

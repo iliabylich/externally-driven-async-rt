@@ -84,22 +84,15 @@ impl EpollSelector {
         self.apply_io(change)
     }
 
-    pub(crate) fn arm_timer(&self, deadline: Instant) {
-        self.timer.update(|timer| timer.arm_in_memory(deadline));
-    }
-
-    pub(crate) fn disarm_timer(&self) {
-        self.timer.update(KernelTimer::disarm_in_memory);
-    }
-
     pub(crate) fn flush(
         &self,
         io_changes: impl IntoIterator<Item = IoChange>,
+        deadline: Option<Instant>,
     ) -> rustix::io::Result<()> {
         for change in io_changes {
             self.apply_io(change)?;
         }
-        let (timer, timer_change) = self.timer.get().flush(Instant::now());
+        let (timer, timer_change) = self.timer.get().flush(deadline, Instant::now());
         self.timer.set(timer);
         match timer_change {
             Some(change) => self.apply_timer(change),
@@ -163,7 +156,7 @@ impl EpollSelector {
         syscall_end!(result; &expirations[..result.unwrap_or(0)], expirations.len());
         match result {
             Ok(_) => {
-                self.timer.update(KernelTimer::fired);
+                self.timer.set(KernelTimer::Disarmed);
                 Ok(Some(SelectorEvent::Timer))
             }
             Err(Errno::AGAIN) => Ok(None),

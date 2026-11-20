@@ -53,19 +53,12 @@ impl KqueueSelector {
         self.submit(Self::io_kevents(change))
     }
 
-    pub(crate) fn arm_timer(&self, deadline: Instant) {
-        self.timer.update(|timer| timer.arm_in_memory(deadline));
-    }
-
-    pub(crate) fn disarm_timer(&self) {
-        self.timer.update(KernelTimer::disarm_in_memory);
-    }
-
     pub(crate) fn flush(
         &self,
         io_changes: impl IntoIterator<Item = IoChange>,
+        deadline: Option<Instant>,
     ) -> rustix::io::Result<()> {
-        let (timer, timer_change) = self.timer.get().flush(Instant::now());
+        let (timer, timer_change) = self.timer.get().flush(deadline, Instant::now());
         self.timer.set(timer);
         let changes = io_changes
             .into_iter()
@@ -170,7 +163,7 @@ impl KqueueSelector {
                 ready: Directions::Write,
             },
             EventFilter::Timer { .. } => {
-                self.timer.update(KernelTimer::fired);
+                self.timer.set(KernelTimer::Disarmed);
                 SelectorEvent::Timer
             }
             EventFilter::User { .. } => SelectorEvent::Notify,

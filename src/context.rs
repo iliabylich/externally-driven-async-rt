@@ -206,12 +206,10 @@ impl<
     }
 
     pub(crate) fn flush(&self) -> rustix::io::Result<()> {
-        match self.storage.timers.next_deadline() {
-            Some(deadline) => self.selector.arm_timer(deadline),
-            None => self.selector.disarm_timer(),
-        }
-        self.selector
-            .flush(self.storage.io_waiters.pending_changes())?;
+        self.selector.flush(
+            self.storage.io_waiters.pending_changes(),
+            self.storage.timers.next_deadline(),
+        )?;
         self.storage.io_waiters.mark_flushed();
         Ok(())
     }
