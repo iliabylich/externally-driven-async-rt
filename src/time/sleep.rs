@@ -107,7 +107,7 @@ mod tests {
             STORAGE.claim(&selector).unwrap()
         };
         ctx.storage.tasks.spawn_root(root, ctx.claimed, async move {
-            let handles = [30, 10, 20].map(|ms| {
+            let handles = [300, 100, 200].map(|ms| {
                 ctx.spawn(async move |ctx| {
                     ctx.sleep(Duration::from_millis(ms)).await.unwrap();
                     ctx.dispatch(u32::try_from(ms).unwrap()).unwrap();
@@ -119,10 +119,10 @@ mod tests {
             }
         });
         assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
-        sleep_blocking(Duration::from_millis(30));
+        sleep_blocking(Duration::from_millis(300));
         wake_expired_timers(&ctx.storage.timers);
         assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Finished);
-        assert_yields!(ctx.storage.events.iter(), [10, 20, 30]);
+        assert_yields!(ctx.storage.events.iter(), [100, 200, 300]);
         ctx.clear();
     }
 

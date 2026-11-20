@@ -4,7 +4,7 @@ mod slot;
 use core::cell::Cell;
 
 pub(crate) use self::index::VersionedIndex;
-use crate::conversions::u32_to_usize;
+use crate::{conversions::u32_to_usize, panic_message::const_unreachable};
 use slot::{FreeSlotView, Slot, SlotView, UsedSlotView};
 
 #[must_use]
@@ -29,51 +29,69 @@ impl<T, const N: usize> ObjectPool<T, N> {
         }
     }
 
-    fn slot_at(&self, idx: u32) -> Option<SlotView<'_, T>> {
-        Some(SlotView {
-            idx,
-            slot: self.slots.get(u32_to_usize(idx))?,
-            value: self.values.get(u32_to_usize(idx))?,
-        })
+    const fn slot_at(&self, idx: u32) -> Option<SlotView<'_, T>> {
+        let index = u32_to_usize(idx);
+        let Some(slot) = element(&self.slots, index) else {
+            return None;
+        };
+        let Some(value) = element(&self.values, index) else {
+            return None;
+        };
+        Some(SlotView { idx, slot, value })
     }
 
-    fn free_slot_at(&self, idx: u32) -> FreeSlotView<'_, T> {
+    const fn free_slot_at(&self, idx: u32) -> FreeSlotView<'_, T> {
         let Some(slot) = self.slot_at(idx) else {
-            unreachable!("the free list points outside the pool")
+            const_unreachable!("the free list points outside the pool")
         };
         let Some(free) = slot.free() else {
-            unreachable!("the free list points at an used slot")
+            const_unreachable!("the free list points at an used slot")
         };
         free
     }
 
-    fn used_slot_at(&self, idx: u32) -> UsedSlotView<'_, T> {
+    const fn used_slot_at(&self, idx: u32) -> UsedSlotView<'_, T> {
         let Some(slot) = self.slot_at(idx) else {
-            unreachable!("the used list points outside the pool")
+            const_unreachable!("the used list points outside the pool")
         };
         let Some(used) = slot.used() else {
-            unreachable!("the used list points at a vacant slot")
+            const_unreachable!("the used list points at a vacant slot")
         };
         used
     }
 
-    fn free_head(&self) -> Option<FreeSlotView<'_, T>> {
-        self.free_head.get().map(|idx| self.free_slot_at(idx))
+    const fn free_head(&self) -> Option<FreeSlotView<'_, T>> {
+        let Some(idx) = self.free_head.get() else {
+            return None;
+        };
+        Some(self.free_slot_at(idx))
     }
 
-    fn used_head(&self) -> Option<UsedSlotView<'_, T>> {
-        self.used_head.get().map(|idx| self.used_slot_at(idx))
+    const fn used_head(&self) -> Option<UsedSlotView<'_, T>> {
+        let Some(idx) = self.used_head.get() else {
+            return None;
+        };
+        Some(self.used_slot_at(idx))
     }
 
-    pub(crate) fn alloc(&self) -> Option<(VersionedIndex<T>, &T)> {
-        let free = self.free_head()?;
+    const fn used_at(&self, idx: Option<u32>) -> Option<UsedSlotView<'_, T>> {
+        let Some(idx) = idx else {
+            return None;
+        };
+        Some(self.used_slot_at(idx))
+    }
 
-        self.free_head.set(free.next());
+    pub(crate) const fn alloc(&self) -> Option<(VersionedIndex<T>, &T)> {
+        let Some(free) = self.free_head() else {
+            return None;
+        };
+
+        let _ = self.free_head.replace(free.next());
 
         let used = free.occupy();
 
         UsedSlotView::link(Some(&used), self.used_head().as_ref());
-        self.used_head.set(Some(used.idx));
+        let _ = self.used_head.replace(Some(used.idx));
 
         Some((
             VersionedIndex::new(used.idx, used.slot.version()),
@@ -81,10 +99,10 @@ impl<T, const N: usize> ObjectPool<T, N> {
         ))
     }
 
-    pub(crate) fn free(&self, index: VersionedIndex<T>) {
+    pub(crate) const fn free(&self, index: VersionedIndex<T>) {
         let used = self.used_slot_at(index.idx);
         if used.slot.version() != index.version {
-            unreachable!(
+            const_unreachable!(
                 "version mismatch: {} vs {}",
                 used.slot.version(),
                 index.version
@@ -92,29 +110,34 @@ impl<T, const N: usize> ObjectPool<T, N> {
         }
 
         UsedSlotView::link(
-            used.prev().map(|idx| self.used_slot_at(idx)).as_ref(),
-            used.next().map(|idx| self.used_slot_at(idx)).as_ref(),
+            self.used_at(used.prev()).as_ref(),
+            self.used_at(used.next()).as_ref(),
         );
-        if Some(used.idx) == self.used_head.get() {
-            self.used_head.set(used.next());
+        if let Some(head) = self.used_head.get()
+            && head == used.idx
+        {
+            let _ = self.used_head.replace(used.next());
         }
 
         let free = used.free();
 
         FreeSlotView::link(&free, self.free_head().as_ref());
-        self.free_head.set(Some(free.idx));
+        let _ = self.free_head.replace(Some(free.idx));
     }
 
-    pub(crate) fn get(&self, idx: u32) -> (VersionedIndex<T>, &T) {
+    pub(crate) const fn get(&self, idx: u32) -> (VersionedIndex<T>, &T) {
         let Some(slot) = self.slot_at(idx) else {
-            unreachable!("index {idx} is out of bounds");
+            const_unreachable!("index {} is out of bounds", idx)
         };
         (VersionedIndex::new(idx, slot.slot.version()), slot.value)
     }
 
-    pub(crate) fn get_versioned(&self, index: VersionedIndex<T>) -> Option<&T> {
+    pub(crate) const fn get_versioned(&self, index: VersionedIndex<T>) -> Option<&T> {
         let (current, value) = self.get(index.idx);
-        (current == index).then_some(value)
+        if current.version == index.version {
+            return Some(value);
+        }
+        None
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (VersionedIndex<T>, &T)> {
@@ -126,6 +149,13 @@ impl<T, const N: usize> ObjectPool<T, N> {
             Some((VersionedIndex::new(idx, used.slot.version()), used.value))
         })
     }
+}
+
+const fn element<U>(items: &[U], index: usize) -> Option<&U> {
+    let Some((_, rest)) = items.split_at_checked(index) else {
+        return None;
+    };
+    rest.first()
 }
 
 #[cfg(test)]

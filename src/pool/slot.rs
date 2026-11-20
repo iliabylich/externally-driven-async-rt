@@ -87,8 +87,12 @@ impl<'a, T> FreeSlotView<'a, T> {
         self.slot.next.get()
     }
 
-    pub(crate) fn link(prev: &Self, next: Option<&Self>) {
-        prev.slot.next.set(next.map(|v| v.idx));
+    pub(crate) const fn link(prev: &Self, next: Option<&Self>) {
+        let next_idx = match next {
+            Some(next) => Some(next.idx),
+            None => None,
+        };
+        let _ = prev.slot.next.replace(next_idx);
     }
 }
 
@@ -108,13 +112,20 @@ impl<'a, T> UsedSlotView<'a, T> {
             slot: self.slot,
         }
     }
-    pub(crate) fn link(prev: Option<&Self>, next: Option<&Self>) {
+    pub(crate) const fn link(prev: Option<&Self>, next: Option<&Self>) {
+        let prev_idx = match prev {
+            Some(prev) => Some(prev.idx),
+            None => None,
+        };
+        let next_idx = match next {
+            Some(next) => Some(next.idx),
+            None => None,
+        };
         if let Some(prev) = prev {
-            prev.slot.next.set(next.map(|v| v.idx));
+            let _ = prev.slot.next.replace(next_idx);
         }
-
         if let Some(next) = next {
-            next.slot.prev.set(prev.map(|v| v.idx));
+            let _ = next.slot.prev.replace(prev_idx);
         }
     }
 

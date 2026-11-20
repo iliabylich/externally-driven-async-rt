@@ -24,7 +24,7 @@ The whole concept of the library is to define an async closure, wrap it with the
     + events dispatched by tasks can be popped between drains with [`EventLoop::events`]
 + [`LoopStorage`] - the storage
     + must be static
-    + can be used by only one [`EventLoop`] ever, creating a second one with the same storage panics, even after the first one is dropped
+    + can be used by only one [`EventLoop`] ever, creating a second one with the same storage returns [`Error::StorageAlreadyUsed`], even after the first one is dropped
 + [`Selector`]
     + a `cfg(target_os)`-selected selector, epoll or kqueue
     + create it with [`Selector::new`] and pass it to [`EventLoop::new`], it must outlive the [`EventLoop`]

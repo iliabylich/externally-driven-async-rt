@@ -8,7 +8,7 @@ pub(crate) struct VersionedIndex<T> {
 }
 
 impl<T> VersionedIndex<T> {
-    pub(crate) fn new(idx: u32, version: u16) -> Self {
+    pub(crate) const fn new(idx: u32, version: u16) -> Self {
         Self {
             idx,
             version,

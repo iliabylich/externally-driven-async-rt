@@ -22,6 +22,7 @@ pub mod io;
 /// A module that implements TCP/UDP/Unix sockets.
 pub mod net;
 mod notify;
+mod panic_message;
 mod pool;
 mod select;
 mod selector;

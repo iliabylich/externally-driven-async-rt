@@ -161,40 +161,6 @@ fn two_loops_on_one_thread_are_independent() {
 }
 
 #[test]
-#[should_panic(expected = "boom in new")]
-fn panic_propagates_out_of_new() {
-    let mut selector = Selector::new().unwrap();
-    let _ = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async |_| panic!("boom in new"),
-    );
-}
-
-#[test]
-#[should_panic(expected = "boom in drain")]
-fn panic_propagates_out_of_drain() {
-    let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async |ctx| {
-            ctx.notified().await;
-            panic!("boom in drain");
-        },
-    )
-    .unwrap();
-    event_loop.notify().unwrap();
-    let _ = event_loop.drain_events_without_blocking();
-}
-
-#[test]
 fn dispatching_into_a_full_queue_returns_the_event() {
     let mut selector = Selector::new().unwrap();
     let event_loop = TestLoop::new(

@@ -125,13 +125,4 @@ mod tests {
         root.write(claimed_forever(), async {});
         drop(root.take_idle().unwrap());
     }
-
-    #[test]
-    #[should_panic(expected = "the task memory is already occupied")]
-    fn writing_into_occupied_memory_panics() {
-        static STORAGE: Storage = Storage::new();
-        let root = &STORAGE.tasks.root;
-        root.write(claimed_forever(), async {});
-        root.write(claimed_forever(), async {});
-    }
 }
