@@ -1,4 +1,3 @@
-mod aligned16;
 mod join_handle;
 mod reserve_task;
 mod root;
@@ -17,7 +16,6 @@ use core::{
     task::{Poll, Waker},
 };
 
-use self::{aligned16::Aligned16, task_memory::TaskMemory, task_slot::TaskSlot};
 pub use self::{
     join_handle::JoinHandle, reserve_task::ReserveTask,
     slot_waiter_taken_error::SlotWaiterTakenError, task_reservation::TaskReservation,
@@ -30,6 +28,7 @@ pub(crate) use self::{
     task_entry::{TaskEntry, TaskId},
     wake_queue::WakeQueue,
 };
+use self::{task_memory::TaskMemory, task_slot::TaskSlot};
 use crate::{claimed::Claimed, pool::ObjectPool, waker_slot::WakerSlot};
 
 #[must_use]

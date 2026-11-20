@@ -1,18 +1,21 @@
-use core::{cell::Cell, ptr::NonNull};
+use core::{
+    cell::{Cell, UnsafeCell},
+    mem::MaybeUninit,
+    ptr::NonNull,
+};
 
-use crate::tasks::Aligned16;
-
+#[repr(C, align(16))]
 #[must_use]
 pub(crate) struct TaskMemory<const SIZE: usize> {
+    bytes: UnsafeCell<MaybeUninit<[u8; SIZE]>>,
     occupied: Cell<bool>,
-    bytes: Aligned16<SIZE>,
 }
 
 impl<const SIZE: usize> TaskMemory<SIZE> {
     pub(crate) const fn new() -> Self {
         Self {
+            bytes: UnsafeCell::new(MaybeUninit::uninit()),
             occupied: Cell::new(false),
-            bytes: Aligned16::new(),
         }
     }
 
@@ -21,6 +24,6 @@ impl<const SIZE: usize> TaskMemory<SIZE> {
     }
 
     pub(crate) fn as_ptr(&self) -> NonNull<u8> {
-        self.bytes.as_ptr()
+        NonNull::from(&self.bytes).cast()
     }
 }
