@@ -16,7 +16,8 @@ mod context;
 mod conversions;
 mod event_loop;
 mod event_queue;
-mod hash_map;
+mod fd_hash_map;
+mod helpers;
 /// IO traits, implemented by streams from [`net`].
 pub mod io;
 /// A module that implements TCP/UDP/Unix sockets.

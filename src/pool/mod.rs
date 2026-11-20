@@ -4,7 +4,7 @@ mod slot;
 use core::cell::Cell;
 
 pub(crate) use self::index::VersionedIndex;
-use crate::{conversions::u32_to_usize, panic_message::const_unreachable};
+use crate::{conversions::u32_to_usize, helpers::element, panic_message::const_unreachable};
 use slot::{FreeSlotView, Slot, SlotView, UsedSlotView};
 
 #[must_use]
@@ -149,13 +149,6 @@ impl<T, const N: usize> ObjectPool<T, N> {
             Some((VersionedIndex::new(idx, used.slot.version()), used.value))
         })
     }
-}
-
-const fn element<U>(items: &[U], index: usize) -> Option<&U> {
-    let Some((_, rest)) = items.split_at_checked(index) else {
-        return None;
-    };
-    rest.first()
 }
 
 #[cfg(test)]

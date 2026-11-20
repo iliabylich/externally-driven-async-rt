@@ -1,19 +1,19 @@
 use core::cell::Cell;
 
-use crate::hash_map::HashMap;
+use crate::fd_hash_map::FdHashMap;
 
-fn insert<const N: usize>(map: &HashMap<i32, Cell<i32>, N>, key: i32) -> Option<()> {
+fn insert<const N: usize>(map: &FdHashMap<Cell<i32>, N>, key: i32) -> Option<()> {
     map.get_or_insert(key)?.set(key);
     Some(())
 }
 
-fn value<const N: usize>(map: &HashMap<i32, Cell<i32>, N>, key: i32) -> Option<i32> {
+fn value<const N: usize>(map: &FdHashMap<Cell<i32>, N>, key: i32) -> Option<i32> {
     map.get(key).map(Cell::get)
 }
 
 #[test]
 fn distinct_keys_get_distinct_entries() {
-    let map = &HashMap::<i32, Cell<i32>, 2>::new([const { Cell::new(0) }; 2]);
+    let map = &FdHashMap::<Cell<i32>, 2>::new([const { Cell::new(0) }; 2]);
     insert(map, 1).unwrap();
     insert(map, 2).unwrap();
     assert_eq!(value(map, 1), Some(1));
@@ -22,7 +22,7 @@ fn distinct_keys_get_distinct_entries() {
 
 #[test]
 fn get_or_insert_returns_the_existing_entry() {
-    let map = &HashMap::<i32, Cell<i32>, 2>::new([const { Cell::new(0) }; 2]);
+    let map = &FdHashMap::<Cell<i32>, 2>::new([const { Cell::new(0) }; 2]);
     insert(map, 1).unwrap();
     assert_eq!(map.get_or_insert(1).map(Cell::get), Some(1));
     assert_eq!(map.iter().count(), 1);
@@ -30,7 +30,7 @@ fn get_or_insert_returns_the_existing_entry() {
 
 #[test]
 fn a_full_map_rejects_new_keys_but_finds_existing_ones() {
-    let map = &HashMap::<i32, Cell<i32>, 2>::new([const { Cell::new(0) }; 2]);
+    let map = &FdHashMap::<Cell<i32>, 2>::new([const { Cell::new(0) }; 2]);
     insert(map, 1).unwrap();
     insert(map, 2).unwrap();
     assert!(map.get_or_insert(3).is_none());
@@ -39,7 +39,7 @@ fn a_full_map_rejects_new_keys_but_finds_existing_ones() {
 
 #[test]
 fn removing_any_node_keeps_the_others_findable() {
-    let map = &HashMap::<i32, Cell<i32>, 32>::new([const { Cell::new(0) }; 32]);
+    let map = &FdHashMap::<Cell<i32>, 32>::new([const { Cell::new(0) }; 32]);
     let keys: [i32; 32] = core::array::from_fn(|i| i32::try_from(i).unwrap());
     for key in keys {
         insert(map, key).unwrap();
@@ -57,7 +57,7 @@ fn removing_any_node_keeps_the_others_findable() {
 
 #[test]
 fn removed_keys_can_be_inserted_again() {
-    let map = &HashMap::<i32, Cell<i32>, 16>::new([const { Cell::new(0) }; 16]);
+    let map = &FdHashMap::<Cell<i32>, 16>::new([const { Cell::new(0) }; 16]);
     let keys: [i32; 16] = core::array::from_fn(|i| i32::try_from(i * 3).unwrap());
     for key in keys {
         insert(map, key).unwrap();
@@ -76,7 +76,7 @@ fn removed_keys_can_be_inserted_again() {
 
 #[test]
 fn iter_yields_every_entry() {
-    let map = &HashMap::<i32, Cell<i32>, 4>::new([const { Cell::new(0) }; 4]);
+    let map = &FdHashMap::<Cell<i32>, 4>::new([const { Cell::new(0) }; 4]);
     insert(map, 10).unwrap();
     insert(map, 20).unwrap();
     insert(map, 30).unwrap();
@@ -86,26 +86,4 @@ fn iter_yields_every_entry() {
         *slot = Some((key, value.get()));
     }
     assert_eq!(seen, [Some((30, 30)), Some((10, 10)), None, None]);
-}
-
-#[test]
-fn keys_with_equal_hashes_chain_and_stay_removable() {
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    struct Colliding(u8);
-
-    impl core::hash::Hash for Colliding {
-        fn hash<H: core::hash::Hasher>(&self, _: &mut H) {}
-    }
-
-    let map = &HashMap::<Colliding, Cell<u8>, 4>::new([const { Cell::new(0) }; 4]);
-    for key in 0..4 {
-        map.get_or_insert(Colliding(key)).unwrap().set(key);
-    }
-    map.remove(Colliding(1));
-    map.remove(Colliding(0));
-    assert!(map.get(Colliding(0)).is_none());
-    assert!(map.get(Colliding(1)).is_none());
-    assert_eq!(map.get(Colliding(2)).map(Cell::get), Some(2));
-    assert_eq!(map.get(Colliding(3)).map(Cell::get), Some(3));
-    assert_eq!(map.iter().count(), 2);
 }

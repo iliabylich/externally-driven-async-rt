@@ -1,20 +1,20 @@
 use rustix::fd::RawFd;
 
 use crate::{
-    hash_map::HashMap,
+    fd_hash_map::FdHashMap,
     io::{FdsFullError, IoWaiter},
     selector::{Direction, Directions, IoChange},
 };
 
 #[must_use]
 pub(crate) struct IoWaiters<const N: usize> {
-    map: HashMap<RawFd, IoWaiter, N>,
+    map: FdHashMap<IoWaiter, N>,
 }
 
 impl<const N: usize> IoWaiters<N> {
     pub(crate) const fn new() -> Self {
         Self {
-            map: HashMap::new([const { IoWaiter::new() }; N]),
+            map: FdHashMap::new([const { IoWaiter::new() }; N]),
         }
     }
 
