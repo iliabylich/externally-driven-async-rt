@@ -15,6 +15,15 @@ pub(crate) trait FdTestingExt: AsFd {
     fn is_readable_now(&self) -> bool {
         self.wait_readable_blocking(0)
     }
+
+    fn fill_send_buffer(&self) {
+        while rustix::io::write(self.as_fd(), &[0; 4096]).is_ok() {}
+    }
+
+    fn drain_receive_buffer(&self) {
+        let mut buf = [0; 4096];
+        while rustix::io::read(self.as_fd(), &mut buf).is_ok() {}
+    }
 }
 
 impl<T: AsFd + ?Sized> FdTestingExt for T {}

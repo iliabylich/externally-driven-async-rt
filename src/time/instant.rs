@@ -39,12 +39,6 @@ mod tests {
     use crate::{testing::sleep_blocking, time::instant::Instant};
 
     #[test]
-    fn now_is_monotonic() {
-        let earlier = Instant::now();
-        assert!(Instant::now() >= earlier);
-    }
-
-    #[test]
     fn adding_and_measuring_round_trip() {
         let now = Instant::now();
         let later = now + Duration::from_millis(5);

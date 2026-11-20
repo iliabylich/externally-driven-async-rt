@@ -68,15 +68,6 @@ fn ready_directions(selector: &Selector, fd: &OwnedFd) -> Directions {
     })
 }
 
-fn fill_send_buffer(fd: &OwnedFd) {
-    while rustix::io::write(fd, &[0; 4096]).is_ok() {}
-}
-
-fn drain_receive_buffer(fd: &OwnedFd) {
-    let mut buf = [0; 4096];
-    while rustix::io::read(fd, &mut buf).is_ok() {}
-}
-
 #[test]
 #[cfg_attr(miri, ignore)]
 fn nothing_armed_produces_no_events() {
@@ -197,7 +188,7 @@ fn read_and_write_on_one_fd_are_both_reported() {
 fn arming_one_direction_keeps_the_other() {
     let selector = Selector::new().unwrap();
     let (a, b) = socketpair();
-    fill_send_buffer(&a);
+    a.fill_send_buffer();
     selector.flush([arm(&a, Direction::Read)], None).unwrap();
     selector.flush([arm_both(&a)], None).unwrap();
     assert!(!selector.as_fd().is_readable_now());
@@ -211,7 +202,7 @@ fn arming_one_direction_keeps_the_other() {
 fn releasing_one_direction_keeps_the_other() {
     let selector = Selector::new().unwrap();
     let (a, b) = socketpair();
-    fill_send_buffer(&a);
+    a.fill_send_buffer();
     selector.flush([arm_both(&a)], None).unwrap();
     assert!(!selector.as_fd().is_readable_now());
 
@@ -219,7 +210,7 @@ fn releasing_one_direction_keeps_the_other() {
     rustix::io::write(&b, b"x").unwrap();
     assert!(!selector.as_fd().is_readable_now());
 
-    drain_receive_buffer(&b);
+    b.drain_receive_buffer();
     assert_eq!(ready_directions(&selector, &a), Directions::Write);
 }
 

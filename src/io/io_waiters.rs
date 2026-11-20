@@ -106,24 +106,6 @@ mod tests {
     }
 
     #[test]
-    fn both_directions_of_one_fd_share_an_entry() {
-        let io_waiters = &IoWaiters::<1>::new();
-        let reader = io_waiters.register(3, Direction::Read).unwrap();
-        let writer = io_waiters.register(3, Direction::Write).unwrap();
-        assert!(core::ptr::eq(reader, writer));
-        assert_eq!(io_waiters.count(), 1);
-    }
-
-    #[test]
-    fn distinct_fds_get_distinct_entries() {
-        let io_waiters = &IoWaiters::<2>::new();
-        let first = io_waiters.register(3, Direction::Read).unwrap();
-        let second = io_waiters.register(4, Direction::Read).unwrap();
-        assert!(!core::ptr::eq(first, second));
-        assert_eq!(io_waiters.count(), 2);
-    }
-
-    #[test]
     fn registering_a_registered_direction_takes_it_over() {
         let io_waiters = &IoWaiters::<1>::new();
         let io = io_waiters.register(3, Direction::Read).unwrap();

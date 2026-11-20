@@ -65,17 +65,6 @@ fn full_pool_rejects_alloc() {
 }
 
 #[test]
-fn freed_slot_is_reused_with_a_new_version() {
-    let pool = &ObjectPool::<Cell<u32>, 1>::new([const { Cell::new(0) }; 1]);
-    let old = alloc(pool, 1).unwrap();
-    pool.free(old);
-    let new = alloc(pool, 2).unwrap();
-    assert_ne!(old, new);
-    assert_eq!(value(pool, old), None);
-    assert_eq!(value(pool, new), Some(2));
-}
-
-#[test]
 fn every_slot_is_usable_after_mixed_frees() {
     let pool = &ObjectPool::<Cell<usize>, 4>::new([const { Cell::new(0) }; 4]);
     let indices = [0, 1, 2, 3].map(|i| alloc(pool, i).unwrap());

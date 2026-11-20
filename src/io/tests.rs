@@ -51,15 +51,6 @@ async fn write_some(ctx: &TestContext<'_>, fd: &OwnedFd) -> rustix::io::Result<u
     }
 }
 
-fn fill_send_buffer(fd: &OwnedFd) {
-    while rustix::io::write(fd, &[0; 4096]).is_ok() {}
-}
-
-fn drain_receive_buffer(fd: &OwnedFd) {
-    let mut buf = [0; 4096];
-    while rustix::io::read(fd, &mut buf).is_ok() {}
-}
-
 #[test]
 #[cfg_attr(miri, ignore)]
 fn read_waits_until_the_peer_writes() {
@@ -92,7 +83,7 @@ fn read_waits_until_the_peer_writes() {
 #[cfg_attr(miri, ignore)]
 fn write_waits_on_a_full_buffer() {
     let (tx, rx) = socketpair();
-    fill_send_buffer(&tx);
+    tx.fill_send_buffer();
     let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
@@ -109,7 +100,7 @@ fn write_waits_on_a_full_buffer() {
     assert_yields!(event_loop.events(), []);
     assert!(!event_loop.is_readable_now());
 
-    drain_receive_buffer(&rx);
+    rx.drain_receive_buffer();
     event_loop.run_until_root_finishes();
     assert_yields!(event_loop.events(), [1]);
 }
@@ -118,7 +109,7 @@ fn write_waits_on_a_full_buffer() {
 #[cfg_attr(miri, ignore)]
 fn read_and_write_wait_on_one_fd_at_the_same_time() {
     let (a, b) = socketpair();
-    fill_send_buffer(&a);
+    a.fill_send_buffer();
     let mut selector = Selector::new().unwrap();
     let mut event_loop = TestLoop::new(
         {
@@ -159,7 +150,7 @@ fn read_and_write_wait_on_one_fd_at_the_same_time() {
     assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
     assert_yields!(event_loop.events(), [3]);
 
-    drain_receive_buffer(&b);
+    b.drain_receive_buffer();
     assert!(event_loop.wait_readable_blocking(1000));
     assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
     assert_yields!(event_loop.events(), [101]);

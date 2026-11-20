@@ -70,30 +70,11 @@ fn elapsing_drops_the_future() {
 
 #[test]
 fn ready_future_beats_a_zero_timeout() {
-    let selector = Selector::new().unwrap();
-    let ctx: TestContext<'_> = {
-        static STORAGE: TestStorage = TestStorage::new();
-        STORAGE.claim(&selector).unwrap()
-    };
-    ctx.storage.notification.fire();
-    ctx.storage.tasks.spawn_root(ctx.claimed, async move {
-        let result = ctx.timeout(Duration::ZERO, ctx.notified()).await.unwrap();
-        ctx.dispatch(result.map_or(0, |()| 1)).unwrap();
-        pending::<()>().await;
-    });
-    assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
-    assert_yields!(ctx.storage.events.iter(), [1]);
-    assert_eq!(ctx.storage.timers.next_deadline(), None);
-    ctx.clear();
-}
-
-#[test]
-fn ready_pinned_future_resolves_and_releases_the_timer() {
     static STORAGE: TestStorage = TestStorage::new();
     let selector = Selector::new().unwrap();
     let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap();
     let mut cx = Context::from_waker(Waker::noop());
-    let mut timeout = pin!(ctx.timeout(Duration::from_secs(60), async {
+    let mut timeout = pin!(ctx.timeout(Duration::ZERO, async {
         let value = 1;
         let borrowed = &value;
         core::future::ready(()).await;

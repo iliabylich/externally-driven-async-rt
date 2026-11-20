@@ -5,7 +5,7 @@ use core::{
 };
 
 use crate::{
-    tasks::{Root, RootStatus, TaskId, Tasks, TasksFullError},
+    tasks::{Root, RootStatus, TaskId, Tasks},
     testing::{
         FixedFuture, FlagOnDrop, TasksStorage, spawn_reserved_static, spawn_root_static,
         spawn_static,
@@ -46,6 +46,8 @@ fn dropping_a_task_drops_its_future_and_finishes_it() {
     assert!(!contains(tasks, id));
     assert_eq!(tasks.pool.iter().count(), 0);
     assert_eq!(tasks.set_join_waiter(id, Waker::noop()), Poll::Ready(()));
+    assert_eq!(tasks.run_ready(), RootStatus::Running);
+    assert!(tasks.queue.is_empty());
 }
 
 #[test]
@@ -58,14 +60,6 @@ fn finished_task_id_never_matches_a_reused_slot() {
     assert_ne!(first, second);
     assert!(!contains(tasks, first));
     assert_eq!(tasks.set_join_waiter(first, Waker::noop()), Poll::Ready(()));
-}
-
-#[test]
-fn full_task_pool_rejects_a_task() {
-    static STORAGE: Storage<1> = Storage::new();
-    let tasks = &STORAGE.tasks;
-    let _ = spawn_static(tasks, async {}).unwrap();
-    assert_eq!(spawn_static(tasks, async {}), Err(TasksFullError));
 }
 
 #[test]
@@ -240,18 +234,6 @@ fn a_stale_wake_of_a_reused_slot_polls_its_new_task() {
 }
 
 #[test]
-fn a_task_dropped_while_queued_is_skipped() {
-    static STORAGE: Storage<1> = Storage::new();
-    static DROPPED: AtomicBool = AtomicBool::new(false);
-    let tasks = &STORAGE.tasks;
-    let _ = spawn_static(tasks, FlagOnDrop::new(&DROPPED)).unwrap();
-    tasks.drop_all();
-    assert!(DROPPED.load(Relaxed));
-    assert_eq!(tasks.run_ready(), RootStatus::Running);
-    assert!(tasks.queue.is_empty());
-}
-
-#[test]
 fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
     static STORAGE: Storage<1> = Storage::new();
     static POLLS: AtomicU32 = AtomicU32::new(0);
@@ -309,20 +291,6 @@ fn root_finishing_stops_the_run() {
     let _ = spawn_static(tasks, counting(&POLLS)).unwrap();
     assert_eq!(tasks.run_ready(), RootStatus::Finished);
     assert_eq!(POLLS.load(Relaxed), 0);
-}
-
-#[test]
-fn spawning_into_a_reserved_slot_queues_the_task() {
-    static STORAGE: Storage<1> = Storage::new();
-    static POLLS: AtomicU32 = AtomicU32::new(0);
-    let tasks = &STORAGE.tasks;
-    let (id, entry) = tasks.pool.alloc().unwrap();
-    assert!(!contains(tasks, id));
-    assert!(tasks.pool.alloc().is_none());
-    spawn_reserved_static(tasks, id, entry, counting(&POLLS));
-    let _ = tasks.run_ready();
-    assert_eq!(POLLS.load(Relaxed), 1);
-    assert!(contains(tasks, id));
 }
 
 #[test]

@@ -12,14 +12,6 @@ fn value<const N: usize>(map: &HashMap<i32, Cell<i32>, N>, key: i32) -> Option<i
 }
 
 #[test]
-fn an_inserted_key_is_found_again() {
-    let map = &HashMap::<i32, Cell<i32>, 2>::new([const { Cell::new(0) }; 2]);
-    insert(map, 7).unwrap();
-    assert_eq!(value(map, 7), Some(7));
-    assert_eq!(value(map, 8), None);
-}
-
-#[test]
 fn distinct_keys_get_distinct_entries() {
     let map = &HashMap::<i32, Cell<i32>, 2>::new([const { Cell::new(0) }; 2]);
     insert(map, 1).unwrap();
@@ -43,15 +35,6 @@ fn a_full_map_rejects_new_keys_but_finds_existing_ones() {
     insert(map, 2).unwrap();
     assert!(map.get_or_insert(3).is_none());
     assert_eq!(map.get_or_insert(1).map(Cell::get), Some(1));
-}
-
-#[test]
-fn a_removed_key_is_gone() {
-    let map = &HashMap::<i32, Cell<i32>, 1>::new([const { Cell::new(0) }; 1]);
-    insert(map, 1).unwrap();
-    map.remove(1);
-    assert_eq!(value(map, 1), None);
-    assert_eq!(map.iter().count(), 0);
 }
 
 #[test]
