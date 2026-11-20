@@ -16,6 +16,8 @@ mod context;
 mod conversions;
 mod event_loop;
 mod event_queue;
+#[expect(dead_code)]
+mod hash_map;
 /// IO traits, implemented by streams from [`net`].
 pub mod io;
 /// A module that implements TCP/UDP/Unix sockets.
