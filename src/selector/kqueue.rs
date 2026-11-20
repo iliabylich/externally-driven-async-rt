@@ -1,4 +1,4 @@
-use core::{cell::Cell, ffi::c_void, mem::MaybeUninit, time::Duration};
+use core::{cell::Cell, mem::MaybeUninit, time::Duration};
 
 use rustix::{
     event::kqueue::{Event, EventFilter, EventFlags, UserDefinedFlags, UserFlags, kevent, kqueue},
@@ -152,14 +152,13 @@ impl KqueueSelector {
     }
 
     fn consume(&self, event: &Event) -> SelectorEvent {
-        let token = event.udata().addr();
         match event.filter() {
-            EventFilter::Read(_) => SelectorEvent::Io {
-                token,
+            EventFilter::Read(fd) => SelectorEvent::Io {
+                fd,
                 ready: Directions::Read,
             },
-            EventFilter::Write(_) => SelectorEvent::Io {
-                token,
+            EventFilter::Write(fd) => SelectorEvent::Io {
+                fd,
                 ready: Directions::Write,
             },
             EventFilter::Timer { .. } => {
@@ -202,28 +201,25 @@ impl KqueueSelector {
     }
 
     fn io_kevents(change: IoChange) -> [Event; 2] {
-        let udata = core::ptr::without_provenance_mut(change.token);
         [
             Self::io_kevent(
                 EventFilter::Read(change.fd),
                 change.interest.contains(Direction::Read),
-                udata,
             ),
             Self::io_kevent(
                 EventFilter::Write(change.fd),
                 change.interest.contains(Direction::Write),
-                udata,
             ),
         ]
     }
 
-    fn io_kevent(filter: EventFilter, armed: bool, udata: *mut c_void) -> Event {
+    fn io_kevent(filter: EventFilter, armed: bool) -> Event {
         let flags = if armed {
             EventFlags::ADD | EventFlags::ONESHOT
         } else {
             EventFlags::DELETE
         };
-        Event::new(filter, flags | EventFlags::RECEIPT, udata)
+        Event::new(filter, flags | EventFlags::RECEIPT, core::ptr::null_mut())
     }
 }
 

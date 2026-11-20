@@ -8,33 +8,30 @@ use crate::{
     time::Instant,
 };
 
-fn arm(token: usize, fd: &OwnedFd, direction: Direction) -> IoChange {
+fn arm(fd: &OwnedFd, direction: Direction) -> IoChange {
     IoChange {
-        token,
         fd: fd.as_raw_fd(),
         interest: direction.into(),
     }
 }
 
-fn arm_both(token: usize, fd: &OwnedFd) -> IoChange {
+fn arm_both(fd: &OwnedFd) -> IoChange {
     IoChange {
-        token,
         fd: fd.as_raw_fd(),
         interest: Directions::Both,
     }
 }
 
-fn disarm(token: usize, fd: &OwnedFd) -> IoChange {
+fn disarm(fd: &OwnedFd) -> IoChange {
     IoChange {
-        token,
         fd: fd.as_raw_fd(),
         interest: Directions::Empty,
     }
 }
 
-fn ready(token: usize, direction: Direction) -> SelectorEvent {
+fn ready(fd: &OwnedFd, direction: Direction) -> SelectorEvent {
     SelectorEvent::Io {
-        token,
+        fd: fd.as_raw_fd(),
         ready: direction.into(),
     }
 }
@@ -58,12 +55,12 @@ fn events(selector: &Selector) -> impl Iterator<Item = SelectorEvent> + '_ {
     })
 }
 
-fn ready_directions(selector: &Selector, token: usize) -> Directions {
+fn ready_directions(selector: &Selector, fd: &OwnedFd) -> Directions {
     events(selector).fold(Directions::Empty, |directions, event| match event {
         SelectorEvent::Io {
-            token: event_token,
+            fd: event_fd,
             ready,
-        } if event_token == token => [Direction::Read, Direction::Write]
+        } if event_fd == fd.as_raw_fd() => [Direction::Read, Direction::Write]
             .into_iter()
             .filter(|direction| ready.contains(*direction))
             .fold(directions, Directions::with),
@@ -93,13 +90,11 @@ fn nothing_armed_produces_no_events() {
 
 #[test]
 #[cfg_attr(miri, ignore)]
-fn armed_write_is_reported_with_its_token() {
+fn armed_write_is_reported_with_its_fd() {
     let selector = Selector::new().unwrap();
     let (a, _b) = socketpair();
-    selector
-        .flush([arm(1, &a, Direction::Write)], None)
-        .unwrap();
-    assert_yields!(events(&selector), [ready(1, Direction::Write)]);
+    selector.flush([arm(&a, Direction::Write)], None).unwrap();
+    assert_yields!(events(&selector), [ready(&a, Direction::Write)]);
 }
 
 #[test]
@@ -107,20 +102,16 @@ fn armed_write_is_reported_with_its_token() {
 fn read_interest_is_one_shot() {
     let selector = Selector::new().unwrap();
     let (rx, tx) = socketpair();
-    selector
-        .flush([arm(2, &rx, Direction::Read)], None)
-        .unwrap();
+    selector.flush([arm(&rx, Direction::Read)], None).unwrap();
 
     rustix::io::write(&tx, b"hello").unwrap();
-    assert_yields!(events(&selector), [ready(2, Direction::Read)]);
+    assert_yields!(events(&selector), [ready(&rx, Direction::Read)]);
     rustix::io::write(&tx, b"more").unwrap();
     assert!(!selector.as_fd().is_readable_now());
     assert_yields!(events(&selector), []);
 
-    selector
-        .flush([arm(2, &rx, Direction::Read)], None)
-        .unwrap();
-    assert_yields!(events(&selector), [ready(2, Direction::Read)]);
+    selector.flush([arm(&rx, Direction::Read)], None).unwrap();
+    assert_yields!(events(&selector), [ready(&rx, Direction::Read)]);
 }
 
 #[test]
@@ -129,10 +120,8 @@ fn data_that_arrived_before_arming_is_reported() {
     let selector = Selector::new().unwrap();
     let (rx, tx) = socketpair();
     rustix::io::write(&tx, b"early").unwrap();
-    selector
-        .flush([arm(3, &rx, Direction::Read)], None)
-        .unwrap();
-    assert_yields!(events(&selector), [ready(3, Direction::Read)]);
+    selector.flush([arm(&rx, Direction::Read)], None).unwrap();
+    assert_yields!(events(&selector), [ready(&rx, Direction::Read)]);
 }
 
 #[test]
@@ -140,10 +129,8 @@ fn data_that_arrived_before_arming_is_reported() {
 fn disarming_prevents_events() {
     let selector = Selector::new().unwrap();
     let (rx, tx) = socketpair();
-    selector
-        .flush([arm(4, &rx, Direction::Read)], None)
-        .unwrap();
-    selector.flush([disarm(4, &rx)], None).unwrap();
+    selector.flush([arm(&rx, Direction::Read)], None).unwrap();
+    selector.flush([disarm(&rx)], None).unwrap();
     rustix::io::write(&tx, b"x").unwrap();
     assert!(!selector.as_fd().is_readable_now());
 }
@@ -153,10 +140,8 @@ fn disarming_prevents_events() {
 fn apply_now_deletes_an_armed_filter_without_flush() {
     let selector = Selector::new().unwrap();
     let (rx, tx) = socketpair();
-    selector
-        .flush([arm(5, &rx, Direction::Read)], None)
-        .unwrap();
-    selector.apply_now(disarm(5, &rx)).unwrap();
+    selector.flush([arm(&rx, Direction::Read)], None).unwrap();
+    selector.apply_now(disarm(&rx)).unwrap();
     rustix::io::write(&tx, b"x").unwrap();
     assert!(!selector.as_fd().is_readable_now());
 }
@@ -166,10 +151,8 @@ fn apply_now_deletes_an_armed_filter_without_flush() {
 fn deleted_then_closed_fd_produces_no_events() {
     let selector = Selector::new().unwrap();
     let (rx, tx) = socketpair();
-    selector
-        .flush([arm(6, &rx, Direction::Read)], None)
-        .unwrap();
-    selector.apply_now(disarm(6, &rx)).unwrap();
+    selector.flush([arm(&rx, Direction::Read)], None).unwrap();
+    selector.apply_now(disarm(&rx)).unwrap();
     drop(rx);
     rustix::io::write(&tx, b"x").ok();
     assert_yields!(events(&selector), []);
@@ -180,29 +163,23 @@ fn deleted_then_closed_fd_produces_no_events() {
 fn disarming_a_filter_that_already_fired_is_ok() {
     let selector = Selector::new().unwrap();
     let (a, _b) = socketpair();
-    selector
-        .flush([arm(7, &a, Direction::Write)], None)
-        .unwrap();
-    assert_yields!(events(&selector), [ready(7, Direction::Write)]);
-    selector.apply_now(disarm(7, &a)).unwrap();
+    selector.flush([arm(&a, Direction::Write)], None).unwrap();
+    assert_yields!(events(&selector), [ready(&a, Direction::Write)]);
+    selector.apply_now(disarm(&a)).unwrap();
 }
 
 #[test]
 #[cfg_attr(miri, ignore)]
-fn reused_fd_number_reports_the_new_token() {
+fn reused_fd_number_reports_the_new_socket() {
     let selector = Selector::new().unwrap();
     let (a, _b) = socketpair();
-    selector
-        .flush([arm(8, &a, Direction::Write)], None)
-        .unwrap();
-    selector.apply_now(disarm(8, &a)).unwrap();
+    selector.flush([arm(&a, Direction::Write)], None).unwrap();
+    selector.apply_now(disarm(&a)).unwrap();
     drop(a);
 
     let (c, _d) = socketpair();
-    selector
-        .flush([arm(9, &c, Direction::Write)], None)
-        .unwrap();
-    assert_yields!(events(&selector), [ready(9, Direction::Write)]);
+    selector.flush([arm(&c, Direction::Write)], None).unwrap();
+    assert_yields!(events(&selector), [ready(&c, Direction::Write)]);
 }
 
 #[test]
@@ -211,8 +188,8 @@ fn read_and_write_on_one_fd_are_both_reported() {
     let selector = Selector::new().unwrap();
     let (a, b) = socketpair();
     rustix::io::write(&b, b"x").unwrap();
-    selector.flush([arm_both(10, &a)], None).unwrap();
-    assert_eq!(ready_directions(&selector, 10), Directions::Both);
+    selector.flush([arm_both(&a)], None).unwrap();
+    assert_eq!(ready_directions(&selector, &a), Directions::Both);
 }
 
 #[test]
@@ -221,14 +198,12 @@ fn arming_one_direction_keeps_the_other() {
     let selector = Selector::new().unwrap();
     let (a, b) = socketpair();
     fill_send_buffer(&a);
-    selector
-        .flush([arm(11, &a, Direction::Read)], None)
-        .unwrap();
-    selector.flush([arm_both(11, &a)], None).unwrap();
+    selector.flush([arm(&a, Direction::Read)], None).unwrap();
+    selector.flush([arm_both(&a)], None).unwrap();
     assert!(!selector.as_fd().is_readable_now());
 
     rustix::io::write(&b, b"x").unwrap();
-    assert_eq!(ready_directions(&selector, 11), Directions::Read);
+    assert_eq!(ready_directions(&selector, &a), Directions::Read);
 }
 
 #[test]
@@ -237,15 +212,15 @@ fn releasing_one_direction_keeps_the_other() {
     let selector = Selector::new().unwrap();
     let (a, b) = socketpair();
     fill_send_buffer(&a);
-    selector.flush([arm_both(12, &a)], None).unwrap();
+    selector.flush([arm_both(&a)], None).unwrap();
     assert!(!selector.as_fd().is_readable_now());
 
-    selector.apply_now(arm(12, &a, Direction::Write)).unwrap();
+    selector.apply_now(arm(&a, Direction::Write)).unwrap();
     rustix::io::write(&b, b"x").unwrap();
     assert!(!selector.as_fd().is_readable_now());
 
     drain_receive_buffer(&b);
-    assert_eq!(ready_directions(&selector, 12), Directions::Write);
+    assert_eq!(ready_directions(&selector, &a), Directions::Write);
 }
 
 #[test]
@@ -254,12 +229,7 @@ fn changes_and_events_beyond_one_batch_are_all_delivered() {
     let selector = Selector::new().unwrap();
     let [(a0, b0), (a1, b1), (a2, b2)] = core::array::from_fn(|_| socketpair());
     let fds = [&a0, &b0, &a1, &b1, &a2, &b2];
-    let arm_first = |count: usize| {
-        fds[..count]
-            .iter()
-            .enumerate()
-            .map(|(i, fd)| arm(i, fd, Direction::Write))
-    };
+    let arm_first = |count: usize| fds[..count].iter().map(|fd| arm(fd, Direction::Write));
 
     selector.flush(arm_first(4), None).unwrap();
     assert_eq!(events(&selector).count(), 4);

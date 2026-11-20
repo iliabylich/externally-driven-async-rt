@@ -88,11 +88,7 @@ mod tests {
     }
 
     fn change(fd: i32, interest: Directions) -> IoChange {
-        IoChange {
-            token: usize::try_from(fd).unwrap(),
-            fd,
-            interest,
-        }
+        IoChange { fd, interest }
     }
 
     #[test]

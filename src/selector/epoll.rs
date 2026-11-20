@@ -20,8 +20,8 @@ use crate::{
     time::Instant,
 };
 
-const TIMER_DATA: usize = usize::MAX;
-const NOTIFY_DATA: usize = usize::MAX - 1;
+const TIMER_DATA: u64 = u64::MAX;
+const NOTIFY_DATA: u64 = u64::MAX - 1;
 const ZERO: Timespec = Timespec {
     tv_sec: 0,
     tv_nsec: 0,
@@ -127,12 +127,15 @@ impl EpollSelector {
     }
 
     fn consume(&self, event: Event) -> rustix::io::Result<Option<SelectorEvent>> {
-        match event.data.ptr().addr() {
+        match event.data.u64() {
             TIMER_DATA => self.consume_timer(),
             NOTIFY_DATA => self.consume_notify(),
-            token => {
+            data => {
+                let fd = u32::try_from(data)
+                    .unwrap_or_else(|_| unreachable!("event data {data} is not an fd"))
+                    .cast_signed();
                 let ready = Self::ready(event.flags);
-                Ok((ready != Directions::Empty).then_some(SelectorEvent::Io { token, ready }))
+                Ok((ready != Directions::Empty).then_some(SelectorEvent::Io { fd, ready }))
             }
         }
     }
@@ -194,7 +197,7 @@ impl EpollSelector {
             Directions::Write => EventFlags::OUT,
             Directions::Both => EventFlags::IN | EventFlags::OUT,
         };
-        let data = EventData::new_ptr(core::ptr::without_provenance_mut(change.token));
+        let data = EventData::new_u64(u64::from(change.fd.cast_unsigned()));
         let flags = interest | EventFlags::ONESHOT;
         syscall_start!(
             "epoll_ctl",
@@ -254,8 +257,8 @@ impl Drop for EpollSelector {
     }
 }
 
-fn add_readable(epoll: &OwnedFd, fd: &OwnedFd, token: usize) -> rustix::io::Result<()> {
-    let data = EventData::new_ptr(core::ptr::without_provenance_mut(token));
+fn add_readable(epoll: &OwnedFd, fd: &OwnedFd, data: u64) -> rustix::io::Result<()> {
+    let data = EventData::new_u64(data);
     let flags = EventFlags::IN;
     syscall_start!(
         "epoll_ctl",

@@ -86,7 +86,6 @@ impl IoWaiter {
 
     fn change(&self, fd: RawFd) -> IoChange {
         IoChange {
-            token: usize::try_from(fd).unwrap_or_else(|_| unreachable!("fd {fd} is negative")),
             fd,
             interest: self.interest(),
         }
