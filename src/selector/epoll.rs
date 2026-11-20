@@ -94,10 +94,10 @@ impl EpollSelector {
         }
         let (timer, timer_change) = self.timer.get().flush(deadline, Instant::now());
         self.timer.set(timer);
-        match timer_change {
-            Some(change) => self.apply_timer(change),
-            None => Ok(()),
-        }
+        let Some(change) = timer_change else {
+            return Ok(());
+        };
+        self.apply_timer(change)
     }
 
     pub(crate) fn poll_nonblocking(
@@ -111,18 +111,16 @@ impl EpollSelector {
             syscall_end!(result; &buf[..result.unwrap_or(0)], EVENTS_PER_CALL, ZERO);
             match result {
                 Ok(len) => break len,
-                Err(Errno::INTR) => continue,
+                Err(Errno::INTR) => {}
                 Err(errno) => return Err(errno),
             }
         };
-        out.fill(None);
-        let mut count = 0;
-        for event in buf[..len].iter().copied() {
-            if let Some(translated) = self.consume(event)? {
-                out[count] = Some(translated);
-                count += 1;
-            }
+        let mut consumed = [None; EVENTS_PER_CALL];
+        for (event, slot) in buf.iter().take(len).zip(&mut consumed) {
+            *slot = self.consume(*event)?;
         }
+        let mut translated = consumed.into_iter().flatten();
+        out.fill_with(|| translated.next());
         Ok(len == EVENTS_PER_CALL)
     }
 
