@@ -1,5 +1,4 @@
 use core::{
-    cell::Cell,
     future::{Future, pending, poll_fn},
     pin::{Pin, pin},
     task::{Poll, Waker},
@@ -12,7 +11,7 @@ use rustix::{
 
 use crate::{
     Context, LoopStorage, Selector,
-    io::{IoIndex, IoRegistration},
+    io::IoRegistration,
     selector::Direction,
     testing::{
         EventLoopTestingExt, FdTestingExt, TestContext, TestLoop, TestStorage, assert_yields,
@@ -31,10 +30,9 @@ async fn read_some<
 >(
     ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     fd: &OwnedFd,
-    cached: &Cell<Option<IoIndex>>,
 ) -> rustix::io::Result<usize> {
     let mut buf = [0; 64];
-    let mut registration = IoRegistration::new(ctx, fd.as_fd(), cached, Direction::Read).unwrap();
+    let mut registration = IoRegistration::new(ctx, fd.as_fd(), Direction::Read).unwrap();
     loop {
         match rustix::io::read(fd, &mut buf) {
             Err(Errno::AGAIN) => registration.wait().await,
@@ -43,12 +41,8 @@ async fn read_some<
     }
 }
 
-async fn write_some(
-    ctx: &TestContext<'_>,
-    fd: &OwnedFd,
-    cached: &Cell<Option<IoIndex>>,
-) -> rustix::io::Result<usize> {
-    let mut registration = IoRegistration::new(ctx, fd.as_fd(), cached, Direction::Write).unwrap();
+async fn write_some(ctx: &TestContext<'_>, fd: &OwnedFd) -> rustix::io::Result<usize> {
+    let mut registration = IoRegistration::new(ctx, fd.as_fd(), Direction::Write).unwrap();
     loop {
         match rustix::io::write(fd, b"x") {
             Err(Errno::AGAIN) => registration.wait().await,
@@ -78,7 +72,7 @@ fn read_waits_until_the_peer_writes() {
         },
         &mut selector,
         async move |ctx| {
-            let n = read_some(&ctx, &rx, &Cell::new(None)).await.unwrap();
+            let n = read_some(&ctx, &rx).await.unwrap();
             ctx.dispatch(u32::try_from(n).unwrap()).unwrap();
             pending::<()>().await;
         },
@@ -107,7 +101,7 @@ fn write_waits_on_a_full_buffer() {
         },
         &mut selector,
         async move |ctx| {
-            let n = write_some(&ctx, &tx, &Cell::new(None)).await.unwrap();
+            let n = write_some(&ctx, &tx).await.unwrap();
             ctx.dispatch(u32::try_from(n).unwrap()).unwrap();
         },
     )
@@ -133,9 +127,8 @@ fn read_and_write_wait_on_one_fd_at_the_same_time() {
         },
         &mut selector,
         async move |ctx| {
-            let cached = Cell::new(None);
-            let mut read = pin!(read_some(&ctx, &a, &cached));
-            let mut write = pin!(write_some(&ctx, &a, &cached));
+            let mut read = pin!(read_some(&ctx, &a));
+            let mut write = pin!(write_some(&ctx, &a));
             let (mut read_done, mut write_done) = (false, false);
             poll_fn(|cx| {
                 if !read_done && let Poll::Ready(n) = read.as_mut().poll(cx) {
@@ -184,8 +177,7 @@ fn dropping_a_pending_wait_deregisters() {
     };
     let (rx, tx) = socketpair();
     let mut cx = core::task::Context::from_waker(Waker::noop());
-    let mut registration =
-        IoRegistration::new(&ctx, rx.as_fd(), &Cell::new(None), Direction::Read).unwrap();
+    let mut registration = IoRegistration::new(&ctx, rx.as_fd(), Direction::Read).unwrap();
     let mut wait = registration.wait();
     assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
     ctx.flush().unwrap();
@@ -206,8 +198,7 @@ fn wait_survives_a_spurious_poll() {
     };
     let (rx, tx) = socketpair();
     let mut cx = core::task::Context::from_waker(Waker::noop());
-    let mut registration =
-        IoRegistration::new(&ctx, rx.as_fd(), &Cell::new(None), Direction::Read).unwrap();
+    let mut registration = IoRegistration::new(&ctx, rx.as_fd(), Direction::Read).unwrap();
     let mut wait = registration.wait();
     assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
     assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
@@ -228,8 +219,7 @@ fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
     };
     let mut cx = core::task::Context::from_waker(Waker::noop());
     let (old_rx, _old_tx) = socketpair();
-    let mut old =
-        IoRegistration::new(&ctx, old_rx.as_fd(), &Cell::new(None), Direction::Read).unwrap();
+    let mut old = IoRegistration::new(&ctx, old_rx.as_fd(), Direction::Read).unwrap();
     let mut wait = old.wait();
     assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
     ctx.flush().unwrap();
@@ -238,8 +228,7 @@ fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
     drop(old_rx);
 
     let (rx, tx) = socketpair();
-    let mut registration =
-        IoRegistration::new(&ctx, rx.as_fd(), &Cell::new(None), Direction::Read).unwrap();
+    let mut registration = IoRegistration::new(&ctx, rx.as_fd(), Direction::Read).unwrap();
     let mut wait = registration.wait();
     assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
     ctx.flush().unwrap();
@@ -260,8 +249,7 @@ fn sequential_registrations_reuse_the_slot() {
     let (rx, tx) = socketpair();
     let mut cx = core::task::Context::from_waker(Waker::noop());
     for _ in 0..3 {
-        let mut registration =
-            IoRegistration::new(&ctx, rx.as_fd(), &Cell::new(None), Direction::Read).unwrap();
+        let mut registration = IoRegistration::new(&ctx, rx.as_fd(), Direction::Read).unwrap();
         let mut wait = registration.wait();
         assert_eq!(Pin::new(&mut wait).poll(&mut cx), Poll::Pending);
         ctx.flush().unwrap();

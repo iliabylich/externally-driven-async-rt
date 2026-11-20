@@ -1,4 +1,4 @@
-use core::{cell::Cell, time::Duration};
+use core::time::Duration;
 
 use rustix::{
     fd::{AsFd, OwnedFd},
@@ -15,7 +15,7 @@ use rustix::{
 
 use crate::{
     context::Context,
-    io::{FdsFullError, IoIndex, IoRegistration},
+    io::{FdsFullError, IoRegistration},
     net::{NetError, retry::Retry},
     selector::Direction,
     strace::{syscall, syscall_end, syscall_start},
@@ -28,14 +28,14 @@ const STREAM_SEND_FLAGS: SendFlags = SendFlags::empty();
 const STREAM_SEND_FLAGS: SendFlags = SendFlags::NOSIGNAL;
 
 #[must_use]
-pub(crate) struct Socket(OwnedFd, Cell<Option<IoIndex>>);
+pub(crate) struct Socket(OwnedFd);
 
 impl Socket {
     pub(crate) fn new(family: AddressFamily, ty: SocketType) -> rustix::io::Result<Self> {
         syscall_start!("socket", family, ty, 0);
         let fd = rustix::net::socket(family, ty, None);
         syscall_end!(fd);
-        let socket = Self(fd?, Cell::new(None));
+        let socket = Self(fd?);
         socket.configure(ty)?;
         Ok(socket)
     }
@@ -144,7 +144,7 @@ impl Socket {
             Err(Errno::INPROGRESS | Errno::INTR) => {}
             Err(errno) => return Err(errno.into()),
         }
-        IoRegistration::new(ctx, socket.0.as_fd(), &socket.1, Direction::Write)?
+        IoRegistration::new(ctx, socket.0.as_fd(), Direction::Write)?
             .wait()
             .await;
         syscall_start!("getsockopt", socket.0, "SOL_SOCKET", "SO_ERROR");
@@ -174,7 +174,7 @@ impl Socket {
                 result
             })
             .await?;
-        let socket = Self(fd, Cell::new(None));
+        let socket = Self(fd);
         socket.configure(SocketType::STREAM)?;
         Ok((socket, addr))
     }
@@ -397,7 +397,7 @@ impl Socket {
         ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         direction: Direction,
     ) -> Result<(), FdsFullError> {
-        let mut registration = IoRegistration::new(ctx, self.0.as_fd(), &self.1, direction)?;
+        let mut registration = IoRegistration::new(ctx, self.0.as_fd(), direction)?;
         registration.wait().await;
         Ok(())
     }
@@ -442,7 +442,7 @@ impl Socket {
         direction: Direction,
         op: F,
     ) -> Retry<'a, 'ctx, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, F> {
-        Retry::new(ctx, &self.0, &self.1, direction, op)
+        Retry::new(ctx, &self.0, direction, op)
     }
 }
 

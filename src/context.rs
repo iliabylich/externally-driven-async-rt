@@ -1,9 +1,10 @@
 use core::{future::Future, time::Duration};
 
+use rustix::fd::RawFd;
+
 use crate::{
     Either2,
     claimed::Claimed,
-    io::IoIndex,
     notify::Notified,
     select2,
     selector::{EVENTS_PER_CALL, Selector, SelectorEvent},
@@ -183,9 +184,11 @@ impl<
             for event in events.iter().map_while(|event| *event) {
                 match event {
                     SelectorEvent::Io { token, ready } => {
-                        self.storage
-                            .io_waiters
-                            .wake_ready(IoIndex::unpack(token), ready);
+                        self.storage.io_waiters.wake_ready(
+                            RawFd::try_from(token)
+                                .unwrap_or_else(|_| unreachable!("token {token} is not an fd")),
+                            ready,
+                        );
                     }
                     SelectorEvent::Notify => self.storage.notification.fire(),
                     SelectorEvent::Timer => {

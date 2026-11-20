@@ -1,10 +1,10 @@
-use core::{cell::Cell, task::Poll};
+use core::task::Poll;
 
-use rustix::fd::{AsRawFd, BorrowedFd};
+use rustix::fd::{AsRawFd, BorrowedFd, RawFd};
 
 use crate::{
     context::Context,
-    io::{FdsFullError, IoIndex, IoWaiter, IoWaiters, Wait},
+    io::{FdsFullError, IoWaiter, IoWaiters, Wait},
     selector::{Direction, Selector},
 };
 
@@ -12,7 +12,7 @@ use crate::{
 pub(crate) struct IoRegistration<'a, const FDS: usize> {
     io_waiters: &'a IoWaiters<FDS>,
     selector: &'a Selector,
-    index: IoIndex,
+    fd: RawFd,
     io: &'a IoWaiter,
     direction: Direction,
     waiting: bool,
@@ -29,17 +29,14 @@ impl<'a, const FDS: usize> IoRegistration<'a, FDS> {
     >(
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         fd: BorrowedFd<'a>,
-        cached: &Cell<Option<IoIndex>>,
         direction: Direction,
     ) -> Result<Self, FdsFullError> {
-        let (index, io) = ctx
-            .storage
-            .io_waiters
-            .register(cached, fd.as_raw_fd(), direction)?;
+        let fd = fd.as_raw_fd();
+        let io = ctx.storage.io_waiters.register(fd, direction)?;
         Ok(Self {
             io_waiters: &ctx.storage.io_waiters,
             selector: ctx.selector,
-            index,
+            fd,
             io,
             direction,
             waiting: false,
@@ -71,7 +68,7 @@ impl<'a, const FDS: usize> IoRegistration<'a, FDS> {
 
 impl<const FDS: usize> Drop for IoRegistration<'_, FDS> {
     fn drop(&mut self) {
-        if let Some(change) = self.io_waiters.release(self.index, self.direction) {
+        if let Some(change) = self.io_waiters.release(self.fd, self.direction) {
             let _ = self.selector.apply_now(change);
         }
     }

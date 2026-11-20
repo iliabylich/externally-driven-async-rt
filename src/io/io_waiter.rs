@@ -3,14 +3,12 @@ use core::cell::Cell;
 use rustix::fd::RawFd;
 
 use crate::{
-    pool::VersionedIndex,
     selector::{Direction, Directions, IoChange},
     waker_slot::WakerSlot,
 };
 
 #[must_use]
 pub(crate) struct IoWaiter {
-    fd: Cell<RawFd>,
     registered: Cell<Directions>,
     armed: Cell<Directions>,
     reader: WakerSlot,
@@ -20,7 +18,6 @@ pub(crate) struct IoWaiter {
 impl IoWaiter {
     pub(crate) const fn new() -> Self {
         Self {
-            fd: Cell::new(-1),
             registered: Cell::new(Directions::Empty),
             armed: Cell::new(Directions::Empty),
             reader: WakerSlot::new(),
@@ -28,29 +25,18 @@ impl IoWaiter {
         }
     }
 
-    pub(crate) fn reset(&self, fd: RawFd) {
-        self.fd.set(fd);
-        self.registered.set(Directions::Empty);
-        self.armed.set(Directions::Empty);
-        self.clear();
-    }
-
-    pub(crate) const fn fd(&self) -> RawFd {
-        self.fd.get()
-    }
-
     pub(crate) fn register(&self, direction: Direction) {
         self.waker(direction).take();
         self.registered.set(self.registered.get().with(direction));
     }
 
-    pub(crate) fn release(&self, index: IoIndex, direction: Direction) -> Option<IoChange> {
+    pub(crate) fn release(&self, fd: RawFd, direction: Direction) -> Option<IoChange> {
         self.waker(direction).take();
         self.registered
             .set(self.registered.get().without(direction));
         self.armed.get().contains(direction).then(|| {
             self.mark_flushed();
-            self.change(index)
+            self.change(fd)
         })
     }
 
@@ -76,8 +62,8 @@ impl IoWaiter {
         }
     }
 
-    pub(crate) fn pending_change(&self, index: IoIndex) -> Option<IoChange> {
-        (self.interest() != self.armed.get()).then(|| self.change(index))
+    pub(crate) fn pending_change(&self, fd: RawFd) -> Option<IoChange> {
+        (self.interest() != self.armed.get()).then(|| self.change(fd))
     }
 
     pub(crate) fn mark_flushed(&self) {
@@ -85,6 +71,8 @@ impl IoWaiter {
     }
 
     pub(crate) fn clear(&self) {
+        self.registered.set(Directions::Empty);
+        self.armed.set(Directions::Empty);
         self.reader.take();
         self.writer.take();
     }
@@ -96,13 +84,11 @@ impl IoWaiter {
             .fold(Directions::Empty, Directions::with)
     }
 
-    fn change(&self, index: IoIndex) -> IoChange {
+    fn change(&self, fd: RawFd) -> IoChange {
         IoChange {
-            token: index.pack(),
-            fd: self.fd(),
+            token: usize::try_from(fd).unwrap_or_else(|_| unreachable!("fd {fd} is negative")),
+            fd,
             interest: self.interest(),
         }
     }
 }
-
-pub(crate) type IoIndex = VersionedIndex<IoWaiter>;

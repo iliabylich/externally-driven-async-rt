@@ -59,17 +59,6 @@ fn a_slot_is_usable_while_another_is_allocated_and_freed() {
 }
 
 #[test]
-fn index_round_trips_through_pack_unpack() {
-    let pool = &ObjectPool::<Cell<u32>, 2>::new([const { Cell::new(0) }; 2]);
-    let first = alloc(pool, 1).unwrap();
-    pool.free(first);
-    let index = alloc(pool, 2).unwrap();
-    assert_eq!(VersionedIndex::unpack(index.pack()), index);
-    assert_ne!(index.pack(), first.pack());
-    assert_eq!(value(pool, VersionedIndex::unpack(first.pack())), None);
-}
-
-#[test]
 fn full_pool_rejects_alloc() {
     let pool = &ObjectPool::<Cell<u32>, 1>::new([const { Cell::new(0) }; 1]);
     let _ = alloc(pool, 1).unwrap();

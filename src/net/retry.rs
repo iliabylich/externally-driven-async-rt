@@ -1,5 +1,4 @@
 use core::{
-    cell::Cell,
     future::Future,
     pin::Pin,
     task::{Context as TaskContext, Poll},
@@ -10,12 +9,7 @@ use rustix::{
     io::Errno,
 };
 
-use crate::{
-    context::Context,
-    io::{IoIndex, IoRegistration},
-    net::NetError,
-    selector::Direction,
-};
+use crate::{context::Context, io::IoRegistration, net::NetError, selector::Direction};
 
 #[must_use]
 pub(crate) struct Retry<
@@ -32,7 +26,6 @@ pub(crate) struct Retry<
 > {
     ctx: &'a Context<'ctx, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     fd: &'a OwnedFd,
-    cached: &'a Cell<Option<IoIndex>>,
     direction: Direction,
     op: F,
     registration: Option<IoRegistration<'a, FDS>>,
@@ -54,14 +47,12 @@ impl<
     pub(crate) const fn new(
         ctx: &'a Context<'ctx, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         fd: &'a OwnedFd,
-        cached: &'a Cell<Option<IoIndex>>,
         direction: Direction,
         op: F,
     ) -> Self {
         Self {
             ctx,
             fd,
-            cached,
             direction,
             op,
             registration: None,
@@ -92,12 +83,10 @@ impl<
                 }
                 registration
             }
-            None => {
-                match IoRegistration::new(this.ctx, this.fd.as_fd(), this.cached, this.direction) {
-                    Ok(registration) => this.registration.insert(registration),
-                    Err(err) => return Poll::Ready(Err(err.into())),
-                }
-            }
+            None => match IoRegistration::new(this.ctx, this.fd.as_fd(), this.direction) {
+                Ok(registration) => this.registration.insert(registration),
+                Err(err) => return Poll::Ready(Err(err.into())),
+            },
         };
         loop {
             match (this.op)(this.fd) {

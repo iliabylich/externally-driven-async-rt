@@ -20,9 +20,7 @@ pub use self::{
     frame_reader::{FrameReader, FrameReaderError},
     frame_writer::{FrameWriter, FrameWriterError},
 };
-pub(crate) use self::{
-    io_registration::IoRegistration, io_waiter::IoIndex, io_waiters::IoWaiters, wait::Wait,
-};
+pub(crate) use self::{io_registration::IoRegistration, io_waiters::IoWaiters, wait::Wait};
 
 #[cfg(test)]
 mod tests;
