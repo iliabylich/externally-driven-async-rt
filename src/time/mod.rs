@@ -1,6 +1,5 @@
 mod instant;
 mod sleep;
-mod timer_entry;
 mod timers;
 mod timers_full_error;
 
