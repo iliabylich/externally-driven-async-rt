@@ -1,11 +1,10 @@
 use rustix::fd::RawFd;
 
-use crate::{
-    const_unreachable::const_unreachable,
-    data::{
-        fd_tree::{Entry, FdTree},
-        pool::{ObjectPool, VersionedIndex},
-    },
+use crate::const_unreachable::const_unreachable;
+
+use super::{
+    fd_tree::{Entry, FdTree},
+    pool::{ObjectPool, VersionedIndex},
 };
 
 #[must_use]

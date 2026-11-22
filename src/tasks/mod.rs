@@ -138,9 +138,9 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         RootStatus::Finished
     }
 
-    fn run_task(&'static self, slot: u32) {
-        let (id, entry) = self.pool.get(slot);
-        let waker = self.queue.waker(slot);
+    fn run_task(&'static self, idx: u32) {
+        let (id, entry) = self.pool.get(idx);
+        let waker = self.queue.waker(idx);
         let mut cx = core::task::Context::from_waker(&waker);
         let Some(Poll::Ready(task)) = entry.poll(&mut cx) else {
             return;
