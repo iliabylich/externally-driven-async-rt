@@ -1,7 +1,7 @@
 use crate::{
     claimed::Claimed,
     context::Context,
-    event_queue::EventQueue,
+    data::ring_buffer::RingBuffer,
     io::IoWaiters,
     notify::Notification,
     selector::Selector,
@@ -26,7 +26,7 @@ pub struct LoopStorage<
     pub(crate) io_waiters: IoWaiters<FDS>,
     pub(crate) tasks: Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
     pub(crate) notification: Notification,
-    pub(crate) events: EventQueue<E, EVENTS>,
+    pub(crate) events: RingBuffer<E, EVENTS>,
 }
 
 // SAFETY: a storage has no public methods, so other threads can only pass `&LoopStorage` around.
@@ -64,7 +64,7 @@ impl<
             io_waiters: IoWaiters::new(),
             tasks: Tasks::new(),
             notification: Notification::new(),
-            events: EventQueue::new(),
+            events: RingBuffer::new(),
         }
     }
 
