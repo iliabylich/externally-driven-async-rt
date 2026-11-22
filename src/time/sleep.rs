@@ -34,7 +34,7 @@ impl<const TIMERS: usize> Future for Sleep<'_, TIMERS> {
             return Poll::Ready(Ok(()));
         }
         match self.timer {
-            Some((_, timer)) => timer.set_waker(cx.waker()),
+            Some((index, timer)) => self.timers.set_waker(index, timer, cx.waker()),
             None => match self.timers.alloc(self.deadline, cx.waker()) {
                 Ok(timer) => self.timer = Some(timer),
                 Err(err) => return Poll::Ready(Err(err)),

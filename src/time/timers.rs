@@ -2,7 +2,7 @@ use core::{cell::Cell, task::Waker};
 
 use crate::{
     const_unreachable::const_unreachable,
-    data::pool::ObjectPool,
+    data::{indexed_min_heap::IndexedMinHeap, pool::ObjectPool},
     time::{
         Instant, TimersFullError,
         timer_entry::{TimerEntry, TimerIndex},
@@ -12,6 +12,7 @@ use crate::{
 #[must_use]
 pub(crate) struct Timers<const N: usize> {
     pool: ObjectPool<TimerEntry, N>,
+    armed: IndexedMinHeap<(Instant, u64), N>,
     next_seq: Cell<u64>,
 }
 
@@ -19,6 +20,7 @@ impl<const N: usize> Timers<N> {
     pub(crate) const fn new() -> Self {
         Self {
             pool: ObjectPool::new([const { TimerEntry::new() }; N]),
+            armed: IndexedMinHeap::new(),
             next_seq: Cell::new(0),
         }
     }
@@ -32,7 +34,15 @@ impl<const N: usize> Timers<N> {
         let seq = self.next_seq.get();
         self.next_seq.set(seq.wrapping_add(1));
         timer.arm(deadline, seq, waker);
+        self.armed.insert(index.idx, (deadline, seq));
         Ok((index, timer))
+    }
+
+    pub(crate) fn set_waker(&self, index: TimerIndex, timer: &TimerEntry, waker: &Waker) {
+        timer.set_waker(waker);
+        if !self.armed.contains(index.idx) {
+            self.armed.insert(index.idx, timer.expiry());
+        }
     }
 
     pub(crate) fn release(&self, index: TimerIndex) {
@@ -47,6 +57,9 @@ impl<const N: usize> Timers<N> {
             );
         }
         timer.take_waker();
+        if self.armed.contains(index.idx) {
+            self.armed.remove(index.idx);
+        }
         self.pool.free(index);
     }
 
@@ -54,23 +67,25 @@ impl<const N: usize> Timers<N> {
         for (_, timer) in self.pool.iter() {
             timer.take_waker();
         }
+        self.armed.clear();
     }
 
     pub(crate) fn next_deadline(&self) -> Option<Instant> {
-        self.pool
-            .iter()
-            .filter(|(_, timer)| timer.has_waker())
-            .map(|(_, timer)| timer.deadline())
-            .min()
+        let (_, (deadline, _)) = self.armed.peek()?;
+        Some(deadline)
     }
 
     pub(crate) fn take_expired(&self, now: Instant) -> Option<Waker> {
-        let (_, timer) = self
-            .pool
-            .iter()
-            .filter(|(_, timer)| timer.has_waker() && timer.deadline() <= now)
-            .min_by_key(|(_, timer)| timer.expiry())?;
-        timer.take_waker()
+        let (slot, (deadline, _)) = self.armed.peek()?;
+        if deadline > now {
+            return None;
+        }
+        self.armed.remove(slot);
+        let (_, timer) = self.pool.get(slot);
+        let Some(waker) = timer.take_waker() else {
+            const_unreachable!("armed timer {} has no waker", slot);
+        };
+        Some(waker)
     }
 }
 
@@ -193,8 +208,8 @@ mod tests {
         static WAKERS: WakeQueue<8> = WakeQueue::new();
         let now = Instant::now();
         let timers = &Timers::<1>::new();
-        let (_, timer) = timers.alloc(now, &WAKERS.waker(1)).unwrap();
-        timer.set_waker(&WAKERS.waker(2));
+        let (index, timer) = timers.alloc(now, &WAKERS.waker(1)).unwrap();
+        timers.set_waker(index, timer, &WAKERS.waker(2));
         assert_expires(timers, &WAKERS, now, [2]);
     }
 

@@ -24,10 +24,6 @@ impl TimerEntry {
         self.waker.store(waker);
     }
 
-    pub(crate) const fn deadline(&self) -> Instant {
-        self.deadline.get()
-    }
-
     pub(crate) const fn expiry(&self) -> (Instant, u64) {
         (self.deadline.get(), self.seq.get())
     }
@@ -38,10 +34,6 @@ impl TimerEntry {
 
     pub(crate) const fn take_waker(&self) -> Option<Waker> {
         self.waker.take()
-    }
-
-    pub(crate) const fn has_waker(&self) -> bool {
-        self.waker.is_set()
     }
 }
 
