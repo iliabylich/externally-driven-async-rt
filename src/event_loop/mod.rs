@@ -1,6 +1,6 @@
 mod error;
 
-use rustix::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
+use rustix::fd::{AsFd, BorrowedFd};
 
 pub use self::error::Error;
 
@@ -143,21 +143,6 @@ impl<
 {
     fn as_fd(&self) -> BorrowedFd<'_> {
         self.ctx.selector.as_fd()
-    }
-}
-
-impl<
-    E: 'static,
-    const EVENTS: usize,
-    const TASKS: usize,
-    const TASK_SIZE: usize,
-    const ROOT_TASK_SIZE: usize,
-    const TIMERS: usize,
-    const FDS: usize,
-> AsRawFd for EventLoop<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
-{
-    fn as_raw_fd(&self) -> RawFd {
-        self.as_fd().as_raw_fd()
     }
 }
 

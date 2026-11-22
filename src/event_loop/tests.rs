@@ -5,7 +5,10 @@ use core::{
     task::Poll,
 };
 
-use rustix::{fd::AsRawFd, io::Errno};
+use rustix::{
+    fd::{AsFd, AsRawFd},
+    io::Errno,
+};
 
 use crate::{
     Error, EventLoop, LoopStorage, Selector, TasksFullError,
@@ -368,7 +371,7 @@ fn loop_exposes_the_selector_fd() {
         async |_| pending().await,
     )
     .unwrap();
-    assert_eq!(event_loop.as_raw_fd(), fd);
+    assert_eq!(event_loop.as_fd().as_raw_fd(), fd);
 }
 
 #[test]
