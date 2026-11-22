@@ -1,6 +1,6 @@
 use core::{cell::Cell, task::Waker};
 
-use crate::{pool::VersionedIndex, time::Instant, waker_slot::WakerSlot};
+use crate::{data::pool::VersionedIndex, time::Instant, waker_slot::WakerSlot};
 
 #[must_use]
 pub(crate) struct TimerEntry {

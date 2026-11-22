@@ -1,7 +1,7 @@
 use crate::conversions::u32_to_usize;
 use core::cell::Cell;
 
-pub(crate) struct Slot {
+pub(super) struct Slot {
     used: Cell<bool>,
     version: Cell<u16>,
     prev: Cell<Option<u32>>,
@@ -18,7 +18,7 @@ impl Slot {
         }
     }
 
-    pub(crate) const fn version(&self) -> u16 {
+    pub(super) const fn version(&self) -> u16 {
         self.version.get()
     }
 
@@ -30,7 +30,7 @@ impl Slot {
         self.version.get()
     }
 
-    pub(crate) const fn const_list<const N: usize>() -> [Self; N] {
+    pub(super) const fn const_list<const N: usize>() -> [Self; N] {
         const {
             let slots = [const { Self::new() }; N];
             let mut left_idx = 0u32;
@@ -46,14 +46,14 @@ impl Slot {
     }
 }
 
-pub(crate) struct SlotView<'a, T> {
-    pub(crate) idx: u32,
-    pub(crate) slot: &'a Slot,
-    pub(crate) value: &'a T,
+pub(super) struct SlotView<'a, T> {
+    pub(super) idx: u32,
+    pub(super) slot: &'a Slot,
+    pub(super) value: &'a T,
 }
 
 impl<'a, T> SlotView<'a, T> {
-    pub(crate) const fn free(self) -> Option<FreeSlotView<'a, T>> {
+    pub(super) const fn free(self) -> Option<FreeSlotView<'a, T>> {
         let Self { idx, slot, value } = self;
         if slot.used.get() {
             return None;
@@ -61,7 +61,7 @@ impl<'a, T> SlotView<'a, T> {
         Some(FreeSlotView { idx, value, slot })
     }
 
-    pub(crate) const fn used(self) -> Option<UsedSlotView<'a, T>> {
+    pub(super) const fn used(self) -> Option<UsedSlotView<'a, T>> {
         let Self { idx, slot, value } = self;
         if !slot.used.get() {
             return None;
@@ -70,24 +70,24 @@ impl<'a, T> SlotView<'a, T> {
     }
 }
 
-pub(crate) struct FreeSlotView<'a, T> {
-    pub(crate) idx: u32,
-    pub(crate) value: &'a T,
-    pub(crate) slot: &'a Slot,
+pub(super) struct FreeSlotView<'a, T> {
+    pub(super) idx: u32,
+    pub(super) value: &'a T,
+    pub(super) slot: &'a Slot,
 }
 
 impl<'a, T> FreeSlotView<'a, T> {
-    pub(crate) const fn occupy(self) -> UsedSlotView<'a, T> {
+    pub(super) const fn occupy(self) -> UsedSlotView<'a, T> {
         self.slot.reset(true);
         let Self { idx, slot, value } = self;
         UsedSlotView { idx, value, slot }
     }
 
-    pub(crate) const fn next(&self) -> Option<u32> {
+    pub(super) const fn next(&self) -> Option<u32> {
         self.slot.next.get()
     }
 
-    pub(crate) const fn link(prev: &Self, next: Option<&Self>) {
+    pub(super) const fn link(prev: &Self, next: Option<&Self>) {
         let next_idx = match next {
             Some(next) => Some(next.idx),
             None => None,
@@ -96,14 +96,14 @@ impl<'a, T> FreeSlotView<'a, T> {
     }
 }
 
-pub(crate) struct UsedSlotView<'a, T> {
-    pub(crate) idx: u32,
-    pub(crate) value: &'a T,
-    pub(crate) slot: &'a Slot,
+pub(super) struct UsedSlotView<'a, T> {
+    pub(super) idx: u32,
+    pub(super) value: &'a T,
+    pub(super) slot: &'a Slot,
 }
 
 impl<'a, T> UsedSlotView<'a, T> {
-    pub(crate) const fn free(self) -> FreeSlotView<'a, T> {
+    pub(super) const fn free(self) -> FreeSlotView<'a, T> {
         self.slot.reset(false);
 
         FreeSlotView {
@@ -112,7 +112,7 @@ impl<'a, T> UsedSlotView<'a, T> {
             slot: self.slot,
         }
     }
-    pub(crate) const fn link(prev: Option<&Self>, next: Option<&Self>) {
+    pub(super) const fn link(prev: Option<&Self>, next: Option<&Self>) {
         let prev_idx = match prev {
             Some(prev) => Some(prev.idx),
             None => None,
@@ -129,11 +129,11 @@ impl<'a, T> UsedSlotView<'a, T> {
         }
     }
 
-    pub(crate) const fn prev(&self) -> Option<u32> {
+    pub(super) const fn prev(&self) -> Option<u32> {
         self.slot.prev.get()
     }
 
-    pub(crate) const fn next(&self) -> Option<u32> {
+    pub(super) const fn next(&self) -> Option<u32> {
         self.slot.next.get()
     }
 }

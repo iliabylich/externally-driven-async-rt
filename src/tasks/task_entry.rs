@@ -8,7 +8,7 @@ use crate::{
     claimed::Claimed,
     const_default::ConstDefault,
     const_unreachable::const_unreachable,
-    pool::VersionedIndex,
+    data::pool::VersionedIndex,
     tasks::{Task, TaskMemory, TaskSlot},
     waker_slot::WakerSlot,
 };

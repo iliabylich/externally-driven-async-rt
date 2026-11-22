@@ -24,7 +24,7 @@ pub(crate) use self::{
     wake_queue::{RootSlot, WakeQueue, Woken},
 };
 use self::{task_memory::TaskMemory, task_slot::TaskSlot};
-use crate::{claimed::Claimed, pool::ObjectPool, waker_slot::WakerSlot};
+use crate::{claimed::Claimed, data::pool::ObjectPool, waker_slot::WakerSlot};
 
 #[must_use]
 pub(crate) struct Tasks<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> {

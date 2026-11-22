@@ -1,5 +1,5 @@
 use crate::{
-    pool::{ObjectPool, VersionedIndex},
+    data::pool::{ObjectPool, VersionedIndex},
     testing::assert_yields,
 };
 use core::cell::Cell;

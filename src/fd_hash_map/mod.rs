@@ -5,7 +5,7 @@ use rustix::fd::RawFd;
 use self::tree::{Entry, Tree};
 use crate::{
     const_unreachable::const_unreachable,
-    pool::{ObjectPool, VersionedIndex},
+    data::pool::{ObjectPool, VersionedIndex},
 };
 
 #[must_use]

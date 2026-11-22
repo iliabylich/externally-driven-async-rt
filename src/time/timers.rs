@@ -2,7 +2,7 @@ use core::{cell::Cell, task::Waker};
 
 use crate::{
     const_unreachable::const_unreachable,
-    pool::ObjectPool,
+    data::pool::ObjectPool,
     time::{
         Instant, TimersFullError,
         timer_entry::{TimerEntry, TimerIndex},
