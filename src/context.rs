@@ -7,7 +7,7 @@ use crate::{
     selector::{EVENTS_PER_CALL, Selector, SelectorEvent},
     storage::LoopStorage,
     tasks::{SlotWaiterTakenError, TaskReservation, TasksFullError},
-    time::{Instant, Sleep, TimersFullError},
+    time::{Instant, TimersFullError},
 };
 
 /// A handle of the event loop that you are currently in.
@@ -119,11 +119,14 @@ impl<
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub fn sleep(&self, duration: Duration) -> Sleep<'_, TIMERS> {
-        Sleep::new(
-            &self.storage.timers,
-            Instant::now().saturating_add(duration),
-        )
+    pub fn sleep(
+        &self,
+        duration: Duration,
+    ) -> impl Future<Output = Result<(), TimersFullError>>
+    + use<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
+        self.storage
+            .timers
+            .sleep_until(Instant::now().saturating_add(duration))
     }
 
     /// Runs `future` with a timeout of `duration`, resolves to `Ok(None)` in case of a timeout.
@@ -160,7 +163,10 @@ impl<
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub fn notified(&self) -> impl Future<Output = ()> + '_ {
+    pub fn notified(
+        &self,
+    ) -> impl Future<Output = ()> + use<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+    {
         self.storage.notification.notified()
     }
 

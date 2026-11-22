@@ -79,7 +79,7 @@ fn notification_without_a_waiter_is_kept() {
         STORAGE.claim(&selector).unwrap()
     };
     ctx.storage.tasks.spawn_root(root, ctx.claimed, async move {
-        ctx.sleep(Duration::from_millis(1)).await.unwrap();
+        ctx.sleep(Duration::from_millis(10)).await.unwrap();
         ctx.dispatch(1).unwrap();
         ctx.notified().await;
         ctx.dispatch(2).unwrap();
@@ -91,7 +91,7 @@ fn notification_without_a_waiter_is_kept() {
     assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
     assert_yields!(ctx.storage.events.iter_removing(), []);
 
-    sleep_blocking(Duration::from_millis(1));
+    sleep_blocking(Duration::from_millis(10));
     wake_expired_timers(&ctx.storage.timers);
     assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
     assert_yields!(ctx.storage.events.iter_removing(), [1, 2]);

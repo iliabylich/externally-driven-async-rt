@@ -1,10 +1,9 @@
 mod instant;
-mod sleep;
 mod timers;
 mod timers_full_error;
 
 #[cfg(test)]
 mod tests;
 
+pub use self::timers_full_error::TimersFullError;
 pub(crate) use self::{instant::Instant, timers::Timers};
-pub use self::{sleep::Sleep, timers_full_error::TimersFullError};

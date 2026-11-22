@@ -1,4 +1,4 @@
-/// An error returned from [`Sleep`](crate::Sleep) and
+/// An error returned from [`Context::sleep`](crate::Context::sleep) and
 /// [`Context::timeout`](crate::Context::timeout) when all `TIMERS` timer slots are taken.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimersFullError;

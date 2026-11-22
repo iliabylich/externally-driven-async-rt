@@ -1,4 +1,8 @@
-use core::{cell::Cell, task::Waker};
+use core::{
+    cell::Cell,
+    mem::DropGuard,
+    task::{Poll, Waker},
+};
 
 use crate::{
     const_unreachable::const_unreachable,
@@ -63,6 +67,25 @@ impl<const N: usize> Timers<N> {
         timer.waker.store(waker);
         self.armed.insert(index.idx, (deadline, seq));
         Ok(index)
+    }
+
+    pub(crate) async fn sleep_until(&self, deadline: Instant) -> Result<(), TimersFullError> {
+        if Instant::now() >= deadline {
+            return Ok(());
+        }
+        let index =
+            core::future::poll_fn(|cx| Poll::Ready(self.alloc(deadline, cx.waker()))).await?;
+        let guard = DropGuard::new(index, |index| self.release(index));
+        core::future::poll_fn(|cx| {
+            if Instant::now() >= deadline {
+                return Poll::Ready(());
+            }
+            self.set_waker(index, cx.waker());
+            Poll::Pending
+        })
+        .await;
+        drop(guard);
+        Ok(())
     }
 
     pub(crate) fn set_waker(&self, index: TimerIndex, waker: &Waker) {
