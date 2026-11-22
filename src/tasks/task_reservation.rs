@@ -72,13 +72,13 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> Dr
 mod tests {
     use core::{
         future::{Future, pending},
-        pin::{Pin, pin},
+        pin::pin,
         sync::atomic::{AtomicBool, Ordering::Relaxed},
         task::{Context, Poll, Waker},
     };
 
     use crate::{
-        tasks::{ReserveTask, TaskReservation, TasksFullError},
+        tasks::{TaskReservation, TasksFullError},
         testing::{TasksStorage, claimed_forever, spawn_static},
     };
 
@@ -107,13 +107,13 @@ mod tests {
         let _ = tasks.run_ready();
         let (id, entry) = tasks.pool.alloc().unwrap();
         let reservation = TaskReservation::new(tasks, claimed_forever(), id, entry);
-        let mut reserve = ReserveTask::new(tasks, claimed_forever());
+        let mut reserve = pin!(tasks.reserve(claimed_forever()));
         let waker = tasks.queue.waker(waiter.idx);
         let mut cx = Context::from_waker(&waker);
-        assert!(Pin::new(&mut reserve).poll(&mut cx).is_pending());
+        assert!(reserve.as_mut().poll(&mut cx).is_pending());
         drop(reservation);
         assert!(!tasks.queue.is_empty());
-        assert!(Pin::new(&mut reserve).poll(&mut cx).is_ready());
+        assert!(reserve.as_mut().poll(&mut cx).is_ready());
     }
 
     #[test]

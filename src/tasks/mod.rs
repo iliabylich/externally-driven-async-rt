@@ -1,4 +1,3 @@
-mod reserve_task;
 mod root_status;
 mod slot_waiter_taken_error;
 mod task_entry;
@@ -13,14 +12,14 @@ use core::{
 };
 
 use self::task_slot::TaskSlot;
-pub use self::{
-    reserve_task::ReserveTask, slot_waiter_taken_error::SlotWaiterTakenError,
-    task_reservation::TaskReservation, tasks_full_error::TasksFullError,
-};
 pub(crate) use self::{
     root_status::RootStatus,
     task_entry::{TaskEntry, TaskId},
     wake_queue::{RootSlot, WakeQueue, Woken},
+};
+pub use self::{
+    slot_waiter_taken_error::SlotWaiterTakenError, task_reservation::TaskReservation,
+    tasks_full_error::TasksFullError,
 };
 use crate::{claimed::Claimed, data::pool::ObjectPool, waker_slot::WakerSlot};
 
@@ -64,6 +63,31 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         let guard = DropGuard::new(self, |tasks: &Self| tasks.clear_join_waiter(id));
         core::future::poll_fn(|cx| self.set_join_waiter(id, cx.waker())).await;
         DropGuard::dismiss(guard);
+    }
+
+    pub(crate) async fn reserve<'a>(
+        &'static self,
+        claimed: Claimed<'a>,
+    ) -> Result<TaskReservation<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>, SlotWaiterTakenError> {
+        if let Some((id, entry)) = self.pool.alloc() {
+            return Ok(TaskReservation::new(self, claimed, id, entry));
+        }
+        if self.slot_waiter.is_set() {
+            return Err(SlotWaiterTakenError);
+        }
+        let guard = DropGuard::new(self, |tasks: &Self| {
+            tasks.slot_waiter.take();
+        });
+        let (id, entry) = core::future::poll_fn(|cx| {
+            if let Some(allocated) = self.pool.alloc() {
+                return Poll::Ready(allocated);
+            }
+            self.slot_waiter.store(cx.waker());
+            Poll::Pending
+        })
+        .await;
+        drop(guard);
+        Ok(TaskReservation::new(self, claimed, id, entry))
     }
 
     pub(crate) fn spawn<'a, Fut>(

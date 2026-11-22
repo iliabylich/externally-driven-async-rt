@@ -6,7 +6,7 @@ use crate::{
     select2,
     selector::{EVENTS_PER_CALL, Selector, SelectorEvent},
     storage::LoopStorage,
-    tasks::{ReserveTask, TasksFullError},
+    tasks::{SlotWaiterTakenError, TaskReservation, TasksFullError},
     time::{Instant, Sleep, TimersFullError},
 };
 
@@ -99,8 +99,15 @@ impl<
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub const fn reserve_task(&self) -> ReserveTask<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE> {
-        ReserveTask::new(&self.storage.tasks, self.claimed)
+    pub fn reserve_task(
+        &self,
+    ) -> impl Future<
+        Output = Result<
+            TaskReservation<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
+            SlotWaiterTakenError,
+        >,
+    > + use<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
+        self.storage.tasks.reserve(self.claimed)
     }
 
     /// Sleeps for `duration`.

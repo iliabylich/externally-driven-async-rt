@@ -8,10 +8,10 @@ use core::{
 
 use crate::{
     Selector,
-    tasks::{RootStatus, TaskId, Tasks},
+    tasks::{RootStatus, SlotWaiterTakenError, TaskId, Tasks},
     testing::{
         FixedFuture, FlagOnDrop, TasksStorage, TestLoop, TestStorage, assert_yields,
-        counting_waker, spawn_reserved_static, spawn_root_static, spawn_static,
+        claimed_forever, counting_waker, spawn_reserved_static, spawn_root_static, spawn_static,
     },
 };
 
@@ -406,4 +406,36 @@ fn spawned_task_can_spawn_and_join() {
     )
     .unwrap();
     assert_yields!(event_loop.events(), [1, 2, 3]);
+}
+
+#[test]
+fn reserve_waits_until_a_task_finishes() {
+    static STORAGE: Storage<1> = Storage::new();
+    let tasks = &STORAGE.tasks;
+    let mut cx = Context::from_waker(Waker::noop());
+    let _ = spawn_static(tasks, async {}).unwrap();
+    let mut reserve = pin!(tasks.reserve(claimed_forever()));
+    assert!(reserve.as_mut().poll(&mut cx).is_pending());
+    assert!(tasks.slot_waiter.is_set());
+    let _ = tasks.run_ready();
+    assert!(reserve.as_mut().poll(&mut cx).is_ready());
+    assert!(!tasks.slot_waiter.is_set());
+}
+
+#[test]
+fn a_second_reserve_gets_an_error() {
+    static STORAGE: Storage<1> = Storage::new();
+    let tasks = &STORAGE.tasks;
+    let mut cx = Context::from_waker(Waker::noop());
+    let _ = spawn_static(tasks, async {}).unwrap();
+    let mut first = pin!(tasks.reserve(claimed_forever()));
+    let mut second = pin!(tasks.reserve(claimed_forever()));
+    assert!(first.as_mut().poll(&mut cx).is_pending());
+    assert!(matches!(
+        second.as_mut().poll(&mut cx),
+        Poll::Ready(Err(SlotWaiterTakenError))
+    ));
+    assert!(tasks.slot_waiter.is_set());
+    let _ = tasks.run_ready();
+    assert!(first.as_mut().poll(&mut cx).is_ready());
 }

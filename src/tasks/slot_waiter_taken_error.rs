@@ -1,5 +1,5 @@
-/// An error returned from [`ReserveTask`](crate::ReserveTask) when all `TASKS` task slots are
-/// taken and another task already waits for a free one.
+/// An error returned from [`Context::reserve_task`](crate::Context::reserve_task) when all `TASKS`
+/// task slots are taken and another task already waits for a free one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlotWaiterTakenError;
 
