@@ -90,6 +90,6 @@ impl<
     }
 
     fn registrations(&self) -> usize {
-        self.ctx.storage.io_waiters.count()
+        self.ctx.storage.io_waiters.iter().count()
     }
 }

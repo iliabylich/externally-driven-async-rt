@@ -228,7 +228,7 @@ fn changes_and_events_beyond_one_batch_are_all_delivered() {
     selector
         .flush(
             arm_first(fds.len()),
-            Some(Instant::now() + Duration::from_secs(10)),
+            Some(Instant::now().saturating_add(Duration::from_secs(10))),
         )
         .unwrap();
     assert_eq!(events(&selector).count(), fds.len());
@@ -240,7 +240,7 @@ fn timer_fires_after_flush() {
     let selector = Selector::new().unwrap();
     let start = Instant::now();
     selector
-        .flush([], Some(start + Duration::from_millis(20)))
+        .flush([], Some(start.saturating_add(Duration::from_millis(20))))
         .unwrap();
     assert!(selector.as_fd().wait_readable_blocking(500));
     assert!(Instant::now().saturating_duration_since(start) >= Duration::from_millis(20));
@@ -253,7 +253,10 @@ fn timer_fires_after_flush() {
 fn disarm_prevents_firing() {
     let selector = Selector::new().unwrap();
     selector
-        .flush([], Some(Instant::now() + Duration::from_millis(10)))
+        .flush(
+            [],
+            Some(Instant::now().saturating_add(Duration::from_millis(10))),
+        )
         .unwrap();
     selector.flush([], None).unwrap();
     assert!(!selector.as_fd().wait_readable_blocking(50));

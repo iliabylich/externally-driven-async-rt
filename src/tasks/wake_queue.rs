@@ -7,7 +7,6 @@ use core::{
 
 use crate::{
     conversions::u32_to_usize, helpers::element, panic_message::const_unreachable, sys::ThreadId,
-    tasks::RootSlot,
 };
 
 const NONE: u32 = u32::MAX;
@@ -41,6 +40,15 @@ pub(crate) struct Link {
 pub(crate) enum Woken {
     Root,
     Task(u32),
+}
+
+#[must_use]
+pub(crate) struct RootSlot(());
+
+impl RootSlot {
+    const fn new() -> Self {
+        Self(())
+    }
 }
 
 // SAFETY: `owner` is atomic, so concurrent `claim`s agree on a single owner thread. Every other
@@ -188,11 +196,6 @@ impl<const N: usize> WakeQueue<N> {
             .find(|&id| waker.data() == self.waker(id).data())
             .expect("the waker comes from `waker`")
     }
-
-    #[cfg(test)]
-    fn iter(&self) -> impl Iterator<Item = Woken> {
-        core::iter::from_fn(|| self.pop())
-    }
 }
 
 fn vtable<const N: usize>() -> &'static RawWakerVTable {
@@ -229,10 +232,8 @@ const fn drop_waker(_: *const ()) {}
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        tasks::{WakeQueue, Woken},
-        testing::assert_yields,
-    };
+    use super::{WakeQueue, Woken};
+    use crate::testing::assert_yields;
 
     #[test]
     fn pops_in_push_order() {
@@ -242,7 +243,7 @@ mod tests {
         }
         assert!(!queue.is_empty());
         assert_yields!(
-            queue.iter(),
+            core::iter::from_fn(|| queue.pop()),
             [Woken::Task(2), Woken::Task(0), Woken::Task(3)]
         );
         assert!(queue.is_empty());
@@ -254,9 +255,12 @@ mod tests {
         queue.push(0);
         queue.push(1);
         queue.push(0);
-        assert_yields!(queue.iter(), [Woken::Task(0), Woken::Task(1)]);
+        assert_yields!(
+            core::iter::from_fn(|| queue.pop()),
+            [Woken::Task(0), Woken::Task(1)]
+        );
         queue.push(0);
-        assert_yields!(queue.iter(), [Woken::Task(0)]);
+        assert_yields!(core::iter::from_fn(|| queue.pop()), [Woken::Task(0)]);
     }
 
     #[test]
@@ -266,7 +270,10 @@ mod tests {
         queue.push(1);
         assert_eq!(queue.pop(), Some(Woken::Task(0)));
         queue.push(0);
-        assert_yields!(queue.iter(), [Woken::Task(1), Woken::Task(0)]);
+        assert_yields!(
+            core::iter::from_fn(|| queue.pop()),
+            [Woken::Task(1), Woken::Task(0)]
+        );
     }
 
     #[test]
@@ -275,11 +282,11 @@ mod tests {
         assert!(QUEUE.claim().is_some());
         let waker = QUEUE.waker(1);
         waker.wake_by_ref();
-        assert_yields!(QUEUE.iter(), [Woken::Task(1)]);
+        assert_yields!(core::iter::from_fn(|| QUEUE.pop()), [Woken::Task(1)]);
         let clone = waker.clone();
         drop(waker);
         clone.wake();
-        assert_yields!(QUEUE.iter(), [Woken::Task(1)]);
+        assert_yields!(core::iter::from_fn(|| QUEUE.pop()), [Woken::Task(1)]);
     }
 
     #[test]
@@ -290,7 +297,7 @@ mod tests {
         waker.wake_by_ref();
         waker.wake_by_ref();
         waker.wake();
-        assert_yields!(QUEUE.iter(), [Woken::Task(0)]);
+        assert_yields!(core::iter::from_fn(|| QUEUE.pop()), [Woken::Task(0)]);
     }
 
     #[test]
@@ -302,7 +309,7 @@ mod tests {
         waker.wake_by_ref();
         assert_eq!(QUEUE.pop(), Some(Woken::Task(1)));
         waker.wake();
-        assert_yields!(QUEUE.iter(), [Woken::Task(0)]);
+        assert_yields!(core::iter::from_fn(|| QUEUE.pop()), [Woken::Task(0)]);
     }
 
     #[test]
@@ -333,6 +340,9 @@ mod tests {
         let clone = root.clone();
         drop(root);
         clone.wake();
-        assert_yields!(QUEUE.iter(), [Woken::Task(1), Woken::Root, Woken::Task(0)]);
+        assert_yields!(
+            core::iter::from_fn(|| QUEUE.pop()),
+            [Woken::Task(1), Woken::Root, Woken::Task(0)]
+        );
     }
 }

@@ -62,7 +62,7 @@ impl<E, const N: usize> EventQueue<E, N> {
         if next == N { 0 } else { next }
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = E> {
+    pub(crate) fn iter_removing(&self) -> impl Iterator<Item = E> {
         core::iter::from_fn(|| self.pop())
     }
 }
@@ -79,7 +79,7 @@ mod tests {
         assert_eq!(queue.push(1), Ok(()));
         assert_eq!(queue.push(2), Ok(()));
         assert_eq!(queue.push(3), Ok(()));
-        assert_yields!(queue.iter(), [1, 2, 3]);
+        assert_yields!(queue.iter_removing(), [1, 2, 3]);
     }
 
     #[test]
@@ -88,7 +88,7 @@ mod tests {
         assert_eq!(queue.push(1), Ok(()));
         assert_eq!(queue.push(2), Ok(()));
         assert_eq!(queue.push(3), Err(3));
-        assert_yields!(queue.iter(), [1, 2]);
+        assert_yields!(queue.iter_removing(), [1, 2]);
     }
 
     #[test]
@@ -99,7 +99,7 @@ mod tests {
         assert_eq!(queue.pop(), Some(1));
         assert_eq!(queue.push(3), Ok(()));
         assert_eq!(queue.push(4), Err(4));
-        assert_yields!(queue.iter(), [2, 3]);
+        assert_yields!(queue.iter_removing(), [2, 3]);
     }
 
     #[test]
@@ -108,6 +108,6 @@ mod tests {
         assert_eq!(queue.push(()), Ok(()));
         assert_eq!(queue.push(()), Ok(()));
         assert_eq!(queue.push(()), Err(()));
-        assert_yields!(queue.iter(), [(), ()]);
+        assert_yields!(queue.iter_removing(), [(), ()]);
     }
 }

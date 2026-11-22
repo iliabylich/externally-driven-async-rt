@@ -52,7 +52,7 @@ mod tests {
         let now = Instant::now();
         assert_eq!(
             KernelTimer::Disarmed
-                .flush(Some(now + ms(20)), now + ms(5))
+                .flush(Some(now.saturating_add(ms(20))), now.saturating_add(ms(5)))
                 .1,
             Some(TimerChange::Arm(ms(15)))
         );
@@ -62,7 +62,9 @@ mod tests {
     fn past_deadline_arms_immediately() {
         let now = Instant::now();
         assert_eq!(
-            KernelTimer::Disarmed.flush(Some(now), now + ms(5)).1,
+            KernelTimer::Disarmed
+                .flush(Some(now), now.saturating_add(ms(5)))
+                .1,
             Some(TimerChange::Arm(ms(0)))
         );
     }
@@ -70,16 +72,16 @@ mod tests {
     #[test]
     fn same_deadline_is_not_rearmed() {
         let now = Instant::now();
-        let (timer, _) = KernelTimer::Disarmed.flush(Some(now + ms(20)), now);
-        assert_eq!(timer.flush(Some(now + ms(20)), now).1, None);
+        let (timer, _) = KernelTimer::Disarmed.flush(Some(now.saturating_add(ms(20))), now);
+        assert_eq!(timer.flush(Some(now.saturating_add(ms(20))), now).1, None);
     }
 
     #[test]
     fn new_deadline_rearms() {
         let now = Instant::now();
-        let (timer, _) = KernelTimer::Disarmed.flush(Some(now + ms(20)), now);
+        let (timer, _) = KernelTimer::Disarmed.flush(Some(now.saturating_add(ms(20))), now);
         assert_eq!(
-            timer.flush(Some(now + ms(10)), now).1,
+            timer.flush(Some(now.saturating_add(ms(10))), now).1,
             Some(TimerChange::Arm(ms(10)))
         );
     }
@@ -87,7 +89,7 @@ mod tests {
     #[test]
     fn disarm_when_armed() {
         let now = Instant::now();
-        let (timer, _) = KernelTimer::Disarmed.flush(Some(now + ms(1)), now);
+        let (timer, _) = KernelTimer::Disarmed.flush(Some(now.saturating_add(ms(1))), now);
         assert_eq!(timer.flush(None, now).1, Some(TimerChange::Disarm));
     }
 }

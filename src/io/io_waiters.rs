@@ -47,24 +47,23 @@ impl<const N: usize> IoWaiters<N> {
     }
 
     pub(crate) fn pending_changes(&self) -> impl Iterator<Item = IoChange> + '_ {
-        self.map.iter().filter_map(|(fd, io)| io.pending_change(fd))
+        self.iter().filter_map(|(fd, io)| io.pending_change(fd))
     }
 
     pub(crate) fn mark_flushed(&self) {
-        for (_, io) in self.map.iter() {
+        for (_, io) in self.iter() {
             io.mark_flushed();
         }
     }
 
     pub(crate) fn drop_wakers(&self) {
-        for (_, io) in self.map.iter() {
+        for (_, io) in self.iter() {
             io.drop_wakers();
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn count(&self) -> usize {
-        self.map.iter().count()
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (RawFd, &IoWaiter)> {
+        self.map.iter()
     }
 }
 
@@ -99,9 +98,9 @@ mod tests {
         assert!(io.waker(Direction::Write).is_set());
         assert_eq!(io_waiters.release(3, Direction::Write), None);
         assert!(!io.waker(Direction::Write).is_set());
-        assert_eq!(io_waiters.count(), 0);
+        assert_eq!(io_waiters.iter().count(), 0);
         io_waiters.register(3, Direction::Read).unwrap();
-        assert_eq!(io_waiters.count(), 1);
+        assert_eq!(io_waiters.iter().count(), 1);
     }
 
     #[test]
@@ -112,7 +111,7 @@ mod tests {
         let io = io_waiters.register(3, Direction::Read).unwrap();
         assert!(!io.waker(Direction::Read).is_set());
         assert_eq!(io_waiters.release(3, Direction::Read), None);
-        assert_eq!(io_waiters.count(), 0);
+        assert_eq!(io_waiters.iter().count(), 0);
     }
 
     #[test]
@@ -154,12 +153,12 @@ mod tests {
             Some(change(3, Directions::Write))
         );
         assert_eq!(io_waiters.release(3, Direction::Read), None);
-        assert_eq!(io_waiters.count(), 1);
+        assert_eq!(io_waiters.iter().count(), 1);
         assert_eq!(
             io_waiters.release(3, Direction::Write),
             Some(change(3, Directions::Empty))
         );
-        assert_eq!(io_waiters.count(), 0);
+        assert_eq!(io_waiters.iter().count(), 0);
     }
 
     #[test]
@@ -211,6 +210,6 @@ mod tests {
         assert!(!io.waker(Direction::Write).is_set());
         assert_eq!(io_waiters.release(3, Direction::Read), None);
         assert_eq!(io_waiters.release(3, Direction::Write), None);
-        assert_eq!(io_waiters.count(), 0);
+        assert_eq!(io_waiters.iter().count(), 0);
     }
 }

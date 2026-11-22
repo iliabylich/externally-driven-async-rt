@@ -124,30 +124,44 @@ mod tests {
     fn expire_wakes_due_timers_in_deadline_order() {
         static WAKERS: WakeQueue<8> = WakeQueue::new();
         let earliest = Instant::now();
-        let now = earliest + Duration::from_millis(1);
+        let now = earliest.saturating_add(Duration::from_millis(1));
         let timers = &Timers::<8>::new();
         let _ = timers
-            .alloc(now + Duration::from_millis(5), &WAKERS.waker(3))
+            .alloc(
+                now.saturating_add(Duration::from_millis(5)),
+                &WAKERS.waker(3),
+            )
             .unwrap();
         let _ = timers.alloc(now, &WAKERS.waker(2)).unwrap();
         let _ = timers
-            .alloc(now + Duration::from_millis(5), &WAKERS.waker(4))
+            .alloc(
+                now.saturating_add(Duration::from_millis(5)),
+                &WAKERS.waker(4),
+            )
             .unwrap();
         let _ = timers
-            .alloc(now + Duration::from_millis(10), &WAKERS.waker(5))
+            .alloc(
+                now.saturating_add(Duration::from_millis(10)),
+                &WAKERS.waker(5),
+            )
             .unwrap();
         let _ = timers.alloc(earliest, &WAKERS.waker(1)).unwrap();
 
         assert_expires(
             timers,
             &WAKERS,
-            now + Duration::from_millis(5),
+            now.saturating_add(Duration::from_millis(5)),
             [1, 2, 3, 4],
         );
-        assert_expires(timers, &WAKERS, now + Duration::from_millis(9), []);
+        assert_expires(
+            timers,
+            &WAKERS,
+            now.saturating_add(Duration::from_millis(9)),
+            [],
+        );
         assert_eq!(
             timers.next_deadline(),
-            Some(now + Duration::from_millis(10))
+            Some(now.saturating_add(Duration::from_millis(10)))
         );
     }
 
@@ -189,18 +203,18 @@ mod tests {
         let now = Instant::now();
         let timers = &Timers::<4>::new();
         assert_eq!(timers.next_deadline(), None);
-        let later = now + Duration::from_millis(30);
-        let earlier = now + Duration::from_millis(10);
+        let later = now.saturating_add(Duration::from_millis(30));
+        let earlier = now.saturating_add(Duration::from_millis(10));
         let _ = timers.alloc(later, Waker::noop()).unwrap();
         let (earliest, _) = timers.alloc(earlier, Waker::noop()).unwrap();
         let _ = timers
-            .alloc(now + Duration::from_millis(20), Waker::noop())
+            .alloc(now.saturating_add(Duration::from_millis(20)), Waker::noop())
             .unwrap();
         assert_eq!(timers.next_deadline(), Some(earlier));
         timers.release(earliest);
         assert_eq!(
             timers.next_deadline(),
-            Some(now + Duration::from_millis(20))
+            Some(now.saturating_add(Duration::from_millis(20)))
         );
     }
 

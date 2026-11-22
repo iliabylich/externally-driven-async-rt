@@ -112,7 +112,7 @@ impl<
     ///
     /// This is the way to pass data from the event loop to the external world.
     pub fn events(&self) -> impl Iterator<Item = E> {
-        self.ctx.storage.events.iter()
+        self.ctx.storage.events.iter_removing()
     }
 }
 

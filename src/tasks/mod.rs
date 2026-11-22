@@ -1,6 +1,5 @@
 mod join_handle;
 mod reserve_task;
-mod root_slot;
 mod root_status;
 mod slot_waiter_taken_error;
 mod task;
@@ -19,11 +18,10 @@ pub use self::{
     tasks_full_error::TasksFullError,
 };
 pub(crate) use self::{
-    root_slot::RootSlot,
     root_status::RootStatus,
     task::Task,
     task_entry::{TaskEntry, TaskId},
-    wake_queue::{WakeQueue, Woken},
+    wake_queue::{RootSlot, WakeQueue, Woken},
 };
 use self::{task_memory::TaskMemory, task_slot::TaskSlot};
 use crate::{claimed::Claimed, pool::ObjectPool, waker_slot::WakerSlot};

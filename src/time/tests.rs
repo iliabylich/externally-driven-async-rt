@@ -33,7 +33,7 @@ fn future_finishing_first_wins() {
     assert!(ctx.storage.timers.next_deadline().is_some());
     ctx.storage.notification.fire();
     assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
-    assert_yields!(ctx.storage.events.iter(), [1]);
+    assert_yields!(ctx.storage.events.iter_removing(), [1]);
     assert_eq!(ctx.storage.timers.next_deadline(), None);
     ctx.clear();
 }
@@ -62,7 +62,7 @@ fn elapsing_drops_the_future() {
     sleep_blocking(Duration::from_millis(1));
     wake_expired_timers(&ctx.storage.timers);
     assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
-    assert_yields!(ctx.storage.events.iter(), [0]);
+    assert_yields!(ctx.storage.events.iter_removing(), [0]);
     assert!(DROPPED.load(Relaxed));
     assert_eq!(ctx.storage.timers.next_deadline(), None);
     ctx.clear();

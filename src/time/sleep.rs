@@ -116,7 +116,7 @@ mod tests {
         sleep_blocking(Duration::from_millis(300));
         wake_expired_timers(&ctx.storage.timers);
         assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Finished);
-        assert_yields!(ctx.storage.events.iter(), [100, 200, 300]);
+        assert_yields!(ctx.storage.events.iter_removing(), [100, 200, 300]);
         ctx.clear();
     }
 
@@ -135,7 +135,7 @@ mod tests {
             async move |ctx| {
                 let mut next = Instant::now();
                 for i in 0..5 {
-                    next = next + period;
+                    next = next.saturating_add(period);
                     ctx.sleep(next.saturating_duration_since(Instant::now()))
                         .await
                         .unwrap();
@@ -162,7 +162,7 @@ mod tests {
     fn dropping_a_pending_sleep_releases_its_timer() {
         let timers = &Timers::<1>::new();
         let mut cx = Context::from_waker(Waker::noop());
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = Instant::now().saturating_add(Duration::from_secs(60));
         let mut sleep = Sleep::new(timers, deadline);
         assert_eq!(Pin::new(&mut sleep).poll(&mut cx), Poll::Pending);
         assert_eq!(timers.next_deadline(), Some(deadline));
@@ -174,7 +174,10 @@ mod tests {
     fn finished_sleep_releases_its_timer() {
         let timers = &Timers::<1>::new();
         let mut cx = Context::from_waker(Waker::noop());
-        let mut sleep = Sleep::new(timers, Instant::now() + Duration::from_millis(1));
+        let mut sleep = Sleep::new(
+            timers,
+            Instant::now().saturating_add(Duration::from_millis(1)),
+        );
         assert_eq!(Pin::new(&mut sleep).poll(&mut cx), Poll::Pending);
         sleep_blocking(Duration::from_millis(1));
         assert_eq!(Pin::new(&mut sleep).poll(&mut cx), Poll::Ready(Ok(())));
@@ -185,7 +188,7 @@ mod tests {
     fn sleep_without_a_free_timer_fails() {
         let timers = &Timers::<1>::new();
         let mut cx = Context::from_waker(Waker::noop());
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = Instant::now().saturating_add(Duration::from_secs(60));
         let mut first = Sleep::new(timers, deadline);
         let mut second = Sleep::new(timers, deadline);
         assert_eq!(Pin::new(&mut first).poll(&mut cx), Poll::Pending);
@@ -199,7 +202,7 @@ mod tests {
     fn repolling_a_pending_sleep_replaces_its_waker() {
         static WAKERS: WakeQueue<2> = WakeQueue::new();
         let timers = &Timers::<1>::new();
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = Instant::now().saturating_add(Duration::from_secs(60));
         let mut sleep = Sleep::new(timers, deadline);
         for id in [0, 1] {
             let waker = WAKERS.waker(id);

@@ -1,4 +1,8 @@
-use core::future::Future;
+use core::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 pub(crate) struct FixedFuture<T>(T);
 
@@ -11,10 +15,7 @@ impl<T> FixedFuture<T> {
 impl<T> Future for FixedFuture<T> {
     type Output = ();
 
-    fn poll(
-        self: core::pin::Pin<&mut Self>,
-        _: &mut core::task::Context<'_>,
-    ) -> core::task::Poll<()> {
-        core::task::Poll::Ready(())
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> {
+        Poll::Ready(())
     }
 }

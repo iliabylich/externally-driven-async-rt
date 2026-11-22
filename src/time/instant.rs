@@ -24,15 +24,6 @@ impl Instant {
 }
 
 #[cfg(test)]
-impl core::ops::Add<Duration> for Instant {
-    type Output = Self;
-
-    fn add(self, duration: Duration) -> Self {
-        self.saturating_add(duration)
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use core::time::Duration;
 
@@ -41,7 +32,7 @@ mod tests {
     #[test]
     fn adding_and_measuring_round_trip() {
         let now = Instant::now();
-        let later = now + Duration::from_millis(5);
+        let later = now.saturating_add(Duration::from_millis(5));
         assert_eq!(
             later.saturating_duration_since(now),
             Duration::from_millis(5)
@@ -52,7 +43,7 @@ mod tests {
     #[test]
     fn adding_saturates() {
         let now = Instant::now();
-        assert_eq!(now + Duration::MAX, Instant(u64::MAX));
+        assert_eq!(now.saturating_add(Duration::MAX), Instant(u64::MAX));
     }
 
     #[test]
