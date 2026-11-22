@@ -1,5 +1,6 @@
 use core::{
     cell::Cell,
+    mem::DropGuard,
     task::{Poll, Waker},
 };
 
@@ -26,7 +27,7 @@ impl Notification {
         }
     }
 
-    pub(crate) fn poll(&self, waker: &Waker) -> Poll<()> {
+    fn poll(&self, waker: &Waker) -> Poll<()> {
         if self.pending.replace(false) {
             return Poll::Ready(());
         }
@@ -34,7 +35,13 @@ impl Notification {
         Poll::Pending
     }
 
-    pub(crate) fn forget_waker(&self) {
+    pub(crate) async fn notified(&self) {
+        let registered = DropGuard::new(self, Self::forget_waker);
+        core::future::poll_fn(|cx| self.poll(cx.waker())).await;
+        DropGuard::dismiss(registered);
+    }
+
+    fn forget_waker(&self) {
         drop(self.waker.take());
     }
 

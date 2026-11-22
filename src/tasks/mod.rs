@@ -10,6 +10,7 @@ mod wake_queue;
 
 use core::task::{Poll, Waker};
 
+use self::task_slot::TaskSlot;
 pub use self::{
     join_handle::JoinHandle, reserve_task::ReserveTask,
     slot_waiter_taken_error::SlotWaiterTakenError, task_reservation::TaskReservation,
@@ -20,7 +21,6 @@ pub(crate) use self::{
     task_entry::{TaskEntry, TaskId},
     wake_queue::{RootSlot, WakeQueue, Woken},
 };
-use self::task_slot::TaskSlot;
 use crate::{claimed::Claimed, data::pool::ObjectPool, waker_slot::WakerSlot};
 
 #[must_use]

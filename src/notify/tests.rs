@@ -1,14 +1,14 @@
 use core::{
     cell::Cell,
     future::{Future, pending},
-    pin::Pin,
+    pin::pin,
     task::{Context, Poll, Waker},
     time::Duration,
 };
 
 use crate::{
     Selector,
-    notify::{Notification, Notified},
+    notify::Notification,
     tasks::RootStatus,
     testing::{
         EventLoopTestingExt, FdTestingExt, TestContext, TestLoop, TestStorage, assert_yields,
@@ -103,10 +103,8 @@ fn fire_before_poll_resolves_immediately() {
     let notification = Notification::new();
     let mut cx = Context::from_waker(Waker::noop());
     notification.fire();
-    let mut notified = Notified::new(&notification);
-    assert_eq!(Pin::new(&mut notified).poll(&mut cx), Poll::Ready(()));
-    let mut notified = Notified::new(&notification);
-    assert_eq!(Pin::new(&mut notified).poll(&mut cx), Poll::Pending);
+    assert_eq!(pin!(notification.notified()).poll(&mut cx), Poll::Ready(()));
+    assert_eq!(pin!(notification.notified()).poll(&mut cx), Poll::Pending);
 }
 
 #[test]
@@ -116,8 +114,8 @@ fn dropping_a_pending_notified_forgets_its_waker() {
     {
         let waker = counting_waker(&drops);
         let mut cx = Context::from_waker(&waker);
-        let mut notified = Notified::new(&notification);
-        assert_eq!(Pin::new(&mut notified).poll(&mut cx), Poll::Pending);
+        let mut notified = pin!(notification.notified());
+        assert_eq!(notified.as_mut().poll(&mut cx), Poll::Pending);
     }
     assert_eq!(drops.get(), 2);
 }
@@ -128,6 +126,5 @@ fn clear_drops_a_pending_notification() {
     notification.fire();
     notification.clear();
     let mut cx = Context::from_waker(Waker::noop());
-    let mut notified = Notified::new(&notification);
-    assert_eq!(Pin::new(&mut notified).poll(&mut cx), Poll::Pending);
+    assert_eq!(pin!(notification.notified()).poll(&mut cx), Poll::Pending);
 }

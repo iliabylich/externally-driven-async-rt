@@ -3,7 +3,6 @@ use core::{future::Future, time::Duration};
 use crate::{
     Either2,
     claimed::Claimed,
-    notify::Notified,
     select2,
     selector::{EVENTS_PER_CALL, Selector, SelectorEvent},
     storage::LoopStorage,
@@ -140,13 +139,16 @@ impl<
 
     /// Waits until [`EventLoop::notify`](crate::EventLoop::notify) is called.
     ///
-    /// See [`Notified`] for details.
+    /// Notifications don't queue up: any number of `notify()` calls made before the future is
+    /// polled resolve it only once.
+    ///
+    /// Only one task can wait for a notification at a time.
     ///
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub const fn notified(&self) -> Notified<'_> {
-        Notified::new(&self.storage.notification)
+    pub fn notified(&self) -> impl Future<Output = ()> + '_ {
+        self.storage.notification.notified()
     }
 
     pub(crate) fn clear(&self) {
