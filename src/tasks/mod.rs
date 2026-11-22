@@ -2,9 +2,7 @@ mod join_handle;
 mod reserve_task;
 mod root_status;
 mod slot_waiter_taken_error;
-mod task;
 mod task_entry;
-mod task_memory;
 mod task_reservation;
 mod task_slot;
 mod tasks_full_error;
@@ -19,11 +17,10 @@ pub use self::{
 };
 pub(crate) use self::{
     root_status::RootStatus,
-    task::Task,
     task_entry::{TaskEntry, TaskId},
     wake_queue::{RootSlot, WakeQueue, Woken},
 };
-use self::{task_memory::TaskMemory, task_slot::TaskSlot};
+use self::task_slot::TaskSlot;
 use crate::{claimed::Claimed, data::pool::ObjectPool, waker_slot::WakerSlot};
 
 #[must_use]
@@ -102,14 +99,8 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         self.slot_waiter.wake_by_ref();
     }
 
-    fn free(
-        &self,
-        id: TaskId<TASK_SIZE>,
-        entry: &TaskEntry<TASK_SIZE>,
-        task: Task,
-    ) -> Option<Waker> {
+    fn free(&self, id: TaskId<TASK_SIZE>, entry: &TaskEntry<TASK_SIZE>) -> Option<Waker> {
         let join_waiter = entry.take_join_waiter();
-        drop(task);
         self.release(id);
         join_waiter
     }
@@ -131,35 +122,28 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
     fn run_root(&'static self) -> RootStatus {
         let waker = self.queue.root_waker();
         let mut cx = core::task::Context::from_waker(&waker);
-        let Some(Poll::Ready(task)) = self.root.poll(&mut cx) else {
-            return RootStatus::Running;
-        };
-        drop(task);
-        RootStatus::Finished
+        if self.root.poll(&mut cx) == Some(Poll::Ready(())) {
+            return RootStatus::Finished;
+        }
+        RootStatus::Running
     }
 
     fn run_task(&'static self, idx: u32) {
         let (id, entry) = self.pool.get(idx);
         let waker = self.queue.waker(idx);
         let mut cx = core::task::Context::from_waker(&waker);
-        let Some(Poll::Ready(task)) = entry.poll(&mut cx) else {
+        if entry.poll(&mut cx) != Some(Poll::Ready(())) {
             return;
-        };
-        if let Some(join_waiter) = self.free(id, entry, task) {
+        }
+        if let Some(join_waiter) = self.free(id, entry) {
             join_waiter.wake();
         }
     }
 
     pub(crate) fn drop_all(&self) {
-        if let Some(task) = self.root.take_idle() {
-            drop(task);
-        }
-        while let Some((id, entry, task)) = self
-            .pool
-            .iter()
-            .find_map(|(id, entry)| Some((id, entry, entry.take_idle()?)))
-        {
-            self.free(id, entry, task);
+        self.root.drop_idle();
+        while let Some((id, entry)) = self.pool.iter().find(|(_, entry)| entry.drop_idle()) {
+            self.free(id, entry);
         }
     }
 }

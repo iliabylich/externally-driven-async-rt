@@ -1,12 +1,10 @@
-use crate::{const_default::ConstDefault, tasks::Task};
+use core::{future::Future, ptr::NonNull};
 
+#[derive(Clone, Copy)]
 #[must_use]
 pub(crate) enum TaskSlot {
     Empty,
-    Idle(Task),
+    Idle(NonNull<dyn Future<Output = ()>>),
     Polling,
-}
-
-impl ConstDefault for TaskSlot {
-    const DEFAULT: Self = Self::Empty;
+    Dropping,
 }
