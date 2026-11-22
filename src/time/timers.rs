@@ -135,12 +135,18 @@ impl<const N: usize> Timers<N> {
 
 #[cfg(test)]
 mod tests {
-    use core::{cell::Cell, task::Waker, time::Duration};
+    use core::{
+        cell::Cell,
+        future::Future,
+        pin::pin,
+        task::{Context, Poll, Waker},
+        time::Duration,
+    };
 
     use crate::{
         NotEnoughResources,
         tasks::WakeQueue,
-        testing::{assert_yields, counting_waker},
+        testing::{assert_yields, counting_waker, sleep_blocking},
         time::{Instant, Timers},
     };
 
@@ -289,5 +295,70 @@ mod tests {
         assert_eq!(timers.next_deadline(), None);
         timers.release(index);
         assert!(timers.alloc(Instant::now(), &waker).is_ok());
+    }
+
+    #[test]
+    fn sleep_until_now_is_ready_without_a_timer() {
+        let timers = &Timers::<1>::new();
+        let mut cx = Context::from_waker(Waker::noop());
+        assert_eq!(
+            pin!(timers.sleep_until(Instant::now())).poll(&mut cx),
+            Poll::Ready(Ok(()))
+        );
+        assert_eq!(timers.next_deadline(), None);
+    }
+
+    #[test]
+    fn dropping_a_pending_sleep_releases_its_timer() {
+        let timers = &Timers::<1>::new();
+        let mut cx = Context::from_waker(Waker::noop());
+        let deadline = Instant::now().saturating_add(Duration::from_secs(60));
+        {
+            let mut sleep = pin!(timers.sleep_until(deadline));
+            assert_eq!(sleep.as_mut().poll(&mut cx), Poll::Pending);
+            assert_eq!(timers.next_deadline(), Some(deadline));
+        }
+        assert_eq!(timers.next_deadline(), None);
+    }
+
+    #[test]
+    fn finished_sleep_releases_its_timer() {
+        let timers = &Timers::<1>::new();
+        let mut cx = Context::from_waker(Waker::noop());
+        let mut sleep =
+            pin!(timers.sleep_until(Instant::now().saturating_add(Duration::from_millis(10))));
+        assert_eq!(sleep.as_mut().poll(&mut cx), Poll::Pending);
+        sleep_blocking(Duration::from_millis(10));
+        assert_eq!(sleep.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
+        assert_eq!(timers.next_deadline(), None);
+    }
+
+    #[test]
+    fn sleep_without_a_free_timer_fails() {
+        let timers = &Timers::<1>::new();
+        let mut cx = Context::from_waker(Waker::noop());
+        let deadline = Instant::now().saturating_add(Duration::from_secs(60));
+        let mut first = pin!(timers.sleep_until(deadline));
+        let mut second = pin!(timers.sleep_until(deadline));
+        assert_eq!(first.as_mut().poll(&mut cx), Poll::Pending);
+        assert_eq!(
+            second.as_mut().poll(&mut cx),
+            Poll::Ready(Err(NotEnoughResources::Timers))
+        );
+    }
+
+    #[test]
+    fn repolling_a_pending_sleep_replaces_its_waker() {
+        static WAKERS: WakeQueue<2> = WakeQueue::new();
+        let timers = &Timers::<1>::new();
+        let deadline = Instant::now().saturating_add(Duration::from_secs(60));
+        let mut sleep = pin!(timers.sleep_until(deadline));
+        for idx in [0, 1] {
+            let waker = WAKERS.waker(idx);
+            let mut cx = Context::from_waker(&waker);
+            assert_eq!(sleep.as_mut().poll(&mut cx), Poll::Pending);
+        }
+        let woken = timers.take_expired(deadline).unwrap();
+        assert_eq!(WAKERS.idx_by_waker_data(&woken), 1);
     }
 }
