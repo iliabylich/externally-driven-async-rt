@@ -18,8 +18,8 @@ const UNCLAIMED: usize = 0;
 pub(crate) struct WakeQueue<const N: usize> {
     owner: AtomicUsize,
     queue: Queue<N>,
-    ids: [u32; N],
-    root_id: u32,
+    idxs: [u32; N],
+    root_idx: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,10 +38,10 @@ impl RootSlot {
     }
 }
 
-// SAFETY: `owner` is atomic, so concurrent `claim`s agree on a single owner thread. `ids` and
-// `root_id` never change after `new`. `queue` is made of `Cell`s that only the owner thread touches: the crate calls `push`, `push_root`, `pop`
-// and `is_empty` only through a `!Send` `Context` of the claiming loop, and `wake` asserts the
-// owner thread before it enqueues anything.
+// SAFETY: `owner` is atomic, so concurrent `claim`s agree on a single owner thread. `idxs` and
+// `root_idx` never change after `new`. `queue` is made of `Cell`s that only the owner thread
+// touches: the crate calls `push`, `push_root`, `pop` and `is_empty` only through a `!Send`
+// `Context` of the claiming loop, and `wake` asserts the owner thread before it enqueues anything.
 unsafe impl<const N: usize> Sync for WakeQueue<N> {}
 
 impl<const N: usize> WakeQueue<N> {
@@ -49,24 +49,24 @@ impl<const N: usize> WakeQueue<N> {
         const {
             assert!(N > 0, "wake queue capacity must not be zero");
             assert!(
-                offset_of!(Self, root_id)
-                    == offset_of!(Self, ids).wrapping_add(size_of::<[u32; N]>()),
-                "the root id must directly follow the task ids"
+                offset_of!(Self, root_idx)
+                    == offset_of!(Self, idxs).wrapping_add(size_of::<[u32; N]>()),
+                "the root idx must directly follow the task idxs"
             );
         }
-        let mut ids = [0; N];
-        let mut rest: &mut [u32] = &mut ids;
-        let mut id: u32 = 0;
+        let mut idxs = [0; N];
+        let mut rest: &mut [u32] = &mut idxs;
+        let mut idx: u32 = 0;
         while let [first, tail @ ..] = rest {
-            *first = id;
-            id = id.wrapping_add(1);
+            *first = idx;
+            idx = idx.wrapping_add(1);
             rest = tail;
         }
         Self {
             owner: AtomicUsize::new(UNCLAIMED),
             queue: Queue::new(),
-            ids,
-            root_id: id,
+            idxs,
+            root_idx: idx,
         }
     }
 
@@ -82,22 +82,22 @@ impl<const N: usize> WakeQueue<N> {
         if idx >= N {
             const_unreachable!("slot {} is out of bounds", idx);
         }
-        let id = core::ptr::from_ref(self)
-            .wrapping_byte_add(offset_of!(Self, ids))
+        let ptr = core::ptr::from_ref(self)
+            .wrapping_byte_add(offset_of!(Self, idxs))
             .cast::<u32>()
             .wrapping_add(idx);
         // SAFETY: the vtable functions below uphold the `RawWaker` contract for a pointer to a
-        // task id of a queue that is never freed, derived from a pointer to the whole queue.
-        unsafe { Waker::from_raw(RawWaker::new(id.cast(), vtable::<N>())) }
+        // task idx of a queue that is never freed, derived from a pointer to the whole queue.
+        unsafe { Waker::from_raw(RawWaker::new(ptr.cast(), vtable::<N>())) }
     }
 
     pub(crate) fn root_waker(&'static self) -> Waker {
-        let id = core::ptr::from_ref(self)
-            .wrapping_byte_add(offset_of!(Self, root_id))
+        let ptr = core::ptr::from_ref(self)
+            .wrapping_byte_add(offset_of!(Self, root_idx))
             .cast::<u32>();
         // SAFETY: the vtable functions below uphold the `RawWaker` contract for a pointer to the
-        // root id of a queue that is never freed, derived from a pointer to the whole queue.
-        unsafe { Waker::from_raw(RawWaker::new(id.cast(), vtable::<N>())) }
+        // root idx of a queue that is never freed, derived from a pointer to the whole queue.
+        unsafe { Waker::from_raw(RawWaker::new(ptr.cast(), vtable::<N>())) }
     }
 
     pub(crate) const fn push(&self, idx: u32) {
@@ -112,7 +112,7 @@ impl<const N: usize> WakeQueue<N> {
         match self.queue.pop() {
             None => None,
             Some(Popped::Extra) => Some(Woken::Root),
-            Some(Popped::Slot(slot)) => Some(Woken::Task(slot)),
+            Some(Popped::Slot(idx)) => Some(Woken::Task(idx)),
         }
     }
 
@@ -121,9 +121,9 @@ impl<const N: usize> WakeQueue<N> {
     }
 
     #[cfg(test)]
-    pub(crate) fn id_by_waker_data(&'static self, waker: &Waker) -> u32 {
+    pub(crate) fn idx_by_waker_data(&'static self, waker: &Waker) -> u32 {
         (0..u32::try_from(N).unwrap())
-            .find(|&id| waker.data() == self.waker(id).data())
+            .find(|&idx| waker.data() == self.waker(idx).data())
             .expect("the waker comes from `waker`")
     }
 }
@@ -137,28 +137,28 @@ fn clone<const N: usize>(ptr: *const ()) -> RawWaker {
 }
 
 unsafe fn wake<const N: usize>(ptr: *const ()) {
-    let id = ptr.cast::<u32>();
+    let ptr = ptr.cast::<u32>();
     // SAFETY: `ptr` comes from `WakeQueue::waker` or `WakeQueue::root_waker`: it points to
-    // `ids[slot]`, which holds `slot`, or to `root_id`, which holds `N` and directly follows `ids`
-    // (asserted in `new`), of a queue that is never freed, and carries the provenance of the whole
-    // queue, so stepping back by `slot` ids and by the offset of `ids` lands on that queue.
-    let (slot, queue) = unsafe {
-        let slot = *id;
-        let queue = id
-            .sub(u32_to_usize(slot))
-            .byte_sub(offset_of!(WakeQueue<N>, ids))
+    // `idxs[idx]`, which holds `idx`, or to `root_idx`, which holds `N` and directly follows
+    // `idxs` (asserted in `new`), of a queue that is never freed, and carries the provenance of the
+    // whole queue, so stepping back by `idx` idxs and by the offset of `idxs` lands on that queue.
+    let (idx, queue) = unsafe {
+        let idx = *ptr;
+        let queue = ptr
+            .sub(u32_to_usize(idx))
+            .byte_sub(offset_of!(WakeQueue<N>, idxs))
             .cast::<WakeQueue<N>>();
-        (slot, &*queue)
+        (idx, &*queue)
     };
     assert_eq!(
         queue.owner.load(Relaxed),
         ThreadId::current().to_raw(),
         "a Waker must only be woken on the thread of its EventLoop"
     );
-    if slot == queue.root_id {
+    if idx == queue.root_idx {
         queue.push_root();
     } else {
-        queue.push(slot);
+        queue.push(idx);
     }
 }
 

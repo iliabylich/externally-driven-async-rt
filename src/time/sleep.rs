@@ -201,12 +201,12 @@ mod tests {
         let timers = &Timers::<1>::new();
         let deadline = Instant::now().saturating_add(Duration::from_secs(60));
         let mut sleep = Sleep::new(timers, deadline);
-        for id in [0, 1] {
-            let waker = WAKERS.waker(id);
+        for idx in [0, 1] {
+            let waker = WAKERS.waker(idx);
             let mut cx = Context::from_waker(&waker);
             assert_eq!(Pin::new(&mut sleep).poll(&mut cx), Poll::Pending);
         }
         let woken = timers.take_expired(deadline).unwrap();
-        assert_eq!(WAKERS.id_by_waker_data(&woken), 1);
+        assert_eq!(WAKERS.idx_by_waker_data(&woken), 1);
     }
 }

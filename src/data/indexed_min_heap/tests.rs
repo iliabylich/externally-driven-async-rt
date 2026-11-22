@@ -3,9 +3,9 @@ use crate::testing::assert_yields;
 
 fn drain<const N: usize>(heap: &IndexedMinHeap<u32, N>) -> impl Iterator<Item = (u32, u32)> {
     core::iter::from_fn(move || {
-        let (slot, key) = heap.peek()?;
-        heap.remove(slot);
-        Some((slot, key))
+        let (idx, key) = heap.peek()?;
+        heap.remove(idx);
+        Some((idx, key))
     })
 }
 
@@ -41,8 +41,8 @@ fn contains_follows_insert_and_remove() {
 #[test]
 fn removing_any_slot_keeps_the_order_of_the_rest() {
     let heap = IndexedMinHeap::<u32, 6>::new();
-    for (slot, key) in [(0, 50), (1, 10), (2, 40), (3, 20), (4, 60), (5, 30)] {
-        heap.insert(slot, key);
+    for (idx, key) in [(0, 50), (1, 10), (2, 40), (3, 20), (4, 60), (5, 30)] {
+        heap.insert(idx, key);
     }
     heap.remove(1);
     heap.remove(2);
@@ -77,14 +77,14 @@ fn clear_removes_every_slot() {
 fn interleaved_inserts_and_removals_drain_in_key_order() {
     let heap = IndexedMinHeap::<u32, 16>::new();
     let keys: [u32; 16] = core::array::from_fn(|i| u32::try_from(i * 7 % 16).unwrap() * 3);
-    for (slot, key) in (0..).zip(keys) {
-        heap.insert(slot, key);
+    for (idx, key) in (0..).zip(keys) {
+        heap.insert(idx, key);
     }
     let removed = [3, 0, 15, 8, 9];
-    for slot in removed {
-        heap.remove(slot);
+    for idx in removed {
+        heap.remove(idx);
     }
-    let remaining = (0..).zip(keys).filter(|(slot, _)| !removed.contains(slot));
+    let remaining = (0..).zip(keys).filter(|(idx, _)| !removed.contains(idx));
     let mut expected = [(0, 0); 11];
     for (expected, entry) in expected.iter_mut().zip(remaining) {
         *expected = entry;

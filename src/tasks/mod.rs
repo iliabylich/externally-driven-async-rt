@@ -123,7 +123,7 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
                         return RootStatus::Finished;
                     }
                 }
-                Some(Woken::Task(slot)) => self.run_task(slot),
+                Some(Woken::Task(idx)) => self.run_task(idx),
             }
         }
     }

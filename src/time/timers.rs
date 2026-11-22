@@ -96,14 +96,14 @@ impl<const N: usize> Timers<N> {
     }
 
     pub(crate) fn take_expired(&self, now: Instant) -> Option<Waker> {
-        let (slot, (deadline, _)) = self.armed.peek()?;
+        let (idx, (deadline, _)) = self.armed.peek()?;
         if deadline > now {
             return None;
         }
-        self.armed.remove(slot);
-        let (_, timer) = self.pool.get(slot);
+        self.armed.remove(idx);
+        let (_, timer) = self.pool.get(idx);
         let Some(waker) = timer.waker.take() else {
-            const_unreachable!("armed timer {} has no waker", slot);
+            const_unreachable!("armed timer {} has no waker", idx);
         };
         Some(waker)
     }
@@ -124,10 +124,10 @@ mod tests {
         timers: &Timers<N>,
         wakers: &'static WakeQueue<W>,
         now: Instant,
-        ids: impl IntoIterator<Item = u32>,
+        idxs: impl IntoIterator<Item = u32>,
     ) {
         let expired = core::iter::from_fn(|| timers.take_expired(now));
-        assert_yields!(expired.map(|waker| wakers.id_by_waker_data(&waker)), ids);
+        assert_yields!(expired.map(|waker| wakers.idx_by_waker_data(&waker)), idxs);
     }
 
     #[test]

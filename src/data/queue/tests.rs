@@ -4,8 +4,8 @@ use crate::testing::assert_yields;
 #[test]
 fn pops_in_push_order() {
     let queue = Queue::<4>::new();
-    for slot in [2, 0, 3] {
-        queue.push(slot);
+    for idx in [2, 0, 3] {
+        queue.push(idx);
     }
     assert!(!queue.is_empty());
     assert_yields!(
