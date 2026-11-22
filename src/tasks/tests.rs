@@ -1,14 +1,17 @@
 use core::{
-    future::poll_fn,
+    cell::Cell,
+    future::{Future, pending, poll_fn},
+    pin::pin,
     sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed},
-    task::{Poll, Waker},
+    task::{Context, Poll, Waker},
 };
 
 use crate::{
+    Selector,
     tasks::{RootStatus, TaskId, Tasks},
     testing::{
-        FixedFuture, FlagOnDrop, TasksStorage, spawn_reserved_static, spawn_root_static,
-        spawn_static,
+        FixedFuture, FlagOnDrop, TasksStorage, TestLoop, TestStorage, assert_yields,
+        counting_waker, spawn_reserved_static, spawn_root_static, spawn_static,
     },
 };
 
@@ -134,7 +137,7 @@ fn root_region_holds_a_root_bigger_than_a_slab_block() {
     impl Future for BigRoot<'_> {
         type Output = ();
 
-        fn poll(self: core::pin::Pin<&mut Self>, _: &mut core::task::Context<'_>) -> Poll<()> {
+        fn poll(self: core::pin::Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> {
             assert!(self.data.iter().all(|byte| *byte == 3));
             Poll::Pending
         }
@@ -308,4 +311,99 @@ fn finishing_a_task_wakes_the_slot_waiter() {
     let _ = spawn_static(tasks, async {}).unwrap();
     let _ = tasks.run_ready();
     assert_eq!(POLLS.load(Relaxed), 2);
+}
+
+#[test]
+fn join_is_pending_until_the_task_finishes() {
+    static STORAGE: Storage<2> = Storage::new();
+    let tasks = &STORAGE.tasks;
+    let mut cx = Context::from_waker(Waker::noop());
+    let mut join = pin!(tasks.join(spawn_static(tasks, async {}).unwrap()));
+    assert_eq!(join.as_mut().poll(&mut cx), Poll::Pending);
+    let _ = tasks.run_ready();
+    assert_eq!(join.as_mut().poll(&mut cx), Poll::Ready(()));
+}
+
+#[test]
+fn joining_a_finished_task_resolves_immediately() {
+    static STORAGE: Storage<2> = Storage::new();
+    let tasks = &STORAGE.tasks;
+    let mut cx = Context::from_waker(Waker::noop());
+    let id = spawn_static(tasks, async {}).unwrap();
+    let _ = tasks.run_ready();
+    assert_eq!(pin!(tasks.join(id)).poll(&mut cx), Poll::Ready(()));
+}
+
+#[test]
+fn dropping_a_polled_join_drops_its_join_waiter() {
+    static STORAGE: Storage<2> = Storage::new();
+    let tasks = &STORAGE.tasks;
+    let drops = Cell::new(0);
+    {
+        let waker = counting_waker(&drops);
+        let mut cx = Context::from_waker(&waker);
+        let mut join = pin!(tasks.join(spawn_static(tasks, async {}).unwrap()));
+        assert_eq!(join.as_mut().poll(&mut cx), Poll::Pending);
+    }
+    assert_eq!(drops.get(), 2);
+}
+
+#[test]
+fn dropping_a_stale_join_keeps_the_new_tasks_join_waiter() {
+    static STORAGE: Storage<2> = Storage::new();
+    let tasks = &STORAGE.tasks;
+    let drops = Cell::new(0);
+    let mut cx = Context::from_waker(Waker::noop());
+    let stale = spawn_static(tasks, async {}).unwrap();
+    {
+        let mut join = pin!(tasks.join(stale));
+        assert_eq!(join.as_mut().poll(&mut cx), Poll::Pending);
+        let _ = tasks.run_ready();
+        let id = spawn_static(tasks, async {}).unwrap();
+        assert_eq!(id.idx, stale.idx);
+        assert_eq!(
+            tasks.set_join_waiter(id, &counting_waker(&drops)),
+            Poll::Pending
+        );
+        assert_eq!(drops.get(), 1);
+    }
+    assert_eq!(drops.get(), 1);
+}
+
+#[test]
+fn dropping_a_join_detaches_the_task() {
+    static STORAGE: Storage<2> = Storage::new();
+    static RAN: AtomicBool = AtomicBool::new(false);
+    let tasks = &STORAGE.tasks;
+    let mut cx = Context::from_waker(Waker::noop());
+    let id = spawn_static(tasks, async { RAN.store(true, Relaxed) }).unwrap();
+    assert_eq!(pin!(tasks.join(id)).poll(&mut cx), Poll::Pending);
+    let _ = tasks.run_ready();
+    assert!(RAN.load(Relaxed));
+}
+
+#[test]
+fn spawned_task_can_spawn_and_join() {
+    let mut selector = Selector::new().unwrap();
+    let event_loop = TestLoop::new(
+        {
+            static STORAGE: TestStorage = TestStorage::new();
+            &STORAGE
+        },
+        &mut selector,
+        async |ctx| {
+            ctx.spawn(async |ctx| {
+                ctx.spawn(async |ctx| ctx.dispatch(1).unwrap())
+                    .unwrap()
+                    .await;
+                ctx.dispatch(2).unwrap();
+            })
+            .unwrap()
+            .await;
+            ctx.dispatch(3).unwrap();
+            pending::<()>().await;
+        },
+    )
+    .unwrap();
+    assert_yields!(event_loop.events(), [1, 2, 3]);
 }

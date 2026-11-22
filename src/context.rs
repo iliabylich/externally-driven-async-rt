@@ -6,7 +6,7 @@ use crate::{
     select2,
     selector::{EVENTS_PER_CALL, Selector, SelectorEvent},
     storage::LoopStorage,
-    tasks::{JoinHandle, ReserveTask, TasksFullError},
+    tasks::{ReserveTask, TasksFullError},
     time::{Instant, Sleep, TimersFullError},
 };
 
@@ -61,6 +61,9 @@ impl<
     /// The future must fit `TASK_SIZE` bytes and be aligned to at most 16 bytes, otherwise the
     /// program doesn't compile.
     ///
+    /// Returns a join handle, a future that resolves once the task is finished. Dropping it
+    /// detaches the task, which keeps running until it finishes.
+    ///
     /// # Errors
     ///
     /// Returns an error if all `TASKS` task slots are taken, `f` isn't called then. Use
@@ -68,14 +71,17 @@ impl<
     pub fn spawn<F, Fut>(
         &self,
         f: F,
-    ) -> Result<JoinHandle<TASKS, TASK_SIZE, ROOT_TASK_SIZE>, TasksFullError>
+    ) -> Result<
+        impl Future<Output = ()> + use<E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, F, Fut>,
+        TasksFullError,
+    >
     where
         F: FnOnce(Self) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
         let ctx = *self;
         let id = self.storage.tasks.spawn(self.claimed, move || f(ctx))?;
-        Ok(JoinHandle::new(&self.storage.tasks, id))
+        Ok(self.storage.tasks.join(id))
     }
 
     /// Reserves a task slot.

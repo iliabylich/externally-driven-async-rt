@@ -1,6 +1,6 @@
 use crate::{
     claimed::Claimed,
-    tasks::{JoinHandle, TaskEntry, TaskId, Tasks},
+    tasks::{TaskEntry, TaskId, Tasks},
 };
 
 /// A task reservation that can be used to spawn a task without waiting for a free slot.
@@ -38,7 +38,13 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
     ///
     /// The future must fit `TASK_SIZE` bytes and be aligned to at most 16 bytes, otherwise the
     /// program doesn't compile.
-    pub fn spawn<Fut>(self, future: Fut) -> JoinHandle<TASKS, TASK_SIZE, ROOT_TASK_SIZE>
+    ///
+    /// Returns a join handle, a future that resolves once the task is finished. Dropping it
+    /// detaches the task, which keeps running until it finishes.
+    pub fn spawn<Fut>(
+        self,
+        future: Fut,
+    ) -> impl Future<Output = ()> + use<TASKS, TASK_SIZE, ROOT_TASK_SIZE, Fut>
     where
         Fut: Future<Output = ()> + 'a,
     {
@@ -50,7 +56,7 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
         } = self;
         tasks.spawn_reserved(claimed, id, entry, future);
         core::mem::forget(self);
-        JoinHandle::new(tasks, id)
+        tasks.join(id)
     }
 }
 
@@ -66,7 +72,7 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> Dr
 mod tests {
     use core::{
         future::{Future, pending},
-        pin::Pin,
+        pin::{Pin, pin},
         sync::atomic::{AtomicBool, Ordering::Relaxed},
         task::{Context, Poll, Waker},
     };
@@ -82,12 +88,14 @@ mod tests {
         static RAN: AtomicBool = AtomicBool::new(false);
         let tasks = &STORAGE.tasks;
         let (id, entry) = tasks.pool.alloc().unwrap();
-        let mut handle = TaskReservation::new(tasks, claimed_forever(), id, entry)
-            .spawn(async { RAN.store(true, Relaxed) });
+        let mut handle = pin!(
+            TaskReservation::new(tasks, claimed_forever(), id, entry)
+                .spawn(async { RAN.store(true, Relaxed) })
+        );
         let _ = tasks.run_ready();
         assert!(RAN.load(Relaxed));
         let mut cx = Context::from_waker(Waker::noop());
-        assert_eq!(Pin::new(&mut handle).poll(&mut cx), Poll::Ready(()));
+        assert_eq!(handle.as_mut().poll(&mut cx), Poll::Ready(()));
     }
 
     #[test]

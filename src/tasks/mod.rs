@@ -1,4 +1,3 @@
-mod join_handle;
 mod reserve_task;
 mod root_status;
 mod slot_waiter_taken_error;
@@ -8,13 +7,15 @@ mod task_slot;
 mod tasks_full_error;
 mod wake_queue;
 
-use core::task::{Poll, Waker};
+use core::{
+    mem::DropGuard,
+    task::{Poll, Waker},
+};
 
 use self::task_slot::TaskSlot;
 pub use self::{
-    join_handle::JoinHandle, reserve_task::ReserveTask,
-    slot_waiter_taken_error::SlotWaiterTakenError, task_reservation::TaskReservation,
-    tasks_full_error::TasksFullError,
+    reserve_task::ReserveTask, slot_waiter_taken_error::SlotWaiterTakenError,
+    task_reservation::TaskReservation, tasks_full_error::TasksFullError,
 };
 pub(crate) use self::{
     root_status::RootStatus,
@@ -53,10 +54,16 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         Poll::Ready(())
     }
 
-    pub(crate) fn clear_join_waiter(&self, id: TaskId<TASK_SIZE>) {
+    fn clear_join_waiter(&self, id: TaskId<TASK_SIZE>) {
         if let Some(entry) = self.pool.get_versioned(id) {
             entry.take_join_waiter();
         }
+    }
+
+    pub(crate) async fn join(&'static self, id: TaskId<TASK_SIZE>) {
+        let guard = DropGuard::new(self, |tasks: &Self| tasks.clear_join_waiter(id));
+        core::future::poll_fn(|cx| self.set_join_waiter(id, cx.waker())).await;
+        DropGuard::dismiss(guard);
     }
 
     pub(crate) fn spawn<'a, Fut>(

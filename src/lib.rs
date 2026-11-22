@@ -39,5 +39,5 @@ pub use event_loop::{Error, EventLoop};
 pub use select::{Either2, Either3, select2, select3};
 pub use selector::Selector;
 pub use storage::LoopStorage;
-pub use tasks::{JoinHandle, ReserveTask, SlotWaiterTakenError, TaskReservation, TasksFullError};
+pub use tasks::{ReserveTask, SlotWaiterTakenError, TaskReservation, TasksFullError};
 pub use time::{Sleep, TimersFullError};
