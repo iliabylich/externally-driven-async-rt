@@ -1,4 +1,4 @@
-FROM rust:1.99-slim
+FROM rust:1.100-slim
 
 RUN rustup component add clippy llvm-tools-preview \
     && cargo install cargo-llvm-cov --locked \

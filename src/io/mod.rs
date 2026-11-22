@@ -8,7 +8,6 @@ mod frame_writer;
 mod io_registration;
 mod io_waiter;
 mod io_waiters;
-mod wait;
 
 use self::io_waiter::IoWaiter;
 pub use self::{
@@ -20,7 +19,7 @@ pub use self::{
     frame_reader::{FrameReader, FrameReaderError},
     frame_writer::{FrameWriter, FrameWriterError},
 };
-pub(crate) use self::{io_registration::IoRegistration, io_waiters::IoWaiters, wait::Wait};
+pub(crate) use self::{io_registration::IoRegistration, io_waiters::IoWaiters};
 
 #[cfg(test)]
 mod tests;
