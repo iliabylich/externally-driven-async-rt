@@ -18,7 +18,6 @@ mod conversions;
 mod data;
 mod event_loop;
 mod event_queue;
-mod fd_hash_map;
 mod helpers;
 /// IO traits, implemented by streams from [`net`].
 pub mod io;

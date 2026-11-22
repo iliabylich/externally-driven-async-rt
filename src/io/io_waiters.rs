@@ -2,7 +2,7 @@ use rustix::fd::RawFd;
 
 use crate::{
     const_unreachable::const_unreachable,
-    fd_hash_map::FdHashMap,
+    data::fd_hash_map::FdHashMap,
     io::{FdsFullError, IoWaiter},
     selector::{Direction, Directions, IoChange},
 };

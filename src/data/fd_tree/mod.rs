@@ -26,26 +26,26 @@ impl Node {
 }
 
 #[must_use]
-pub(crate) struct FdTree<const N: usize> {
+pub(super) struct FdTree<const N: usize> {
     root: Cell<Option<u32>>,
     nodes: [Node; N],
 }
 
 #[must_use]
-pub(crate) enum Entry<'t, const N: usize> {
+pub(super) enum Entry<'t, const N: usize> {
     Occupied(u32),
     Vacant(VacantEntry<'t, N>),
 }
 
 #[must_use]
-pub(crate) struct VacantEntry<'t, const N: usize> {
+pub(super) struct VacantEntry<'t, const N: usize> {
     tree: &'t FdTree<N>,
     link: &'t Cell<Option<u32>>,
     key: RawFd,
 }
 
 impl<const N: usize> FdTree<N> {
-    pub(crate) const fn new() -> Self {
+    pub(super) const fn new() -> Self {
         Self {
             root: Cell::new(None),
             nodes: [const {
@@ -57,7 +57,7 @@ impl<const N: usize> FdTree<N> {
         }
     }
 
-    pub(crate) const fn entry(&self, key: RawFd) -> Entry<'_, N> {
+    pub(super) const fn entry(&self, key: RawFd) -> Entry<'_, N> {
         let link = self.link(key);
         if let Some(idx) = link.get() {
             return Entry::Occupied(idx);
@@ -69,11 +69,11 @@ impl<const N: usize> FdTree<N> {
         })
     }
 
-    pub(crate) const fn find(&self, key: RawFd) -> Option<u32> {
+    pub(super) const fn find(&self, key: RawFd) -> Option<u32> {
         self.link(key).get()
     }
 
-    pub(crate) const fn remove(&self, key: RawFd) -> u32 {
+    pub(super) const fn remove(&self, key: RawFd) -> u32 {
         let link = self.link(key);
         let Some(idx) = link.get() else {
             const_unreachable!("removing a key that is not in the tree")
@@ -99,7 +99,7 @@ impl<const N: usize> FdTree<N> {
         idx
     }
 
-    pub(crate) const fn key(&self, idx: u32) -> Option<RawFd> {
+    pub(super) const fn key(&self, idx: u32) -> Option<RawFd> {
         self.node(idx).key.get()
     }
 
@@ -145,7 +145,7 @@ impl<const N: usize> FdTree<N> {
 }
 
 impl<const N: usize> VacantEntry<'_, N> {
-    pub(crate) const fn insert(self, idx: u32) {
+    pub(super) const fn insert(self, idx: u32) {
         let node = self.tree.node(idx);
         if node.key.get().is_some() {
             const_unreachable!("{} is free but still has a key", idx);
