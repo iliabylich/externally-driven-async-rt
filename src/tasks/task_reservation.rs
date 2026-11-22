@@ -78,7 +78,8 @@ mod tests {
     };
 
     use crate::{
-        tasks::{TaskReservation, TasksFullError},
+        NotEnoughResources,
+        tasks::TaskReservation,
         testing::{TasksStorage, claimed_forever, spawn_static},
     };
 
@@ -122,6 +123,9 @@ mod tests {
         let tasks = &STORAGE.tasks;
         let (id, entry) = tasks.pool.alloc().unwrap();
         let _reservation = TaskReservation::new(tasks, claimed_forever(), id, entry);
-        assert_eq!(spawn_static(tasks, async {}), Err(TasksFullError));
+        assert_eq!(
+            spawn_static(tasks, async {}),
+            Err(NotEnoughResources::Tasks)
+        );
     }
 }

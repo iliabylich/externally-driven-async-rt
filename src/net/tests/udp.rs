@@ -10,7 +10,7 @@ use rustix::{
 };
 
 use crate::{
-    Either2, EventLoop, LoopStorage, Selector,
+    Either2, EventLoop, LoopStorage, NotEnoughResources, Selector,
     net::{NetError, UdpSocket},
     select2,
     testing::{EventLoopTestingExt, TestLoop, TestStorage, assert_yields, raw_socket},
@@ -128,5 +128,8 @@ fn waiting_on_more_sockets_than_fds_fails() {
         },
     )
     .unwrap();
-    assert_yields!(event_loop.events(), [NetError::FdsFull]);
+    assert_yields!(
+        event_loop.events(),
+        [NetError::NotEnoughResources(NotEnoughResources::FDs)]
+    );
 }

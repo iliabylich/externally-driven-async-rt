@@ -8,7 +8,7 @@ use core::{
 use rustix::fd::{AsFd, AsRawFd};
 
 use crate::{
-    Error, EventLoop, LoopStorage, Selector, TasksFullError,
+    Error, EventLoop, LoopStorage, NotEnoughResources, Selector,
     testing::{
         DispatchOnDrop, EventLoopTestingExt, FdTestingExt, FlagOnDrop, TEST_EVENTS, TEST_FDS,
         TEST_TASK_SIZE, TEST_TASKS, TEST_TIMERS, TestContext, TestLoop, TestStorage, assert_yields,
@@ -387,7 +387,7 @@ fn spawning_into_a_full_pool_fails_without_calling_the_closure() {
                 CALLED.store(true, Relaxed);
                 async {}
             });
-            assert_eq!(spawned.err(), Some(TasksFullError));
+            assert_eq!(spawned.err(), Some(NotEnoughResources::Tasks));
             ctx.dispatch(1).unwrap();
             pending::<()>().await;
         },

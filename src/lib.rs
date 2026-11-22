@@ -22,6 +22,7 @@ mod helpers;
 pub mod io;
 /// A module that implements TCP/UDP/Unix sockets.
 pub mod net;
+mod not_enough_resources;
 mod notify;
 mod select;
 mod selector;
@@ -36,8 +37,8 @@ mod waker_slot;
 
 pub use context::Context;
 pub use event_loop::{Error, EventLoop};
+pub use not_enough_resources::NotEnoughResources;
 pub use select::{Either2, Either3, select2, select3};
 pub use selector::Selector;
 pub use storage::LoopStorage;
-pub use tasks::{SlotWaiterTakenError, TaskReservation, TasksFullError};
-pub use time::TimersFullError;
+pub use tasks::{SlotWaiterTakenError, TaskReservation};

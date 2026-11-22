@@ -3,7 +3,6 @@ mod slot_waiter_taken_error;
 mod task_entry;
 mod task_reservation;
 mod task_slot;
-mod tasks_full_error;
 mod wake_queue;
 
 use core::{
@@ -17,11 +16,8 @@ pub(crate) use self::{
     task_entry::{TaskEntry, TaskId},
     wake_queue::{RootSlot, WakeQueue, Woken},
 };
-pub use self::{
-    slot_waiter_taken_error::SlotWaiterTakenError, task_reservation::TaskReservation,
-    tasks_full_error::TasksFullError,
-};
-use crate::{claimed::Claimed, data::pool::ObjectPool, waker_slot::WakerSlot};
+pub use self::{slot_waiter_taken_error::SlotWaiterTakenError, task_reservation::TaskReservation};
+use crate::{NotEnoughResources, claimed::Claimed, data::pool::ObjectPool, waker_slot::WakerSlot};
 
 #[must_use]
 pub(crate) struct Tasks<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> {
@@ -94,11 +90,11 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         &'static self,
         claimed: Claimed<'a>,
         f: impl FnOnce() -> Fut,
-    ) -> Result<TaskId<TASK_SIZE>, TasksFullError>
+    ) -> Result<TaskId<TASK_SIZE>, NotEnoughResources>
     where
         Fut: Future<Output = ()> + 'a,
     {
-        let (id, entry) = self.pool.alloc().ok_or(TasksFullError)?;
+        let (id, entry) = self.pool.alloc().ok_or(NotEnoughResources::Tasks)?;
         entry.write(claimed, f());
         self.queue.push(id.idx);
         Ok(id)

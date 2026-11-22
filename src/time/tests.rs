@@ -7,13 +7,13 @@ use core::{
 };
 
 use crate::{
-    Selector,
+    NotEnoughResources, Selector,
     tasks::{RootStatus, WakeQueue},
     testing::{
         EventLoopTestingExt, FlagOnDrop, TestContext, TestLoop, TestStorage, assert_yields,
         sleep_blocking, wake_expired_timers,
     },
-    time::{Instant, Timers, TimersFullError},
+    time::{Instant, Timers},
 };
 
 #[test]
@@ -125,7 +125,7 @@ fn sleep_waits_at_least_its_duration() {
     .unwrap();
     assert_yields!(event_loop.events(), []);
     event_loop.run_until_root_finishes();
-    assert!(Instant::now().saturating_duration_since(start) >= Duration::from_millis(20));
+    assert!(Instant::now().saturating_sub(start) >= Duration::from_millis(20));
     assert_yields!(event_loop.events(), [1]);
 }
 
@@ -172,7 +172,7 @@ fn drift_free_interval_from_relative_sleeps() {
             let mut next = Instant::now();
             for i in 0..5 {
                 next = next.saturating_add(period);
-                ctx.sleep(next.saturating_duration_since(Instant::now()))
+                ctx.sleep(next.saturating_sub(Instant::now()))
                     .await
                     .unwrap();
                 ctx.dispatch(i).unwrap();
@@ -182,7 +182,7 @@ fn drift_free_interval_from_relative_sleeps() {
     .unwrap();
     event_loop.run_until_root_finishes();
     assert_yields!(event_loop.events(), [0, 1, 2, 3, 4]);
-    assert!(Instant::now().saturating_duration_since(start) >= period * 5);
+    assert!(Instant::now().saturating_sub(start) >= period * 5);
 }
 
 #[test]
@@ -231,7 +231,7 @@ fn sleep_without_a_free_timer_fails() {
     assert_eq!(first.as_mut().poll(&mut cx), Poll::Pending);
     assert_eq!(
         second.as_mut().poll(&mut cx),
-        Poll::Ready(Err(TimersFullError))
+        Poll::Ready(Err(NotEnoughResources::Timers))
     );
 }
 

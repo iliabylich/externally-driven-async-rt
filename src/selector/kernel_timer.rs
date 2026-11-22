@@ -17,7 +17,7 @@ impl KernelTimer {
             (Self::Armed(armed), Some(deadline)) if armed == deadline => (self, None),
             (_, Some(deadline)) => (
                 Self::Armed(deadline),
-                Some(TimerChange::Arm(deadline.saturating_duration_since(now))),
+                Some(TimerChange::Arm(deadline.saturating_sub(now))),
             ),
             (Self::Armed(_), None) => (Self::Disarmed, Some(TimerChange::Disarm)),
             (Self::Disarmed, None) => (self, None),

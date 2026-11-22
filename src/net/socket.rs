@@ -14,8 +14,9 @@ use rustix::{
 };
 
 use crate::{
+    NotEnoughResources,
     context::Context,
-    io::{FdsFullError, IoRegistration},
+    io::IoRegistration,
     net::NetError,
     selector::Direction,
     strace::{syscall, syscall_end, syscall_start},
@@ -347,7 +348,7 @@ impl Socket {
         &self,
         ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         direction: Direction,
-    ) -> Result<(), FdsFullError> {
+    ) -> Result<(), NotEnoughResources> {
         let registration = IoRegistration::new(ctx, self.0.as_fd(), direction)?;
         registration.wait().await;
         Ok(())

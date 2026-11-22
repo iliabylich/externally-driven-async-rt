@@ -1,13 +1,13 @@
 use core::{future::Future, time::Duration};
 
 use crate::{
-    Either2,
+    Either2, NotEnoughResources,
     claimed::Claimed,
     select2,
     selector::{EVENTS_PER_CALL, Selector, SelectorEvent},
     storage::LoopStorage,
-    tasks::{SlotWaiterTakenError, TaskReservation, TasksFullError},
-    time::{Instant, TimersFullError},
+    tasks::{SlotWaiterTakenError, TaskReservation},
+    time::Instant,
 };
 
 /// A handle of the event loop that you are currently in.
@@ -73,7 +73,7 @@ impl<
         f: F,
     ) -> Result<
         impl Future<Output = ()> + use<E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, F, Fut>,
-        TasksFullError,
+        NotEnoughResources,
     >
     where
         F: FnOnce(Self) -> Fut,
@@ -122,7 +122,7 @@ impl<
     pub fn sleep(
         &self,
         duration: Duration,
-    ) -> impl Future<Output = Result<(), TimersFullError>>
+    ) -> impl Future<Output = Result<(), NotEnoughResources>>
     + use<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
         self.storage
             .timers
@@ -142,7 +142,7 @@ impl<
         &self,
         duration: Duration,
         future: F,
-    ) -> impl Future<Output = Result<Option<F::Output>, TimersFullError>> {
+    ) -> impl Future<Output = Result<Option<F::Output>, NotEnoughResources>> {
         let sleep = self.sleep(duration);
         async move {
             match select2(future, sleep).await {

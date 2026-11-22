@@ -5,12 +5,13 @@ use core::{
 };
 
 use crate::{
+    NotEnoughResources,
     const_unreachable::const_unreachable,
     data::{
         indexed_min_heap::IndexedMinHeap,
         pool::{ObjectPool, VersionedIndex},
     },
-    time::{Instant, TimersFullError},
+    time::Instant,
     waker_slot::WakerSlot,
 };
 
@@ -58,8 +59,8 @@ impl<const N: usize> Timers<N> {
         &self,
         deadline: Instant,
         waker: &Waker,
-    ) -> Result<TimerIndex, TimersFullError> {
-        let (index, timer) = self.pool.alloc().ok_or(TimersFullError)?;
+    ) -> Result<TimerIndex, NotEnoughResources> {
+        let (index, timer) = self.pool.alloc().ok_or(NotEnoughResources::Timers)?;
         let seq = self.next_seq.get();
         self.next_seq.set(seq.wrapping_add(1));
         timer.deadline.set(deadline);
@@ -69,7 +70,7 @@ impl<const N: usize> Timers<N> {
         Ok(index)
     }
 
-    pub(crate) async fn sleep_until(&self, deadline: Instant) -> Result<(), TimersFullError> {
+    pub(crate) async fn sleep_until(&self, deadline: Instant) -> Result<(), NotEnoughResources> {
         if Instant::now() >= deadline {
             return Ok(());
         }
@@ -137,9 +138,10 @@ mod tests {
     use core::{cell::Cell, task::Waker, time::Duration};
 
     use crate::{
+        NotEnoughResources,
         tasks::WakeQueue,
         testing::{assert_yields, counting_waker},
-        time::{Instant, Timers, TimersFullError},
+        time::{Instant, Timers},
     };
 
     #[track_caller]
@@ -174,7 +176,7 @@ mod tests {
         let _first = timers.alloc(now, Waker::noop()).unwrap();
         assert_eq!(
             timers.alloc(now, Waker::noop()).err(),
-            Some(TimersFullError)
+            Some(NotEnoughResources::Timers)
         );
     }
 

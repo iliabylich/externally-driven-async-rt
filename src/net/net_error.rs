@@ -1,21 +1,21 @@
 use rustix::io::Errno;
 
-use crate::io::FdsFullError;
+use crate::NotEnoughResources;
 
 /// An error returned from asynchronous socket operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetError {
     /// A syscall failed.
     Os(Errno),
-    /// All `FDS` fd slots are taken.
-    FdsFull,
+    /// Statically allocated resources are not enough.
+    NotEnoughResources(NotEnoughResources),
 }
 
 impl core::fmt::Display for NetError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Os(errno) => write!(f, "syscall failed: {errno}"),
-            Self::FdsFull => f.write_str("all fd slots are taken"),
+            Self::NotEnoughResources(err) => write!(f, "{err}"),
         }
     }
 }
@@ -28,8 +28,8 @@ impl From<Errno> for NetError {
     }
 }
 
-impl From<FdsFullError> for NetError {
-    fn from(_: FdsFullError) -> Self {
-        Self::FdsFull
+impl From<NotEnoughResources> for NetError {
+    fn from(err: NotEnoughResources) -> Self {
+        Self::NotEnoughResources(err)
     }
 }

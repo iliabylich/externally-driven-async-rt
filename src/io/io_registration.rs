@@ -3,8 +3,9 @@ use core::{mem::DropGuard, task::Poll};
 use rustix::fd::{AsRawFd, BorrowedFd, RawFd};
 
 use crate::{
+    NotEnoughResources,
     context::Context,
-    io::{FdsFullError, IoWaiter, IoWaiters},
+    io::{IoWaiter, IoWaiters},
     selector::{Direction, Selector},
     waker_slot::WakerSlot,
 };
@@ -30,7 +31,7 @@ impl<'a, const FDS: usize> IoRegistration<'a, FDS> {
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         fd: BorrowedFd<'a>,
         direction: Direction,
-    ) -> Result<Self, FdsFullError> {
+    ) -> Result<Self, NotEnoughResources> {
         let fd = fd.as_raw_fd();
         let io = ctx.storage.io_waiters.register(fd, direction)?;
         Ok(Self {

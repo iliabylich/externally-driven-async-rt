@@ -1,6 +1,7 @@
 use crate::{
+    NotEnoughResources,
     context::Context,
-    io::{AsyncWrite, FdsFullError},
+    io::AsyncWrite,
     net::{NetError, socket::Socket},
     selector::Direction,
 };
@@ -39,7 +40,7 @@ impl<'s> BorrowedWriteHalf<'s> {
     >(
         &mut self,
         ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    ) -> Result<(), FdsFullError> {
+    ) -> Result<(), NotEnoughResources> {
         self.socket.ready(ctx, Direction::Write).await
     }
 

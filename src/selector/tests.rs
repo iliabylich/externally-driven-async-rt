@@ -243,7 +243,7 @@ fn timer_fires_after_flush() {
         .flush([], Some(start.saturating_add(Duration::from_millis(20))))
         .unwrap();
     assert!(selector.as_fd().wait_readable_blocking(500));
-    assert!(Instant::now().saturating_duration_since(start) >= Duration::from_millis(20));
+    assert!(Instant::now().saturating_sub(start) >= Duration::from_millis(20));
     assert_yields!(events(&selector), [SelectorEvent::Timer]);
     assert!(!selector.as_fd().wait_readable_blocking(50));
 }

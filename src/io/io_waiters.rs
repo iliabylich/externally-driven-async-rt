@@ -1,9 +1,10 @@
 use rustix::fd::RawFd;
 
 use crate::{
+    NotEnoughResources,
     const_unreachable::const_unreachable,
     data::fd_hash_map::FdHashMap,
-    io::{FdsFullError, IoWaiter},
+    io::IoWaiter,
     selector::{Direction, Directions, IoChange},
 };
 
@@ -23,8 +24,8 @@ impl<const N: usize> IoWaiters<N> {
         &self,
         fd: RawFd,
         direction: Direction,
-    ) -> Result<&IoWaiter, FdsFullError> {
-        let io = self.map.get_or_insert(fd).ok_or(FdsFullError)?;
+    ) -> Result<&IoWaiter, NotEnoughResources> {
+        let io = self.map.get_or_insert(fd).ok_or(NotEnoughResources::FDs)?;
         io.register(direction);
         Ok(io)
     }
@@ -72,7 +73,8 @@ mod tests {
     use core::task::Waker;
 
     use crate::{
-        io::{FdsFullError, IoWaiters},
+        NotEnoughResources,
+        io::IoWaiters,
         selector::{Direction, Directions, IoChange},
         testing::assert_yields,
     };
@@ -186,7 +188,7 @@ mod tests {
         io_waiters.register(3, Direction::Read).unwrap();
         assert_eq!(
             io_waiters.register(4, Direction::Read).err(),
-            Some(FdsFullError)
+            Some(NotEnoughResources::FDs)
         );
     }
 

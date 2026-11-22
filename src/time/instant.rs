@@ -2,7 +2,7 @@ use core::time::Duration;
 
 use crate::sys::monotonic_nanos;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[must_use]
 pub(crate) struct Instant(u64);
 
@@ -18,38 +18,7 @@ impl Instant {
         Self(self.0.saturating_add(nanos))
     }
 
-    pub(crate) const fn saturating_duration_since(self, earlier: Self) -> Duration {
+    pub(crate) const fn saturating_sub(self, earlier: Self) -> Duration {
         Duration::from_nanos(self.0.saturating_sub(earlier.0))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use core::time::Duration;
-
-    use crate::{testing::sleep_blocking, time::instant::Instant};
-
-    #[test]
-    fn adding_and_measuring_round_trip() {
-        let now = Instant::now();
-        let later = now.saturating_add(Duration::from_millis(5));
-        assert_eq!(
-            later.saturating_duration_since(now),
-            Duration::from_millis(5)
-        );
-        assert_eq!(now.saturating_duration_since(later), Duration::ZERO);
-    }
-
-    #[test]
-    fn adding_saturates() {
-        let now = Instant::now();
-        assert_eq!(now.saturating_add(Duration::MAX), Instant(u64::MAX));
-    }
-
-    #[test]
-    fn advances_at_least_as_long_as_a_sleep() {
-        let start = Instant::now();
-        sleep_blocking(Duration::from_millis(20));
-        assert!(Instant::now().saturating_duration_since(start) >= Duration::from_millis(20));
     }
 }
