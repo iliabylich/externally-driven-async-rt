@@ -1,14 +1,10 @@
-mod link;
-mod woken;
-
 use core::{
+    cell::Cell,
     mem::offset_of,
-    sync::atomic::{AtomicU32, AtomicUsize, Ordering::Relaxed},
+    sync::atomic::{AtomicUsize, Ordering::Relaxed},
     task::{RawWaker, RawWakerVTable, Waker},
 };
 
-use self::link::Link;
-pub(crate) use self::woken::Woken;
 use crate::{
     conversions::u32_to_usize, helpers::element, panic_message::const_unreachable, sys::ThreadId,
     tasks::RootSlot,
@@ -28,11 +24,30 @@ const fn decode(slot: u32) -> Option<u32> {
 #[must_use]
 pub(crate) struct WakeQueue<const N: usize> {
     owner: AtomicUsize,
-    head: AtomicU32,
-    tail: AtomicU32,
+    head: Cell<u32>,
+    tail: Cell<u32>,
     links: [Link; N],
     root: Link,
 }
+
+pub(crate) struct Link {
+    slot: u32,
+    queued: Cell<bool>,
+    next: Cell<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+pub(crate) enum Woken {
+    Root,
+    Task(u32),
+}
+
+// SAFETY: `owner` is atomic, so concurrent `claim`s agree on a single owner thread. Every other
+// field is a `Cell` that only the owner thread touches: the crate calls `push`, `push_root`, `pop`
+// and `is_empty` only through a `!Send` `Context` of the claiming loop, and `wake` asserts the
+// owner thread before it enqueues anything.
+unsafe impl<const N: usize> Sync for WakeQueue<N> {}
 
 impl<const N: usize> WakeQueue<N> {
     pub(crate) const fn new() -> Self {
@@ -48,20 +63,30 @@ impl<const N: usize> WakeQueue<N> {
                 "the root link must directly follow the task links"
             );
         }
-        let mut links = [const { Link::new(0) }; N];
+        let mut links = [const {
+            Link {
+                slot: 0,
+                queued: Cell::new(false),
+                next: Cell::new(NONE),
+            }
+        }; N];
         let mut rest: &mut [Link] = &mut links;
         let mut slot: u32 = 0;
         while let [first, tail @ ..] = rest {
-            *first = Link::new(slot);
+            first.slot = slot;
             slot = slot.wrapping_add(1);
             rest = tail;
         }
         Self {
             owner: AtomicUsize::new(UNCLAIMED),
-            head: AtomicU32::new(NONE),
-            tail: AtomicU32::new(NONE),
+            head: Cell::new(NONE),
+            tail: Cell::new(NONE),
             links,
-            root: Link::new(slot),
+            root: Link {
+                slot,
+                queued: Cell::new(false),
+                next: Cell::new(NONE),
+            },
         }
     }
 
@@ -73,13 +98,14 @@ impl<const N: usize> WakeQueue<N> {
     }
 
     pub(crate) fn waker(&'static self, slot: u32) -> Waker {
-        if u32_to_usize(slot) >= N {
+        let slot = u32_to_usize(slot);
+        if slot >= N {
             const_unreachable!("slot {} is out of bounds", slot);
         }
         let link = core::ptr::from_ref(self)
             .wrapping_byte_add(offset_of!(Self, links))
             .cast::<Link>()
-            .wrapping_add(u32_to_usize(slot));
+            .wrapping_add(slot);
         // SAFETY: the vtable functions below uphold the `RawWaker` contract for a pointer to a
         // link of a queue that is never freed, derived from a pointer to the whole queue.
         unsafe { Waker::from_raw(RawWaker::new(link.cast(), vtable::<N>())) }
@@ -102,52 +128,58 @@ impl<const N: usize> WakeQueue<N> {
     }
 
     const fn link(&self, slot: u32) -> &Link {
-        if slot == self.root.slot() {
+        if slot == self.root.slot {
             return &self.root;
         }
         self.task_link(slot)
     }
 
-    fn enqueue(&self, link: &Link) {
-        if link.is_queued() {
+    const fn enqueue(&self, link: &Link) {
+        if link.queued.get() {
             return;
         }
-        link.set_queued(true);
-        link.set_next(NONE);
-        let slot = link.slot();
-        match decode(self.tail.load(Relaxed)) {
-            Some(tail) => self.link(tail).set_next(slot),
-            None => self.head.store(slot, Relaxed),
+        let _ = link.queued.replace(true);
+        let _ = link.next.replace(NONE);
+        let slot = link.slot;
+        match decode(self.tail.get()) {
+            Some(tail) => {
+                let _ = self.link(tail).next.replace(slot);
+            }
+            None => {
+                let _ = self.head.replace(slot);
+            }
         }
-        self.tail.store(slot, Relaxed);
+        let _ = self.tail.replace(slot);
     }
 
-    pub(crate) fn push(&self, slot: u32) {
+    pub(crate) const fn push(&self, slot: u32) {
         self.enqueue(self.task_link(slot));
     }
 
-    pub(crate) fn push_root(&self) {
+    pub(crate) const fn push_root(&self) {
         self.enqueue(&self.root);
     }
 
-    pub(crate) fn pop(&self) -> Option<Woken> {
-        let slot = decode(self.head.load(Relaxed))?;
+    pub(crate) const fn pop(&self) -> Option<Woken> {
+        let Some(slot) = decode(self.head.get()) else {
+            return None;
+        };
         let link = self.link(slot);
-        let next = link.next();
-        self.head.store(next, Relaxed);
+        let next = link.next.get();
+        let _ = self.head.replace(next);
         if decode(next).is_none() {
-            self.tail.store(NONE, Relaxed);
+            let _ = self.tail.replace(NONE);
         }
-        link.set_queued(false);
-        link.set_next(NONE);
-        if slot == self.root.slot() {
+        let _ = link.queued.replace(false);
+        let _ = link.next.replace(NONE);
+        if slot == self.root.slot {
             return Some(Woken::Root);
         }
         Some(Woken::Task(slot))
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        decode(self.head.load(Relaxed)).is_none()
+    pub(crate) const fn is_empty(&self) -> bool {
+        decode(self.head.get()).is_none()
     }
 
     #[cfg(test)]
@@ -178,7 +210,7 @@ unsafe fn wake<const N: usize>(ptr: *const ()) {
     // in `new`), of a queue that is never freed, and carries the provenance of the whole queue,
     // so stepping back by `slot` links and by the offset of `links` lands on that queue.
     let (slot, queue) = unsafe {
-        let slot = (*link).slot();
+        let slot = (*link).slot;
         let queue = link
             .sub(u32_to_usize(slot))
             .byte_sub(offset_of!(WakeQueue<N>, links))

@@ -33,7 +33,7 @@ pub struct LoopStorage<
 // The crate touches it only through a `Context`, which only `LoopStorage::claim`
 // creates, and that succeeds once ever, on the thread that runs the claiming loop (claiming the
 // tasks claims their `WakeQueue`, which panics the second time); `EventLoop` and `Context` are
-// `!Send`, so everything but the wakers stays on that thread, and wakers only touch the atomic
+// `!Send`, so everything but the wakers stays on that thread, and wakers only touch the
 // `WakeQueue`, which asserts that thread.
 unsafe impl<
     E,
