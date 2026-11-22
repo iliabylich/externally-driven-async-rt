@@ -1,7 +1,5 @@
-use crate::{
-    data::pool::{ObjectPool, VersionedIndex},
-    testing::assert_yields,
-};
+use super::{ObjectPool, VersionedIndex};
+use crate::testing::assert_yields;
 use core::cell::Cell;
 
 fn alloc<T, const N: usize>(

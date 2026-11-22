@@ -1,23 +1,23 @@
-mod tree;
-
 use rustix::fd::RawFd;
 
-use self::tree::{Entry, Tree};
 use crate::{
     const_unreachable::const_unreachable,
-    data::pool::{ObjectPool, VersionedIndex},
+    data::{
+        fd_tree::{Entry, FdTree},
+        pool::{ObjectPool, VersionedIndex},
+    },
 };
 
 #[must_use]
 pub(crate) struct FdHashMap<V, const N: usize> {
-    tree: Tree<N>,
+    tree: FdTree<N>,
     pool: ObjectPool<V, N>,
 }
 
 impl<V, const N: usize> FdHashMap<V, N> {
     pub(crate) const fn new(values: [V; N]) -> Self {
         Self {
-            tree: Tree::new(),
+            tree: FdTree::new(),
             pool: ObjectPool::new(values),
         }
     }

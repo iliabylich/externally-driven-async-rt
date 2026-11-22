@@ -26,7 +26,7 @@ impl Node {
 }
 
 #[must_use]
-pub(crate) struct Tree<const N: usize> {
+pub(crate) struct FdTree<const N: usize> {
     root: Cell<Option<u32>>,
     nodes: [Node; N],
 }
@@ -39,12 +39,12 @@ pub(crate) enum Entry<'t, const N: usize> {
 
 #[must_use]
 pub(crate) struct VacantEntry<'t, const N: usize> {
-    tree: &'t Tree<N>,
+    tree: &'t FdTree<N>,
     link: &'t Cell<Option<u32>>,
     key: RawFd,
 }
 
-impl<const N: usize> Tree<N> {
+impl<const N: usize> FdTree<N> {
     pub(crate) const fn new() -> Self {
         Self {
             root: Cell::new(None),
@@ -166,3 +166,6 @@ const fn hash(key: RawFd) -> u64 {
     }
     hash
 }
+
+#[cfg(test)]
+mod tests;
