@@ -1,7 +1,6 @@
 mod borrowed_read_half;
 mod borrowed_write_half;
 mod net_error;
-mod retry;
 mod socket;
 mod tcp_listener;
 mod tcp_stream;

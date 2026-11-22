@@ -16,7 +16,7 @@ use rustix::{
 use crate::{
     context::Context,
     io::{FdsFullError, IoRegistration},
-    net::{NetError, retry::Retry},
+    net::NetError,
     selector::Direction,
     strace::{syscall, syscall_end, syscall_start},
 };
@@ -382,9 +382,7 @@ impl Socket {
         }
     }
 
-    const fn retry<
-        'a,
-        'ctx,
+    async fn retry<
         E: 'static,
         const EVENTS: usize,
         const TASKS: usize,
@@ -393,14 +391,21 @@ impl Socket {
         const TIMERS: usize,
         const FDS: usize,
         T,
-        F: FnMut(&OwnedFd) -> rustix::io::Result<T> + Unpin,
+        F: FnMut(&OwnedFd) -> rustix::io::Result<T>,
     >(
-        &'a self,
-        ctx: &'a Context<'ctx, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        &self,
+        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         direction: Direction,
-        op: F,
-    ) -> Retry<'a, 'ctx, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS, F> {
-        Retry::new(ctx, &self.0, direction, op)
+        mut op: F,
+    ) -> Result<T, NetError> {
+        let registration = IoRegistration::new(ctx, self.0.as_fd(), direction)?;
+        loop {
+            match op(&self.0) {
+                Err(Errno::INTR) => {}
+                Err(Errno::AGAIN) => registration.wait().await,
+                result => return result.map_err(NetError::Os),
+            }
+        }
     }
 }
 

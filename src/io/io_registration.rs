@@ -1,4 +1,4 @@
-use core::{cell::Cell, mem::DropGuard, task::Poll};
+use core::{mem::DropGuard, task::Poll};
 
 use rustix::fd::{AsRawFd, BorrowedFd, RawFd};
 
@@ -6,6 +6,7 @@ use crate::{
     context::Context,
     io::{FdsFullError, IoWaiter, IoWaiters},
     selector::{Direction, Selector},
+    waker_slot::WakerSlot,
 };
 
 #[must_use]
@@ -15,7 +16,6 @@ pub(crate) struct IoRegistration<'a, const FDS: usize> {
     fd: RawFd,
     io: &'a IoWaiter,
     direction: Direction,
-    waiting: Cell<bool>,
 }
 
 impl<'a, const FDS: usize> IoRegistration<'a, FDS> {
@@ -39,31 +39,23 @@ impl<'a, const FDS: usize> IoRegistration<'a, FDS> {
             fd,
             io,
             direction,
-            waiting: Cell::new(false),
         })
     }
 
     pub(crate) async fn wait(&self) {
-        let guard = DropGuard::new(self, Self::cancel_wait);
-        core::future::poll_fn(|cx| self.poll_wait(cx)).await;
-        DropGuard::dismiss(guard);
-    }
-
-    pub(crate) fn poll_wait(&self, cx: &core::task::Context<'_>) -> Poll<()> {
         let waker = self.io.waker(self.direction);
-        if self.waiting.get() && !waker.is_set() {
-            self.waiting.set(false);
-            return Poll::Ready(());
-        }
-        waker.store(cx.waker());
-        self.waiting.set(true);
-        Poll::Pending
-    }
-
-    fn cancel_wait(&self) {
-        if self.waiting.replace(false) {
-            self.io.waker(self.direction).take();
-        }
+        let guard = DropGuard::new(waker, |waker: &WakerSlot| drop(waker.take()));
+        let mut stored = false;
+        core::future::poll_fn(|cx| {
+            if stored && !waker.is_set() {
+                return Poll::Ready(());
+            }
+            waker.store(cx.waker());
+            stored = true;
+            Poll::Pending
+        })
+        .await;
+        DropGuard::dismiss(guard);
     }
 }
 
