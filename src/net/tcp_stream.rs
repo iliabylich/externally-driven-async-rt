@@ -40,7 +40,7 @@ impl TcpStream {
         ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         addr: SocketAddr,
     ) -> Result<Self, NetError> {
-        let socket = Socket::connect_stream(ctx, &addr).await?;
+        let socket = Socket::connect_stream(&ctx.storage.io_waiters, ctx.selector, &addr).await?;
         Ok(Self { socket })
     }
 
@@ -121,7 +121,7 @@ impl AsyncRead for TcpStream {
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket.recv(ctx, buf)
+        self.socket.recv(&ctx.storage.io_waiters, ctx.selector, buf)
     }
 }
 
@@ -142,7 +142,7 @@ impl AsyncWrite for TcpStream {
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket.send(ctx, buf)
+        self.socket.send(&ctx.storage.io_waiters, ctx.selector, buf)
     }
 
     fn flush<

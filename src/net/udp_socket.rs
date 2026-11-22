@@ -51,7 +51,9 @@ impl UdpSocket {
         buf: &[u8],
         addr: SocketAddr,
     ) -> Result<usize, NetError> {
-        self.socket.send_to(ctx, buf, &addr).await
+        self.socket
+            .send_to(&ctx.storage.io_waiters, ctx.selector, buf, &addr)
+            .await
     }
 
     /// Receives a datagram from any sender into a given buffer, returns its size and the sender address.
@@ -77,7 +79,9 @@ impl UdpSocket {
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = Result<(usize, SocketAddr), NetError>> {
-        let recv = self.socket.recv_from(ctx, buf);
+        let recv = self
+            .socket
+            .recv_from(&ctx.storage.io_waiters, ctx.selector, buf);
         async move {
             let (len, addr) = recv.await?;
             Ok((len, addr.ok_or(Errno::AFNOSUPPORT)?.try_into()?))
@@ -116,7 +120,7 @@ impl UdpSocket {
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket.send(ctx, buf)
+        self.socket.send(&ctx.storage.io_waiters, ctx.selector, buf)
     }
 
     /// Receives a datagram from the connected peer into a given buffer, see [`connect`](Self::connect).
@@ -142,7 +146,7 @@ impl UdpSocket {
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket.recv(ctx, buf)
+        self.socket.recv(&ctx.storage.io_waiters, ctx.selector, buf)
     }
 
     /// Returns local address.

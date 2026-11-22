@@ -57,7 +57,8 @@ impl UnixDatagram {
         buf: &'a [u8],
         addr: &'a SocketAddrUnix,
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket.send_to(ctx, buf, addr)
+        self.socket
+            .send_to(&ctx.storage.io_waiters, ctx.selector, buf, addr)
     }
 
     /// Receives a datagram from any sender into a given buffer,
@@ -84,7 +85,9 @@ impl UnixDatagram {
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = Result<(usize, SocketAddrUnix), NetError>> {
-        let recv = self.socket.recv_from(ctx, buf);
+        let recv = self
+            .socket
+            .recv_from(&ctx.storage.io_waiters, ctx.selector, buf);
         async move {
             let (len, addr) = recv.await?;
             let addr = match addr {
@@ -127,7 +130,7 @@ impl UnixDatagram {
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket.send(ctx, buf)
+        self.socket.send(&ctx.storage.io_waiters, ctx.selector, buf)
     }
 
     /// Receives a datagram from the connected peer into a given buffer, see [`connect`](Self::connect).
@@ -153,7 +156,7 @@ impl UnixDatagram {
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket.recv(ctx, buf)
+        self.socket.recv(&ctx.storage.io_waiters, ctx.selector, buf)
     }
 
     /// Returns local address.

@@ -41,7 +41,9 @@ impl<'s> BorrowedWriteHalf<'s> {
         &mut self,
         ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     ) -> Result<(), NotEnoughResources> {
-        self.socket.ready(ctx, Direction::Write).await
+        self.socket
+            .ready(&ctx.storage.io_waiters, ctx.selector, Direction::Write)
+            .await
     }
 
     /// Writes from a given buffer without waiting, returns the number of written bytes.
@@ -72,7 +74,7 @@ impl AsyncWrite for BorrowedWriteHalf<'_> {
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket.send(ctx, buf)
+        self.socket.send(&ctx.storage.io_waiters, ctx.selector, buf)
     }
 
     fn flush<

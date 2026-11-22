@@ -15,10 +15,9 @@ use rustix::{
 
 use crate::{
     NotEnoughResources,
-    context::Context,
-    io::IoRegistration,
+    io::{IoRegistration, IoWaiters},
     net::NetError,
-    selector::Direction,
+    selector::{Direction, Selector},
     strace::{syscall, syscall_end, syscall_start},
 };
 
@@ -123,17 +122,9 @@ impl Socket {
         result
     }
 
-    pub(crate) async fn connect_stream<
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-        A: SocketAddrArg,
-    >(
-        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    pub(crate) async fn connect_stream<const FDS: usize, A: SocketAddrArg>(
+        io_waiters: &IoWaiters<FDS>,
+        selector: &Selector,
         addr: &A,
     ) -> Result<Self, NetError> {
         let socket = Self::new(addr.as_any().address_family(), SocketType::STREAM)?;
@@ -142,7 +133,7 @@ impl Socket {
             Err(Errno::INPROGRESS | Errno::INTR) => {}
             Err(errno) => return Err(errno.into()),
         }
-        IoRegistration::new(ctx, socket.0.as_fd(), Direction::Write)?
+        IoRegistration::new(io_waiters, selector, socket.0.as_fd(), Direction::Write)?
             .wait()
             .await;
         syscall_start!("getsockopt", socket.0, "SOL_SOCKET", "SO_ERROR");
@@ -152,20 +143,13 @@ impl Socket {
         Ok(socket)
     }
 
-    pub(crate) async fn accept<
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
+    pub(crate) async fn accept<const FDS: usize>(
         &self,
-        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        io_waiters: &IoWaiters<FDS>,
+        selector: &Selector,
     ) -> Result<(Self, Option<SocketAddrAny>), NetError> {
         let (fd, addr) = self
-            .retry(ctx, Direction::Read, |fd| {
+            .retry(io_waiters, selector, Direction::Read, |fd| {
                 syscall_start!("accept", fd);
                 let result = rustix::net::acceptfrom(fd);
                 syscall_end!(result; result.as_ref().ok().and_then(|(_, addr)| addr.as_ref()));
@@ -177,21 +161,13 @@ impl Socket {
         Ok((socket, addr))
     }
 
-    pub(crate) fn send<
-        'a,
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
+    pub(crate) fn send<'a, const FDS: usize>(
         &'a self,
-        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        io_waiters: &'a IoWaiters<FDS>,
+        selector: &'a Selector,
         buf: &'a [u8],
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.retry(ctx, Direction::Write, move |fd| {
+        self.retry(io_waiters, selector, Direction::Write, move |fd| {
             syscall_start!("send", fd, buf, buf.len(), SEND_FLAGS);
             let result = rustix::net::send(fd, buf, SEND_FLAGS);
             syscall_end!(result);
@@ -199,21 +175,13 @@ impl Socket {
         })
     }
 
-    pub(crate) fn recv<
-        'a,
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
+    pub(crate) fn recv<'a, const FDS: usize>(
         &'a self,
-        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        io_waiters: &'a IoWaiters<FDS>,
+        selector: &'a Selector,
         buf: &'a mut [u8],
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.retry(ctx, Direction::Read, move |fd| {
+        self.retry(io_waiters, selector, Direction::Read, move |fd| {
             syscall_start!("recv", fd);
             let result = rustix::net::recv(fd, &mut *buf, RecvFlags::empty());
             syscall_end!(
@@ -226,23 +194,14 @@ impl Socket {
         })
     }
 
-    pub(crate) fn send_to<
-        'a,
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-        A: SocketAddrArg,
-    >(
+    pub(crate) fn send_to<'a, const FDS: usize, A: SocketAddrArg>(
         &'a self,
-        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        io_waiters: &'a IoWaiters<FDS>,
+        selector: &'a Selector,
         buf: &'a [u8],
         addr: &'a A,
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.retry(ctx, Direction::Write, move |fd| {
+        self.retry(io_waiters, selector, Direction::Write, move |fd| {
             syscall_start!(
                 "sendto",
                 fd,
@@ -257,21 +216,14 @@ impl Socket {
         })
     }
 
-    pub(crate) async fn recv_from<
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
+    pub(crate) async fn recv_from<const FDS: usize>(
         &self,
-        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        io_waiters: &IoWaiters<FDS>,
+        selector: &Selector,
         buf: &mut [u8],
     ) -> Result<(usize, Option<SocketAddrAny>), NetError> {
         let (len, _, addr) = self
-            .retry(ctx, Direction::Read, |fd| {
+            .retry(io_waiters, selector, Direction::Read, |fd| {
                 syscall_start!("recvfrom", fd);
                 let result = rustix::net::recvfrom(fd, &mut *buf, RecvFlags::empty());
                 syscall_end!(
@@ -336,20 +288,13 @@ impl Socket {
         Ok(())
     }
 
-    pub(crate) async fn ready<
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
+    pub(crate) async fn ready<const FDS: usize>(
         &self,
-        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        io_waiters: &IoWaiters<FDS>,
+        selector: &Selector,
         direction: Direction,
     ) -> Result<(), NotEnoughResources> {
-        let registration = IoRegistration::new(ctx, self.0.as_fd(), direction)?;
+        let registration = IoRegistration::new(io_waiters, selector, self.0.as_fd(), direction)?;
         registration.wait().await;
         Ok(())
     }
@@ -383,23 +328,14 @@ impl Socket {
         }
     }
 
-    async fn retry<
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-        T,
-        F: FnMut(&OwnedFd) -> rustix::io::Result<T>,
-    >(
+    async fn retry<const FDS: usize, T, F: FnMut(&OwnedFd) -> rustix::io::Result<T>>(
         &self,
-        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        io_waiters: &IoWaiters<FDS>,
+        selector: &Selector,
         direction: Direction,
         mut op: F,
     ) -> Result<T, NetError> {
-        let registration = IoRegistration::new(ctx, self.0.as_fd(), direction)?;
+        let registration = IoRegistration::new(io_waiters, selector, self.0.as_fd(), direction)?;
         loop {
             match op(&self.0) {
                 Err(Errno::INTR) => {}

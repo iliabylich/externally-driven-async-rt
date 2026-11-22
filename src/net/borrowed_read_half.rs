@@ -41,7 +41,9 @@ impl<'s> BorrowedReadHalf<'s> {
         &mut self,
         ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     ) -> Result<(), NotEnoughResources> {
-        self.socket.ready(ctx, Direction::Read).await
+        self.socket
+            .ready(&ctx.storage.io_waiters, ctx.selector, Direction::Read)
+            .await
     }
 
     /// Reads into a given buffer without waiting, returns the number of read bytes.
@@ -74,6 +76,6 @@ impl AsyncRead for BorrowedReadHalf<'_> {
         ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket.recv(ctx, buf)
+        self.socket.recv(&ctx.storage.io_waiters, ctx.selector, buf)
     }
 }

@@ -4,7 +4,6 @@ use rustix::fd::{AsRawFd, BorrowedFd, RawFd};
 
 use crate::{
     NotEnoughResources,
-    context::Context,
     io::{IoWaiter, IoWaiters},
     selector::{Direction, Selector},
     waker_slot::WakerSlot,
@@ -20,23 +19,17 @@ pub(crate) struct IoRegistration<'a, const FDS: usize> {
 }
 
 impl<'a, const FDS: usize> IoRegistration<'a, FDS> {
-    pub(crate) fn new<
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-    >(
-        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    pub(crate) fn new(
+        io_waiters: &'a IoWaiters<FDS>,
+        selector: &'a Selector,
         fd: BorrowedFd<'a>,
         direction: Direction,
     ) -> Result<Self, NotEnoughResources> {
         let fd = fd.as_raw_fd();
-        let io = ctx.storage.io_waiters.register(fd, direction)?;
+        let io = io_waiters.register(fd, direction)?;
         Ok(Self {
-            io_waiters: &ctx.storage.io_waiters,
-            selector: ctx.selector,
+            io_waiters,
+            selector,
             fd,
             io,
             direction,

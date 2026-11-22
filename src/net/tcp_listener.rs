@@ -51,7 +51,10 @@ impl TcpListener {
         &mut self,
         ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     ) -> Result<(TcpStream, SocketAddr), NetError> {
-        let (socket, addr) = self.socket.accept(ctx).await?;
+        let (socket, addr) = self
+            .socket
+            .accept(&ctx.storage.io_waiters, ctx.selector)
+            .await?;
         Ok((
             TcpStream::new(socket),
             addr.ok_or(Errno::AFNOSUPPORT)?.try_into()?,
