@@ -8,7 +8,20 @@ run = "cargo test"
 run = "cargo +nightly miri test"
 
 [tasks.coverage]
-run = ["cargo llvm-cov --html", "open target/llvm-cov/html/index.html"]
+run = [
+  "cargo llvm-cov clean --workspace",
+  "cargo llvm-cov --no-report --remap-path-prefix",
+  { task = "docker:run", args = [
+    "cargo",
+    "llvm-cov",
+    "--no-report",
+    "--remap-path-prefix",
+    "--target",
+    "aarch64-unknown-linux-gnu",
+  ] },
+  "cargo llvm-cov report --html --remap-path-prefix --target aarch64-unknown-linux-gnu --ignore-filename-regex '(^|/)(testing|tests)(/|\\.rs$)'",
+  "open target/llvm-cov/html/index.html",
+]
 
 [tasks."docker:build"]
 run = "docker build --quiet --tag {{vars.docker_image}} docker"
@@ -22,6 +35,7 @@ run = """
 docker run --rm --ulimit nofile=256:256 $([ -t 0 ] && echo --interactive --tty) \
   --volume "$PWD:/work" \
   --volume externally-driven-async-rt-target:/work/target \
+  --volume "$PWD/target/llvm-cov-target:/work/target/llvm-cov-target" \
   --volume externally-driven-async-rt-registry:/usr/local/cargo/registry \
   --workdir /work \
   {{vars.docker_image}} {{ usage.args | join(sep=" ") }}
