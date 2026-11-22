@@ -1,6 +1,6 @@
 use core::future::Future;
 
-use crate::{Context, io::AsyncRead, panic_message::const_unreachable};
+use crate::{Context, const_unreachable::const_unreachable, io::AsyncRead};
 
 /// Helper methods on top of [`AsyncRead`], implemented for every [`AsyncRead`].
 pub trait AsyncReadExt: AsyncRead {

@@ -6,7 +6,8 @@ use core::{
 };
 
 use crate::{
-    conversions::u32_to_usize, helpers::element, panic_message::const_unreachable, sys::ThreadId,
+    const_unreachable::const_unreachable, conversions::u32_to_usize, helpers::element,
+    sys::ThreadId,
 };
 
 const NONE: u32 = u32::MAX;

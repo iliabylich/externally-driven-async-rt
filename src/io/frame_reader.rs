@@ -1,4 +1,4 @@
-use crate::{Context, io::AsyncRead, panic_message::const_unreachable};
+use crate::{Context, const_unreachable::const_unreachable, io::AsyncRead};
 
 /// Reads frames of exactly `N` bytes from an [`AsyncRead`].
 ///

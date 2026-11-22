@@ -1,7 +1,7 @@
 use core::{cell::Cell, task::Waker};
 
 use crate::{
-    panic_message::const_unreachable,
+    const_unreachable::const_unreachable,
     pool::ObjectPool,
     time::{
         Instant, TimersFullError,

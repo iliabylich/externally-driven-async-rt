@@ -114,7 +114,7 @@ macro_rules! const_unreachable {
         panic!(concat!("internal error: entered unreachable code: ", $message))
     };
     ($template:literal, $($arg:expr),+ $(,)?) => {{
-        let mut message = $crate::panic_message::PanicMessage::new(concat!(
+        let mut message = $crate::const_unreachable::PanicMessage::new(concat!(
             "internal error: entered unreachable code: ",
             $template
         ));
@@ -132,7 +132,7 @@ pub(crate) use const_unreachable;
 
 #[cfg(test)]
 mod tests {
-    use crate::panic_message::PanicMessage;
+    use crate::const_unreachable::PanicMessage;
 
     #[test]
     fn substitutes_numbers_in_order() {

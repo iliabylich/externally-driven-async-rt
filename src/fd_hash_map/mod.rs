@@ -4,7 +4,7 @@ use rustix::fd::RawFd;
 
 use self::tree::{Entry, Tree};
 use crate::{
-    panic_message::const_unreachable,
+    const_unreachable::const_unreachable,
     pool::{ObjectPool, VersionedIndex},
 };
 

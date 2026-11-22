@@ -4,7 +4,7 @@ mod slot;
 use core::cell::Cell;
 
 pub(crate) use self::index::VersionedIndex;
-use crate::{conversions::u32_to_usize, helpers::element, panic_message::const_unreachable};
+use crate::{const_unreachable::const_unreachable, conversions::u32_to_usize, helpers::element};
 use slot::{FreeSlotView, Slot, SlotView, UsedSlotView};
 
 #[must_use]

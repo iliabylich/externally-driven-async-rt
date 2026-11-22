@@ -1,4 +1,4 @@
-use crate::{Context, io::AsyncWrite, panic_message::const_unreachable};
+use crate::{Context, const_unreachable::const_unreachable, io::AsyncWrite};
 
 /// Writes frames of exactly `N` bytes to an [`AsyncWrite`].
 ///

@@ -16,7 +16,7 @@ use rustix::{
 
 use crate::{
     const_default::ConstDefault,
-    panic_message::const_unreachable,
+    const_unreachable::const_unreachable,
     selector::{Directions, EVENTS_PER_CALL, IoChange, KernelTimer, SelectorEvent, TimerChange},
     strace::{syscall, syscall_end, syscall_start},
     time::Instant,

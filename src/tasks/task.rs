@@ -6,7 +6,7 @@ use core::{
     task::{Context, Poll},
 };
 
-use crate::{claimed::Claimed, panic_message::const_unreachable, tasks::TaskMemory};
+use crate::{claimed::Claimed, const_unreachable::const_unreachable, tasks::TaskMemory};
 
 #[must_use]
 pub(crate) struct Task {

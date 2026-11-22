@@ -1,6 +1,6 @@
 use core::future::Future;
 
-use crate::{Context, io::AsyncWrite, panic_message::const_unreachable};
+use crate::{Context, const_unreachable::const_unreachable, io::AsyncWrite};
 
 /// Helper methods on top of [`AsyncWrite`], implemented for every [`AsyncWrite`].
 pub trait AsyncWriteExt: AsyncWrite {

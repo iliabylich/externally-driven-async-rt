@@ -1,6 +1,6 @@
 use core::cell::Cell;
 
-use crate::{helpers::element, panic_message::const_unreachable};
+use crate::{const_unreachable::const_unreachable, helpers::element};
 
 #[must_use]
 pub(crate) struct EventQueue<E, const N: usize> {

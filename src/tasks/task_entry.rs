@@ -7,7 +7,7 @@ use core::{
 use crate::{
     claimed::Claimed,
     const_default::ConstDefault,
-    panic_message::const_unreachable,
+    const_unreachable::const_unreachable,
     pool::VersionedIndex,
     tasks::{Task, TaskMemory, TaskSlot},
     waker_slot::WakerSlot,

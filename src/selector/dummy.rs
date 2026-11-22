@@ -3,7 +3,7 @@ use core::cell::Cell;
 use rustix::fd::{AsFd, BorrowedFd};
 
 use crate::{
-    panic_message::const_unreachable,
+    const_unreachable::const_unreachable,
     selector::{EVENTS_PER_CALL, IoChange, SelectorEvent},
     time::Instant,
 };

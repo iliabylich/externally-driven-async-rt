@@ -2,7 +2,7 @@ use core::cell::Cell;
 
 use rustix::fd::RawFd;
 
-use crate::{conversions::u32_to_usize, helpers::element, panic_message::const_unreachable};
+use crate::{const_unreachable::const_unreachable, conversions::u32_to_usize, helpers::element};
 
 const MULTIPLIER: u64 = 0x517c_c1b7_2722_0a95;
 
