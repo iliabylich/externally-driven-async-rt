@@ -6,7 +6,7 @@ use core::{
     task::{Context, Poll},
 };
 
-use crate::{claimed::Claimed, tasks::TaskMemory};
+use crate::{claimed::Claimed, panic_message::const_unreachable, tasks::TaskMemory};
 
 #[must_use]
 pub(crate) struct Task {
@@ -35,7 +35,7 @@ impl Task {
         }
         let occupied = memory.occupied();
         if occupied.replace(true) {
-            unreachable!("the task memory is already occupied");
+            const_unreachable!("the task memory is already occupied");
         }
         let memory = memory.as_ptr().cast::<Fut>();
         let task: NonNull<dyn Future<Output = ()> + 'a> = memory;

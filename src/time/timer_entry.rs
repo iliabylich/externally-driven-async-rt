@@ -36,11 +36,11 @@ impl TimerEntry {
         self.waker.store(waker);
     }
 
-    pub(crate) fn take_waker(&self) -> Option<Waker> {
+    pub(crate) const fn take_waker(&self) -> Option<Waker> {
         self.waker.take()
     }
 
-    pub(crate) fn has_waker(&self) -> bool {
+    pub(crate) const fn has_waker(&self) -> bool {
         self.waker.is_set()
     }
 }

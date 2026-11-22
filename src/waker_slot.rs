@@ -11,31 +11,29 @@ impl WakerSlot {
     pub(crate) fn store(&self, waker: &Waker) {
         if let Some(mut stored) = self.0.take() {
             stored.clone_from(waker);
-            self.set(stored);
+            self.0.set(Some(stored));
         } else {
-            self.set(waker.clone());
+            let waker = waker.clone();
+            self.0.set(Some(waker));
         }
     }
 
-    fn set(&self, waker: Waker) {
-        self.0.set(Some(waker));
-    }
-
     pub(crate) fn wake_by_ref(&self) {
-        if let Some(waker) = self.0.take() {
+        if let Some(waker) = self.0.replace(None) {
             waker.wake_by_ref();
             self.0.set(Some(waker));
         }
     }
 
-    pub(crate) fn take(&self) -> Option<Waker> {
-        self.0.take()
+    pub(crate) const fn take(&self) -> Option<Waker> {
+        self.0.replace(None)
     }
 
-    pub(crate) fn is_set(&self) -> bool {
-        let waker = self.0.take();
+    pub(crate) const fn is_set(&self) -> bool {
+        let waker = self.0.replace(None);
         let is_set = waker.is_some();
-        self.0.set(waker);
+        let none = self.0.replace(waker);
+        core::mem::forget(none);
         is_set
     }
 }

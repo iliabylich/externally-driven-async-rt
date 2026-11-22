@@ -12,6 +12,7 @@
 #![cfg_attr(test, allow(clippy::arithmetic_side_effects, clippy::as_conversions))]
 
 mod claimed;
+mod const_default;
 mod context;
 mod conversions;
 mod event_loop;

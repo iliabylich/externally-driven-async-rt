@@ -53,7 +53,7 @@ impl<
     /// # Errors
     ///
     /// Returns `event` back if the queue already holds `EVENTS` events.
-    pub fn dispatch(&self, event: E) -> Result<(), E> {
+    pub const fn dispatch(&self, event: E) -> Result<(), E> {
         self.storage.events.push(event)
     }
 

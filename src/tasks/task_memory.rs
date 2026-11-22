@@ -23,7 +23,7 @@ impl<const SIZE: usize> TaskMemory<SIZE> {
         &self.occupied
     }
 
-    pub(crate) fn as_ptr(&self) -> NonNull<u8> {
-        NonNull::from(&self.bytes).cast()
+    pub(crate) const fn as_ptr(&self) -> NonNull<u8> {
+        NonNull::from_ref(&self.bytes).cast()
     }
 }

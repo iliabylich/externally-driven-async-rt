@@ -6,6 +6,8 @@ use core::{
 
 use crate::{
     claimed::Claimed,
+    const_default::ConstDefault,
+    panic_message::const_unreachable,
     pool::VersionedIndex,
     tasks::{Task, TaskMemory, TaskSlot},
     waker_slot::WakerSlot,
@@ -35,10 +37,11 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
         self.occupy(task);
     }
 
-    pub(crate) fn has_task(&self) -> bool {
-        let slot = self.task.take();
+    pub(crate) const fn has_task(&self) -> bool {
+        let slot = self.task.replace(TaskSlot::DEFAULT);
         let has_task = !matches!(slot, TaskSlot::Empty);
-        self.task.set(slot);
+        let empty = self.task.replace(slot);
+        core::mem::forget(empty);
         has_task
     }
 
@@ -50,7 +53,7 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
     pub(crate) fn poll(&self, cx: &mut Context<'_>) -> Option<Poll<Task>> {
         let mut task = match self.task.replace(TaskSlot::Polling) {
             TaskSlot::Idle(task) => task,
-            TaskSlot::Polling => unreachable!("a task can't be polled re-entrantly"),
+            TaskSlot::Polling => const_unreachable!("a task can't be polled re-entrantly"),
             TaskSlot::Empty => {
                 self.task.set(TaskSlot::Empty);
                 return None;
@@ -65,7 +68,7 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
     }
 
     pub(crate) fn take_idle(&self) -> Option<Task> {
-        match self.task.take() {
+        match self.task.replace(TaskSlot::DEFAULT) {
             TaskSlot::Idle(task) => Some(task),
             slot => {
                 self.task.set(slot);
@@ -78,7 +81,7 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
         self.join_waiter.store(waker);
     }
 
-    pub(crate) fn take_join_waiter(&self) -> Option<Waker> {
+    pub(crate) const fn take_join_waiter(&self) -> Option<Waker> {
         self.join_waiter.take()
     }
 }

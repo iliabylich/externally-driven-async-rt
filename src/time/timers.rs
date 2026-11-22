@@ -1,6 +1,7 @@
 use core::{cell::Cell, task::Waker};
 
 use crate::{
+    panic_message::const_unreachable,
     pool::ObjectPool,
     time::{
         Instant, TimersFullError,
@@ -37,7 +38,13 @@ impl<const N: usize> Timers<N> {
     pub(crate) fn release(&self, index: TimerIndex) {
         let (current, timer) = self.pool.get(index.idx);
         if current != index {
-            unreachable!("releasing stale timer {index:?}, the slot is now {current:?}");
+            const_unreachable!(
+                "releasing stale timer {}/{}, the slot is now {}/{}",
+                index.idx,
+                index.version,
+                current.idx,
+                current.version
+            );
         }
         timer.take_waker();
         self.pool.free(index);

@@ -9,13 +9,19 @@ use core::{
 
 use self::link::Link;
 pub(crate) use self::woken::Woken;
-use crate::{conversions::u32_to_usize, sys::ThreadId, tasks::RootSlot};
+use crate::{
+    conversions::u32_to_usize, helpers::element, panic_message::const_unreachable, sys::ThreadId,
+    tasks::RootSlot,
+};
 
 const NONE: u32 = u32::MAX;
 const UNCLAIMED: usize = 0;
 
-fn decode(slot: u32) -> Option<u32> {
-    (slot != NONE).then_some(slot)
+const fn decode(slot: u32) -> Option<u32> {
+    if slot == NONE {
+        return None;
+    }
+    Some(slot)
 }
 
 #[repr(C)]
@@ -68,7 +74,7 @@ impl<const N: usize> WakeQueue<N> {
 
     pub(crate) fn waker(&'static self, slot: u32) -> Waker {
         if u32_to_usize(slot) >= N {
-            unreachable!("slot {slot} is out of bounds");
+            const_unreachable!("slot {} is out of bounds", slot);
         }
         let link = core::ptr::from_ref(self)
             .wrapping_byte_add(offset_of!(Self, links))
@@ -88,14 +94,14 @@ impl<const N: usize> WakeQueue<N> {
         unsafe { Waker::from_raw(RawWaker::new(link.cast(), vtable::<N>())) }
     }
 
-    fn task_link(&self, slot: u32) -> &Link {
-        let Some(link) = self.links.get(u32_to_usize(slot)) else {
-            unreachable!("slot {slot} is out of bounds");
+    const fn task_link(&self, slot: u32) -> &Link {
+        let Some(link) = element(&self.links, u32_to_usize(slot)) else {
+            const_unreachable!("slot {} is out of bounds", slot);
         };
         link
     }
 
-    fn link(&self, slot: u32) -> &Link {
+    const fn link(&self, slot: u32) -> &Link {
         if slot == self.root.slot() {
             return &self.root;
         }

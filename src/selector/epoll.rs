@@ -15,6 +15,8 @@ use rustix::{
 };
 
 use crate::{
+    const_default::ConstDefault,
+    panic_message::const_unreachable,
     selector::{Directions, EVENTS_PER_CALL, IoChange, KernelTimer, SelectorEvent, TimerChange},
     strace::{syscall, syscall_end, syscall_start},
     time::Instant,
@@ -65,7 +67,7 @@ impl EpollSelector {
             epoll,
             timer_fd,
             notify_fd,
-            timer: Cell::new(KernelTimer::default()),
+            timer: Cell::new(KernelTimer::DEFAULT),
         })
     }
 
@@ -130,7 +132,7 @@ impl EpollSelector {
             NOTIFY_DATA => self.consume_notify(),
             data => {
                 let Ok(fd) = u32::try_from(data) else {
-                    unreachable!("event data {data} is not an fd");
+                    const_unreachable!("event data {} is not an fd", data);
                 };
                 let fd = fd.cast_signed();
                 let ready = Self::ready(event.flags);

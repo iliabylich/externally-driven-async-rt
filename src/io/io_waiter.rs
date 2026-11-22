@@ -40,8 +40,8 @@ impl IoWaiter {
         })
     }
 
-    pub(crate) fn is_registered(&self) -> bool {
-        self.registered.get() != Directions::Empty
+    pub(crate) const fn is_registered(&self) -> bool {
+        !matches!(self.registered.get(), Directions::Empty)
     }
 
     pub(crate) const fn waker(&self, direction: Direction) -> &WakerSlot {
@@ -66,8 +66,8 @@ impl IoWaiter {
         (self.interest() != self.armed.get()).then(|| self.change(fd))
     }
 
-    pub(crate) fn mark_flushed(&self) {
-        self.armed.set(self.interest());
+    pub(crate) const fn mark_flushed(&self) {
+        let _ = self.armed.replace(self.interest());
     }
 
     pub(crate) fn drop_wakers(&self) {
@@ -75,14 +75,18 @@ impl IoWaiter {
         self.writer.take();
     }
 
-    fn interest(&self) -> Directions {
-        [Direction::Read, Direction::Write]
-            .into_iter()
-            .filter(|direction| self.waker(*direction).is_set())
-            .fold(Directions::Empty, Directions::with)
+    const fn interest(&self) -> Directions {
+        let mut interest = Directions::Empty;
+        if self.reader.is_set() {
+            interest = interest.with(Direction::Read);
+        }
+        if self.writer.is_set() {
+            interest = interest.with(Direction::Write);
+        }
+        interest
     }
 
-    fn change(&self, fd: RawFd) -> IoChange {
+    const fn change(&self, fd: RawFd) -> IoChange {
         IoChange {
             fd,
             interest: self.interest(),

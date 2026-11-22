@@ -1,5 +1,7 @@
 use core::cell::Cell;
 
+use crate::{helpers::element, panic_message::const_unreachable};
+
 #[must_use]
 pub(crate) struct EventQueue<E, const N: usize> {
     slots: [Cell<Option<E>>; N],
@@ -19,32 +21,38 @@ impl<E, const N: usize> EventQueue<E, N> {
         }
     }
 
-    pub(crate) fn push(&self, event: E) -> Result<(), E> {
+    pub(crate) const fn push(&self, event: E) -> Result<(), E> {
         let tail = self.tail.get();
         let slot = self.slot(tail);
-        if let Some(occupied) = slot.take() {
-            slot.set(Some(occupied));
+        let previous = slot.replace(None);
+        if previous.is_some() {
+            let none = slot.replace(previous);
+            core::mem::forget(none);
             return Err(event);
         }
-        slot.set(Some(event));
-        self.tail.set(Self::next(tail));
+        core::mem::forget(previous);
+        let none = slot.replace(Some(event));
+        core::mem::forget(none);
+        let _ = self.tail.replace(Self::next(tail));
         Ok(())
     }
 
-    pub(crate) fn pop(&self) -> Option<E> {
+    pub(crate) const fn pop(&self) -> Option<E> {
         let head = self.head.get();
-        let event = self.slot(head).take()?;
-        self.head.set(Self::next(head));
-        Some(event)
+        let event = self.slot(head).replace(None);
+        if event.is_some() {
+            let _ = self.head.replace(Self::next(head));
+        }
+        event
     }
 
     pub(crate) fn clear(&self) {
         while self.pop().is_some() {}
     }
 
-    fn slot(&self, index: usize) -> &Cell<Option<E>> {
-        let Some(slot) = self.slots.get(index) else {
-            unreachable!("queue indices stay below the capacity");
+    const fn slot(&self, index: usize) -> &Cell<Option<E>> {
+        let Some(slot) = element(&self.slots, index) else {
+            const_unreachable!("queue indices stay below the capacity");
         };
         slot
     }

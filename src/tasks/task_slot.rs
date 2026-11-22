@@ -1,10 +1,12 @@
-use crate::tasks::Task;
+use crate::{const_default::ConstDefault, tasks::Task};
 
-#[derive(Default)]
 #[must_use]
 pub(crate) enum TaskSlot {
-    #[default]
     Empty,
     Idle(Task),
     Polling,
+}
+
+impl ConstDefault for TaskSlot {
+    const DEFAULT: Self = Self::Empty;
 }

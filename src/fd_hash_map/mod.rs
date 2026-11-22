@@ -3,7 +3,10 @@ mod tree;
 use rustix::fd::RawFd;
 
 use self::tree::{Entry, Tree};
-use crate::pool::{ObjectPool, VersionedIndex};
+use crate::{
+    panic_message::const_unreachable,
+    pool::{ObjectPool, VersionedIndex},
+};
 
 #[must_use]
 pub(crate) struct FdHashMap<V, const N: usize> {
@@ -52,7 +55,7 @@ impl<V, const N: usize> FdHashMap<V, N> {
     pub(crate) fn iter(&self) -> impl Iterator<Item = (RawFd, &V)> {
         self.pool.iter().map(|(VersionedIndex { idx, .. }, value)| {
             let Some(key) = self.tree.key(idx) else {
-                unreachable!("{idx} is allocated but has no key")
+                const_unreachable!("{} is allocated but has no key", idx)
             };
             (key, value)
         })

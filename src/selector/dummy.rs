@@ -3,6 +3,7 @@ use core::cell::Cell;
 use rustix::fd::{AsFd, BorrowedFd};
 
 use crate::{
+    panic_message::const_unreachable,
     selector::{EVENTS_PER_CALL, IoChange, SelectorEvent},
     time::Instant,
 };
@@ -25,7 +26,7 @@ impl DummySelector {
     }
 
     pub(crate) fn apply_now(&self, _: IoChange) -> rustix::io::Result<()> {
-        unreachable!("no selector under Miri")
+        const_unreachable!("no selector under Miri")
     }
 
     pub(crate) fn flush(
@@ -56,6 +57,6 @@ impl DummySelector {
 
 impl AsFd for DummySelector {
     fn as_fd(&self) -> BorrowedFd<'_> {
-        unreachable!("no selector under Miri")
+        const_unreachable!("no selector under Miri")
     }
 }
