@@ -52,12 +52,6 @@ impl<const TIMERS: usize> Drop for Sleep<'_, TIMERS> {
     }
 }
 
-impl<const TIMERS: usize> core::fmt::Debug for Sleep<'_, TIMERS> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("Sleep")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use core::{

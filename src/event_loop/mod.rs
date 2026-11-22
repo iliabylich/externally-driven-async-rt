@@ -161,20 +161,5 @@ impl<
     }
 }
 
-impl<
-    E: 'static,
-    const EVENTS: usize,
-    const TASKS: usize,
-    const TASK_SIZE: usize,
-    const ROOT_TASK_SIZE: usize,
-    const TIMERS: usize,
-    const FDS: usize,
-> core::fmt::Debug for EventLoop<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
-{
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("EventLoop")
-    }
-}
-
 #[cfg(test)]
 mod tests;

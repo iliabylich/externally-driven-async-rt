@@ -45,14 +45,6 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> Dr
     }
 }
 
-impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> core::fmt::Debug
-    for JoinHandle<TASKS, TASK_SIZE, ROOT_TASK_SIZE>
-{
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("JoinHandle")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use core::{

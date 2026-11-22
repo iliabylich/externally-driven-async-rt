@@ -76,9 +76,3 @@ impl AsyncRead for BorrowedReadHalf<'_> {
         self.socket.recv(ctx, buf)
     }
 }
-
-impl core::fmt::Debug for BorrowedReadHalf<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("BorrowedReadHalf")
-    }
-}

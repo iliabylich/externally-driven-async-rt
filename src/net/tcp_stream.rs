@@ -161,9 +161,3 @@ impl AsyncWrite for TcpStream {
         core::future::ready(Ok(()))
     }
 }
-
-impl core::fmt::Debug for TcpStream {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("TcpStream")
-    }
-}

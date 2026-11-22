@@ -67,9 +67,3 @@ impl TcpListener {
         self.socket.local_addr()
     }
 }
-
-impl core::fmt::Debug for TcpListener {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("TcpListener")
-    }
-}

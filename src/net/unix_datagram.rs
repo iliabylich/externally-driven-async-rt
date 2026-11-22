@@ -165,9 +165,3 @@ impl UnixDatagram {
         self.socket.local_addr()
     }
 }
-
-impl core::fmt::Debug for UnixDatagram {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("UnixDatagram")
-    }
-}

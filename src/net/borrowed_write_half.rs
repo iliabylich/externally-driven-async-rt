@@ -90,9 +90,3 @@ impl AsyncWrite for BorrowedWriteHalf<'_> {
         core::future::ready(Ok(()))
     }
 }
-
-impl core::fmt::Debug for BorrowedWriteHalf<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("BorrowedWriteHalf")
-    }
-}

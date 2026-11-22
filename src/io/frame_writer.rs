@@ -99,12 +99,6 @@ impl<W: AsyncWrite, const N: usize> FrameWriter<W, N> {
     }
 }
 
-impl<W, const N: usize> core::fmt::Debug for FrameWriter<W, N> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("FrameWriter")
-    }
-}
-
 /// An error returned from [`FrameWriter::write_all`] and [`FrameWriter::flush`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameWriterError<E> {

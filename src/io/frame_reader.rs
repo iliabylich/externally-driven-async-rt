@@ -74,12 +74,6 @@ impl<R, const N: usize> FrameReader<R, N> {
     }
 }
 
-impl<R, const N: usize> core::fmt::Debug for FrameReader<R, N> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("FrameReader")
-    }
-}
-
 /// An error returned from [`FrameReader::read_exact`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameReaderError<E> {

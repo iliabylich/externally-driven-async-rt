@@ -139,9 +139,3 @@ impl AsyncWrite for UnixStream {
         core::future::ready(Ok(()))
     }
 }
-
-impl core::fmt::Debug for UnixStream {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("UnixStream")
-    }
-}

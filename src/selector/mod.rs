@@ -76,11 +76,5 @@ impl Selector {
     }
 }
 
-impl core::fmt::Debug for Selector {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("Selector")
-    }
-}
-
 #[cfg(test)]
 mod tests;

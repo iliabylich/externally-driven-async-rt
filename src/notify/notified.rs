@@ -40,9 +40,3 @@ impl Drop for Notified<'_> {
         }
     }
 }
-
-impl core::fmt::Debug for Notified<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("Notified")
-    }
-}

@@ -1,7 +1,6 @@
 #![no_std]
 #![doc = include_str!("../README.md")]
 #![warn(
-    missing_debug_implementations,
     missing_docs,
     trivial_casts,
     trivial_numeric_casts,
