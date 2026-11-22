@@ -77,21 +77,13 @@ mod tests {
         testing::assert_yields,
     };
 
-    #[track_caller]
-    fn assert_pending_changes<const N: usize>(
-        io_waiters: &IoWaiters<N>,
-        expected: impl IntoIterator<Item = IoChange>,
-    ) {
-        assert_yields!(io_waiters.pending_changes(), expected);
-    }
-
     fn change(fd: i32, interest: Directions) -> IoChange {
         IoChange { fd, interest }
     }
 
     #[test]
     fn register_wait_release() {
-        let io_waiters = &IoWaiters::<1>::new();
+        let io_waiters = IoWaiters::<1>::new();
         let io = io_waiters.register(3, Direction::Write).unwrap();
         assert!(!io.waker(Direction::Write).is_set());
         io.waker(Direction::Write).store(Waker::noop());
@@ -105,7 +97,7 @@ mod tests {
 
     #[test]
     fn registering_a_registered_direction_takes_it_over() {
-        let io_waiters = &IoWaiters::<1>::new();
+        let io_waiters = IoWaiters::<1>::new();
         let io = io_waiters.register(3, Direction::Read).unwrap();
         io.waker(Direction::Read).store(Waker::noop());
         let io = io_waiters.register(3, Direction::Read).unwrap();
@@ -116,32 +108,32 @@ mod tests {
 
     #[test]
     fn changes_follow_the_stored_wakers() {
-        let io_waiters = &IoWaiters::<1>::new();
+        let io_waiters = IoWaiters::<1>::new();
         let io = io_waiters.register(3, Direction::Read).unwrap();
-        assert_pending_changes(io_waiters, []);
+        assert_yields!(io_waiters.pending_changes(), []);
 
         io.waker(Direction::Read).store(Waker::noop());
-        assert_pending_changes(io_waiters, [change(3, Directions::Read)]);
+        assert_yields!(io_waiters.pending_changes(), [change(3, Directions::Read)]);
         io_waiters.mark_flushed();
-        assert_pending_changes(io_waiters, []);
+        assert_yields!(io_waiters.pending_changes(), []);
 
         io.waker(Direction::Read).take();
-        assert_pending_changes(io_waiters, [change(3, Directions::Empty)]);
+        assert_yields!(io_waiters.pending_changes(), [change(3, Directions::Empty)]);
     }
 
     #[test]
     fn one_change_per_fd_with_the_combined_interest() {
-        let io_waiters = &IoWaiters::<1>::new();
+        let io_waiters = IoWaiters::<1>::new();
         let io = io_waiters.register(3, Direction::Read).unwrap();
         io_waiters.register(3, Direction::Write).unwrap();
         io.waker(Direction::Read).store(Waker::noop());
         io.waker(Direction::Write).store(Waker::noop());
-        assert_pending_changes(io_waiters, [change(3, Directions::Both)]);
+        assert_yields!(io_waiters.pending_changes(), [change(3, Directions::Both)]);
     }
 
     #[test]
     fn releasing_an_armed_direction_returns_the_remaining_interest() {
-        let io_waiters = &IoWaiters::<1>::new();
+        let io_waiters = IoWaiters::<1>::new();
         let io = io_waiters.register(3, Direction::Read).unwrap();
         io_waiters.register(3, Direction::Write).unwrap();
         io.waker(Direction::Read).store(Waker::noop());
@@ -163,7 +155,7 @@ mod tests {
 
     #[test]
     fn an_event_wakes_only_the_ready_direction_and_rearms_the_other() {
-        let io_waiters = &IoWaiters::<1>::new();
+        let io_waiters = IoWaiters::<1>::new();
         let io = io_waiters.register(3, Direction::Read).unwrap();
         io_waiters.register(3, Direction::Write).unwrap();
         io.waker(Direction::Read).store(Waker::noop());
@@ -173,24 +165,24 @@ mod tests {
         io_waiters.wake_ready(3, Directions::Read);
         assert!(!io.waker(Direction::Read).is_set());
         assert!(io.waker(Direction::Write).is_set());
-        assert_pending_changes(io_waiters, [change(3, Directions::Write)]);
+        assert_yields!(io_waiters.pending_changes(), [change(3, Directions::Write)]);
     }
 
     #[test]
     fn an_event_for_an_unregistered_fd_is_ignored() {
-        let io_waiters = &IoWaiters::<1>::new();
+        let io_waiters = IoWaiters::<1>::new();
         let io = io_waiters.register(3, Direction::Read).unwrap();
         io.waker(Direction::Read).store(Waker::noop());
         io_waiters.mark_flushed();
 
         io_waiters.wake_ready(4, Directions::Both);
         assert!(io.waker(Direction::Read).is_set());
-        assert_pending_changes(io_waiters, []);
+        assert_yields!(io_waiters.pending_changes(), []);
     }
 
     #[test]
     fn capacity_is_bounded() {
-        let io_waiters = &IoWaiters::<1>::new();
+        let io_waiters = IoWaiters::<1>::new();
         io_waiters.register(3, Direction::Read).unwrap();
         assert_eq!(
             io_waiters.register(4, Direction::Read).err(),
@@ -200,7 +192,7 @@ mod tests {
 
     #[test]
     fn releasing_after_dropping_wakers_removes_the_fd() {
-        let io_waiters = &IoWaiters::<1>::new();
+        let io_waiters = IoWaiters::<1>::new();
         let io = io_waiters.register(3, Direction::Read).unwrap();
         io_waiters.register(3, Direction::Write).unwrap();
         io.waker(Direction::Read).store(Waker::noop());

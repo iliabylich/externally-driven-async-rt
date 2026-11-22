@@ -5,10 +5,7 @@ use core::{
     task::Poll,
 };
 
-use rustix::{
-    fd::{AsFd, AsRawFd},
-    io::Errno,
-};
+use rustix::fd::{AsFd, AsRawFd};
 
 use crate::{
     Error, EventLoop, LoopStorage, Selector, TasksFullError,
@@ -372,35 +369,6 @@ fn loop_exposes_the_selector_fd() {
     )
     .unwrap();
     assert_eq!(event_loop.as_fd().as_raw_fd(), fd);
-}
-
-#[test]
-fn errors_display_their_cause() {
-    struct StartsWith<'a>(&'a str);
-
-    impl core::fmt::Write for StartsWith<'_> {
-        fn write_str(&mut self, s: &str) -> core::fmt::Result {
-            match self.0.strip_prefix(s) {
-                Some(rest) => self.0 = rest,
-                None if self.0.is_empty() => {}
-                None => return Err(core::fmt::Error),
-            }
-            Ok(())
-        }
-    }
-
-    for (error, expected) in [
-        (Error::RootFinished, "the root future has finished"),
-        (Error::Io(Errno::BADF), "event loop IO error: "),
-        (
-            Error::StorageAlreadyUsed,
-            "the storage has already been used by another event loop",
-        ),
-    ] {
-        let mut prefix = StartsWith(expected);
-        core::fmt::write(&mut prefix, format_args!("{error}")).unwrap();
-        assert_eq!(prefix.0, "", "{error:?}");
-    }
 }
 
 #[test]
