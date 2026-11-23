@@ -13,7 +13,7 @@ pub struct BorrowedWriteHalf<'s> {
 }
 
 impl<'s> BorrowedWriteHalf<'s> {
-    pub(crate) const fn new(socket: &'s Socket) -> Self {
+    pub(super) const fn new(socket: &'s Socket) -> Self {
         Self { socket }
     }
 
