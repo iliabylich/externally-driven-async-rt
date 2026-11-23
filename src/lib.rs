@@ -34,7 +34,7 @@ mod testing;
 mod time;
 mod waker_slot;
 
-pub use context::Context;
+pub use context::{Context, MaybeTimedOut};
 pub use event_loop::{Error, EventLoop};
 pub use not_enough_resources::NotEnoughResources;
 pub use select::{Either2, Either3, select2, select3};

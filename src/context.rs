@@ -126,7 +126,7 @@ impl<
         timers.sleep_until(timers.now().saturating_add(duration))
     }
 
-    /// Runs `future` with a timeout of `duration`, resolves to `Ok(None)` in case of a timeout.
+    /// Runs `future` with a timeout of `duration`, resolves to `Ok(MaybeTimedOut::Timeout)` in case of a timeout.
     ///
     /// # Errors
     ///
@@ -139,12 +139,12 @@ impl<
         &self,
         duration: Duration,
         future: F,
-    ) -> impl Future<Output = Result<Option<F::Output>, NotEnoughResources>> {
+    ) -> impl Future<Output = Result<MaybeTimedOut<F::Output>, NotEnoughResources>> {
         let sleep = self.sleep(duration);
         async move {
             match select2(future, sleep).await {
-                Either2::Left(output) => Ok(Some(output)),
-                Either2::Right(Ok(())) => Ok(None),
+                Either2::Left(output) => Ok(MaybeTimedOut::Completed(output)),
+                Either2::Right(Ok(())) => Ok(MaybeTimedOut::Timeout),
                 Either2::Right(Err(err)) => Err(err),
             }
         }
@@ -237,6 +237,15 @@ impl<
 {
 }
 
+/// Result of the [`Context::timeout`]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaybeTimedOut<T> {
+    /// Operation has timed out.
+    Timeout,
+    /// Operation has completed.
+    Completed(T),
+}
+
 #[cfg(test)]
 mod tests {
     use core::{
@@ -247,6 +256,7 @@ mod tests {
         time::Duration,
     };
 
+    use super::MaybeTimedOut;
     use crate::{
         LoopStorage, Selector,
         testing::{FlagOnDrop, assert_yields, fake_instant, wake_expired_timers},
@@ -265,7 +275,11 @@ mod tests {
                 .timeout(Duration::from_secs(60), ctx.notified())
                 .await
                 .unwrap();
-            ctx.dispatch(result.map_or(0, |()| 1)).unwrap();
+            let event = match result {
+                MaybeTimedOut::Timeout => 0,
+                MaybeTimedOut::Completed(()) => 1,
+            };
+            ctx.dispatch(event).unwrap();
             pending::<()>().await;
         });
         assert_eq!(ctx.storage.tasks.run_ready(), Poll::Pending);
@@ -295,7 +309,11 @@ mod tests {
                 })
                 .await
                 .unwrap();
-            ctx.dispatch(result.map_or(0, |()| 1)).unwrap();
+            let event = match result {
+                MaybeTimedOut::Timeout => 0,
+                MaybeTimedOut::Completed(()) => 1,
+            };
+            ctx.dispatch(event).unwrap();
             pending::<()>().await;
         });
         assert_eq!(ctx.storage.tasks.run_ready(), Poll::Pending);
@@ -321,7 +339,10 @@ mod tests {
             core::future::ready(()).await;
             *borrowed
         }));
-        assert_eq!(timeout.as_mut().poll(&mut cx), Poll::Ready(Ok(Some(1))));
+        assert_eq!(
+            timeout.as_mut().poll(&mut cx),
+            Poll::Ready(Ok(MaybeTimedOut::Completed(1)))
+        );
         assert_eq!(ctx.storage.timers.next_deadline(), None);
     }
 

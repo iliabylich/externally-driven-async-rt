@@ -9,7 +9,7 @@
 use core::{net::SocketAddr, time::Duration};
 
 use externally_driven_async_rt::{
-    Context, Error, EventLoop, LoopStorage, Selector,
+    Context, Error, EventLoop, LoopStorage, MaybeTimedOut, Selector,
     io::{AsyncRead, AsyncWriteExt, WriteAllError},
     net::{NetError, TcpListener, TcpStream},
 };
@@ -146,16 +146,20 @@ async fn serve(ctx: &ServerContext<'_>, mut stream: TcpStream, peer: SocketAddr)
     loop {
         let exchange = exchange(ctx, &mut stream, &mut buf, &mut len);
         match ctx.timeout(REQUEST_TIMEOUT, exchange).await.unwrap() {
-            Some(Ok(Exchange::Served(len))) => ctx.dispatch(Event::Served { peer, len }).unwrap(),
-            Some(Ok(Exchange::TooLong)) => return Event::RequestTooLong(peer),
-            Some(Ok(Exchange::Closed)) => return Event::Disconnected { peer, error: None },
-            Some(Err(errno)) => {
+            MaybeTimedOut::Completed(Ok(Exchange::Served(len))) => {
+                ctx.dispatch(Event::Served { peer, len }).unwrap();
+            }
+            MaybeTimedOut::Completed(Ok(Exchange::TooLong)) => return Event::RequestTooLong(peer),
+            MaybeTimedOut::Completed(Ok(Exchange::Closed)) => {
+                return Event::Disconnected { peer, error: None };
+            }
+            MaybeTimedOut::Completed(Err(errno)) => {
                 return Event::Disconnected {
                     peer,
                     error: Some(errno),
                 };
             }
-            None => return Event::TimedOut(peer),
+            MaybeTimedOut::Timeout => return Event::TimedOut(peer),
         }
     }
 }
