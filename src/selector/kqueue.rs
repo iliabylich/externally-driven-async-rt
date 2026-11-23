@@ -59,8 +59,9 @@ impl KqueueSelector {
         &self,
         io_changes: impl IntoIterator<Item = IoChange>,
         deadline: Option<Instant>,
+        now: Instant,
     ) -> rustix::io::Result<()> {
-        let (timer, timer_change) = self.timer.get().flush(deadline, Instant::now());
+        let (timer, timer_change) = self.timer.get().flush(deadline, now);
         self.timer.set(timer);
         let changes = io_changes
             .into_iter()

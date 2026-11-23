@@ -90,11 +90,12 @@ impl EpollSelector {
         &self,
         io_changes: impl IntoIterator<Item = IoChange>,
         deadline: Option<Instant>,
+        now: Instant,
     ) -> rustix::io::Result<()> {
         for change in io_changes {
             self.apply_io(change)?;
         }
-        let (timer, timer_change) = self.timer.get().flush(deadline, Instant::now());
+        let (timer, timer_change) = self.timer.get().flush(deadline, now);
         self.timer.set(timer);
         let Some(change) = timer_change else {
             return Ok(());

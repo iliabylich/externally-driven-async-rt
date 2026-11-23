@@ -6,7 +6,7 @@ use crate::{
     notify::Notification,
     selector::Selector,
     tasks::{RootSlot, Tasks},
-    time::Timers,
+    time::{Instant, Timers},
 };
 
 /// The main pre-allocated storage that [`EventLoop`](crate::EventLoop) needs.
@@ -59,8 +59,12 @@ impl<
 {
     /// Constructor of an empty storage, **can be called in const-context**, so you can put it into a static variable.
     pub const fn new() -> Self {
+        Self::with_clock(Instant::now)
+    }
+
+    pub(crate) const fn with_clock(now: fn() -> Instant) -> Self {
         Self {
-            timers: Timers::new(),
+            timers: Timers::new(now),
             io_waiters: IoWaiters::new(),
             tasks: Tasks::new(),
             notification: Notification::new(),

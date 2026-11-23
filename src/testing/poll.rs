@@ -1,22 +1,16 @@
-use core::time::Duration;
-
-use rustix::{
-    event::Timespec,
-    thread::{NanosleepRelativeResult, nanosleep},
+use core::{
+    sync::atomic::{AtomicU64, Ordering::Relaxed},
+    time::Duration,
 };
 
 use crate::time::{Instant, Timers};
 
-pub(crate) fn sleep_blocking(duration: Duration) {
-    let timeout = Timespec {
-        tv_sec: i64::try_from(duration.as_secs()).unwrap(),
-        tv_nsec: i64::from(duration.subsec_nanos()),
-    };
-    assert!(matches!(nanosleep(&timeout), NanosleepRelativeResult::Ok));
+pub(crate) fn fake_instant(millis: &AtomicU64) -> Instant {
+    Instant::ZERO.saturating_add(Duration::from_millis(millis.load(Relaxed)))
 }
 
 pub(crate) fn wake_expired_timers<const TIMERS: usize>(timers: &Timers<TIMERS>) {
-    let now = Instant::now();
+    let now = timers.now();
     while let Some(waker) = timers.take_expired(now) {
         waker.wake();
     }

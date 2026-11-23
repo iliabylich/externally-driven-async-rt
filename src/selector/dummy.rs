@@ -33,6 +33,7 @@ impl DummySelector {
         &self,
         io_changes: impl IntoIterator<Item = IoChange>,
         deadline: Option<Instant>,
+        _: Instant,
     ) -> rustix::io::Result<()> {
         assert!(
             io_changes.into_iter().next().is_none() && deadline.is_none(),

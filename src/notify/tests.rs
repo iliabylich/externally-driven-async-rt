@@ -2,6 +2,7 @@ use core::{
     cell::Cell,
     future::{Future, pending},
     pin::pin,
+    sync::atomic::{AtomicU64, Ordering::Relaxed},
     task::{Context, Poll, Waker},
     time::Duration,
 };
@@ -12,8 +13,9 @@ use crate::{
     tasks::RootStatus,
     testing::{
         EventLoopTestingExt, FdTestingExt, TestContext, TestLoop, TestStorage, assert_yields,
-        counting_waker, sleep_blocking, wake_expired_timers,
+        counting_waker, fake_instant, wake_expired_timers,
     },
+    time::Instant,
 };
 
 #[test]
@@ -73,9 +75,13 @@ fn notifications_coalesce() {
 
 #[test]
 fn notification_without_a_waiter_is_kept() {
+    static NOW: AtomicU64 = AtomicU64::new(0);
+    fn now() -> Instant {
+        fake_instant(&NOW)
+    }
     let selector = Selector::new().unwrap();
     let (ctx, root): (TestContext<'_>, _) = {
-        static STORAGE: TestStorage = TestStorage::new();
+        static STORAGE: TestStorage = TestStorage::with_clock(now);
         STORAGE.claim(&selector).unwrap()
     };
     ctx.storage.tasks.spawn_root(root, ctx.claimed, async move {
@@ -91,7 +97,7 @@ fn notification_without_a_waiter_is_kept() {
     assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
     assert_yields!(ctx.storage.events.iter_removing(), []);
 
-    sleep_blocking(Duration::from_millis(10));
+    NOW.store(10, Relaxed);
     wake_expired_timers(&ctx.storage.timers);
     assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
     assert_yields!(ctx.storage.events.iter_removing(), [1, 2]);

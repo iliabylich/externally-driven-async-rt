@@ -60,8 +60,9 @@ impl Selector {
         &self,
         io_changes: impl IntoIterator<Item = IoChange>,
         deadline: Option<Instant>,
+        now: Instant,
     ) -> rustix::io::Result<()> {
-        self.backend.flush(io_changes, deadline)
+        self.backend.flush(io_changes, deadline, now)
     }
 
     pub(crate) fn poll_nonblocking(

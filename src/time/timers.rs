@@ -17,6 +17,7 @@ use crate::{
 
 #[must_use]
 pub(crate) struct Timers<const N: usize> {
+    now: fn() -> Instant,
     pool: ObjectPool<TimerEntry, N>,
     armed: IndexedMinHeap<(Instant, u64), N>,
     next_seq: Cell<u64>,
@@ -32,8 +33,9 @@ pub(crate) struct TimerEntry {
 pub(crate) type TimerIndex = VersionedIndex<TimerEntry>;
 
 impl<const N: usize> Timers<N> {
-    pub(crate) const fn new() -> Self {
+    pub(crate) const fn new(now: fn() -> Instant) -> Self {
         Self {
+            now,
             pool: ObjectPool::new(
                 [const {
                     TimerEntry {
@@ -46,6 +48,10 @@ impl<const N: usize> Timers<N> {
             armed: IndexedMinHeap::new(),
             next_seq: Cell::new(0),
         }
+    }
+
+    pub(crate) fn now(&self) -> Instant {
+        (self.now)()
     }
 
     const fn entry(&self, index: TimerIndex) -> &TimerEntry {
@@ -71,14 +77,14 @@ impl<const N: usize> Timers<N> {
     }
 
     pub(crate) async fn sleep_until(&self, deadline: Instant) -> Result<(), NotEnoughResources> {
-        if Instant::now() >= deadline {
+        if self.now() >= deadline {
             return Ok(());
         }
         let index =
             core::future::poll_fn(|cx| Poll::Ready(self.alloc(deadline, cx.waker()))).await?;
         let guard = DropGuard::new(index, |index| self.release(index));
         core::future::poll_fn(|cx| {
-            if Instant::now() >= deadline {
+            if self.now() >= deadline {
                 return Poll::Ready(());
             }
             self.set_waker(index, cx.waker());
@@ -139,6 +145,7 @@ mod tests {
         cell::Cell,
         future::Future,
         pin::pin,
+        sync::atomic::{AtomicU64, Ordering::Relaxed},
         task::{Context, Poll, Waker},
         time::Duration,
     };
@@ -146,7 +153,7 @@ mod tests {
     use crate::{
         NotEnoughResources,
         tasks::WakeQueue,
-        testing::{assert_yields, counting_waker, sleep_blocking},
+        testing::{assert_yields, counting_waker, fake_instant},
         time::{Instant, Timers},
     };
 
@@ -165,7 +172,7 @@ mod tests {
     fn alloc_and_release() {
         let now = Instant::now();
         let drops = Cell::new(0);
-        let timers = &Timers::<2>::new();
+        let timers = &Timers::<2>::new(Instant::now);
         let waker = counting_waker(&drops);
         let index = timers.alloc(now, &waker).unwrap();
         assert_eq!(timers.next_deadline(), Some(now));
@@ -178,7 +185,7 @@ mod tests {
     #[test]
     fn capacity_is_bounded() {
         let now = Instant::now();
-        let timers = &Timers::<1>::new();
+        let timers = &Timers::<1>::new(Instant::now);
         let _first = timers.alloc(now, Waker::noop()).unwrap();
         assert_eq!(
             timers.alloc(now, Waker::noop()).err(),
@@ -191,7 +198,7 @@ mod tests {
         static WAKERS: WakeQueue<8> = WakeQueue::new();
         let earliest = Instant::now();
         let now = earliest.saturating_add(Duration::from_millis(1));
-        let timers = &Timers::<8>::new();
+        let timers = &Timers::<8>::new(Instant::now);
         let _ = timers
             .alloc(
                 now.saturating_add(Duration::from_millis(5)),
@@ -235,7 +242,7 @@ mod tests {
     fn equal_deadlines_expire_in_insertion_order_across_slot_reuse() {
         static WAKERS: WakeQueue<8> = WakeQueue::new();
         let now = Instant::now();
-        let timers = &Timers::<2>::new();
+        let timers = &Timers::<2>::new(Instant::now);
         let first = timers.alloc(now, Waker::noop()).unwrap();
         let _ = timers.alloc(now, &WAKERS.waker(1)).unwrap();
         timers.release(first);
@@ -247,7 +254,7 @@ mod tests {
     fn released_timer_is_not_woken() {
         static WAKERS: WakeQueue<8> = WakeQueue::new();
         let now = Instant::now();
-        let timers = &Timers::<1>::new();
+        let timers = &Timers::<1>::new(Instant::now);
         let index = timers.alloc(now, &WAKERS.waker(1)).unwrap();
         timers.release(index);
         assert_expires(timers, &WAKERS, now, []);
@@ -258,7 +265,7 @@ mod tests {
     fn replaced_waker_is_the_one_woken() {
         static WAKERS: WakeQueue<8> = WakeQueue::new();
         let now = Instant::now();
-        let timers = &Timers::<1>::new();
+        let timers = &Timers::<1>::new(Instant::now);
         let index = timers.alloc(now, &WAKERS.waker(1)).unwrap();
         timers.set_waker(index, &WAKERS.waker(2));
         assert_expires(timers, &WAKERS, now, [2]);
@@ -267,7 +274,7 @@ mod tests {
     #[test]
     fn next_deadline_is_the_earliest_one() {
         let now = Instant::now();
-        let timers = &Timers::<4>::new();
+        let timers = &Timers::<4>::new(Instant::now);
         assert_eq!(timers.next_deadline(), None);
         let later = now.saturating_add(Duration::from_millis(30));
         let earlier = now.saturating_add(Duration::from_millis(10));
@@ -287,7 +294,7 @@ mod tests {
     #[test]
     fn releasing_after_dropping_wakers_frees_the_slot() {
         let drops = Cell::new(0);
-        let timers = &Timers::<1>::new();
+        let timers = &Timers::<1>::new(Instant::now);
         let waker = counting_waker(&drops);
         let index = timers.alloc(Instant::now(), &waker).unwrap();
         timers.drop_wakers();
@@ -299,7 +306,7 @@ mod tests {
 
     #[test]
     fn sleep_until_now_is_ready_without_a_timer() {
-        let timers = &Timers::<1>::new();
+        let timers = &Timers::<1>::new(Instant::now);
         let mut cx = Context::from_waker(Waker::noop());
         assert_eq!(
             pin!(timers.sleep_until(Instant::now())).poll(&mut cx),
@@ -310,7 +317,7 @@ mod tests {
 
     #[test]
     fn dropping_a_pending_sleep_releases_its_timer() {
-        let timers = &Timers::<1>::new();
+        let timers = &Timers::<1>::new(Instant::now);
         let mut cx = Context::from_waker(Waker::noop());
         let deadline = Instant::now().saturating_add(Duration::from_secs(60));
         {
@@ -323,19 +330,23 @@ mod tests {
 
     #[test]
     fn finished_sleep_releases_its_timer() {
-        let timers = &Timers::<1>::new();
+        static NOW: AtomicU64 = AtomicU64::new(0);
+        fn now() -> Instant {
+            fake_instant(&NOW)
+        }
+        let timers = &Timers::<1>::new(now);
         let mut cx = Context::from_waker(Waker::noop());
         let mut sleep =
-            pin!(timers.sleep_until(Instant::now().saturating_add(Duration::from_millis(10))));
+            pin!(timers.sleep_until(timers.now().saturating_add(Duration::from_millis(10))));
         assert_eq!(sleep.as_mut().poll(&mut cx), Poll::Pending);
-        sleep_blocking(Duration::from_millis(10));
+        NOW.store(10, Relaxed);
         assert_eq!(sleep.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
         assert_eq!(timers.next_deadline(), None);
     }
 
     #[test]
     fn sleep_without_a_free_timer_fails() {
-        let timers = &Timers::<1>::new();
+        let timers = &Timers::<1>::new(Instant::now);
         let mut cx = Context::from_waker(Waker::noop());
         let deadline = Instant::now().saturating_add(Duration::from_secs(60));
         let mut first = pin!(timers.sleep_until(deadline));
@@ -350,7 +361,7 @@ mod tests {
     #[test]
     fn repolling_a_pending_sleep_replaces_its_waker() {
         static WAKERS: WakeQueue<2> = WakeQueue::new();
-        let timers = &Timers::<1>::new();
+        let timers = &Timers::<1>::new(Instant::now);
         let deadline = Instant::now().saturating_add(Duration::from_secs(60));
         let mut sleep = pin!(timers.sleep_until(deadline));
         for idx in [0, 1] {

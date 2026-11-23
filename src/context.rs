@@ -7,7 +7,6 @@ use crate::{
     selector::{EVENTS_PER_CALL, Selector, SelectorEvent},
     storage::LoopStorage,
     tasks::{SlotWaiterTakenError, TaskReservation},
-    time::Instant,
 };
 
 /// A handle of the event loop that you are currently in.
@@ -124,9 +123,8 @@ impl<
         duration: Duration,
     ) -> impl Future<Output = Result<(), NotEnoughResources>>
     + use<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
-        self.storage
-            .timers
-            .sleep_until(Instant::now().saturating_add(duration))
+        let timers = &self.storage.timers;
+        timers.sleep_until(timers.now().saturating_add(duration))
     }
 
     /// Runs `future` with a timeout of `duration`, resolves to `Ok(None)` in case of a timeout.
@@ -189,7 +187,7 @@ impl<
                     }
                     SelectorEvent::Notify => self.storage.notification.fire(),
                     SelectorEvent::Timer => {
-                        let now = Instant::now();
+                        let now = self.storage.timers.now();
                         while let Some(waker) = self.storage.timers.take_expired(now) {
                             waker.wake();
                         }
@@ -206,6 +204,7 @@ impl<
         self.selector.flush(
             self.storage.io_waiters.pending_changes(),
             self.storage.timers.next_deadline(),
+            self.storage.timers.now(),
         )?;
         self.storage.io_waiters.mark_flushed();
         Ok(())
@@ -244,7 +243,7 @@ mod tests {
     use core::{
         future::{Future, pending},
         pin::pin,
-        sync::atomic::{AtomicBool, Ordering::Relaxed},
+        sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed},
         task::{Context, Poll, Waker},
         time::Duration,
     };
@@ -254,7 +253,7 @@ mod tests {
         tasks::RootStatus,
         testing::{
             EventLoopTestingExt, FlagOnDrop, TestContext, TestLoop, TestStorage, assert_yields,
-            sleep_blocking, wake_expired_timers,
+            fake_instant, wake_expired_timers,
         },
         time::Instant,
     };
@@ -286,9 +285,13 @@ mod tests {
     #[test]
     fn elapsing_drops_the_future() {
         static DROPPED: AtomicBool = AtomicBool::new(false);
+        static NOW: AtomicU64 = AtomicU64::new(0);
+        fn now() -> Instant {
+            fake_instant(&NOW)
+        }
         let selector = Selector::new().unwrap();
         let (ctx, root): (TestContext<'_>, _) = {
-            static STORAGE: TestStorage = TestStorage::new();
+            static STORAGE: TestStorage = TestStorage::with_clock(now);
             STORAGE.claim(&selector).unwrap()
         };
         ctx.storage.tasks.spawn_root(root, ctx.claimed, async move {
@@ -304,7 +307,7 @@ mod tests {
         });
         assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
         assert!(!DROPPED.load(Relaxed));
-        sleep_blocking(Duration::from_millis(10));
+        NOW.store(10, Relaxed);
         wake_expired_timers(&ctx.storage.timers);
         assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
         assert_yields!(ctx.storage.events.iter_removing(), [0]);
@@ -374,9 +377,13 @@ mod tests {
 
     #[test]
     fn sleeps_complete_in_deadline_order() {
+        static NOW: AtomicU64 = AtomicU64::new(0);
+        fn now() -> Instant {
+            fake_instant(&NOW)
+        }
         let selector = Selector::new().unwrap();
         let (ctx, root): (TestContext<'_>, _) = {
-            static STORAGE: TestStorage = TestStorage::new();
+            static STORAGE: TestStorage = TestStorage::with_clock(now);
             STORAGE.claim(&selector).unwrap()
         };
         ctx.storage.tasks.spawn_root(root, ctx.claimed, async move {
@@ -392,7 +399,7 @@ mod tests {
             }
         });
         assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
-        sleep_blocking(Duration::from_millis(300));
+        NOW.store(300, Relaxed);
         wake_expired_timers(&ctx.storage.timers);
         assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Finished);
         assert_yields!(ctx.storage.events.iter_removing(), [100, 200, 300]);
