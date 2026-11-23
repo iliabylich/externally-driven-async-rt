@@ -161,50 +161,54 @@ mod tests {
     use super::{WakeQueue, Woken};
     use crate::testing::assert_yields;
 
+    macro_rules! queue {
+        ($n:tt) => {{
+            static QUEUE: WakeQueue<$n> = WakeQueue::new();
+            assert!(QUEUE.claim().is_some());
+            &QUEUE
+        }};
+    }
+
     #[test]
     fn waking_pushes_the_slot() {
-        static QUEUE: WakeQueue<2> = WakeQueue::new();
-        assert!(QUEUE.claim().is_some());
-        let waker = QUEUE.waker(1);
+        let q = queue!(2);
+        let waker = q.waker(1);
         waker.wake_by_ref();
-        assert_yields!(core::iter::from_fn(|| QUEUE.pop()), [Woken::Task(1)]);
+        assert_yields!(core::iter::from_fn(|| q.pop()), [Woken::Task(1)]);
         let clone = waker.clone();
         drop(waker);
         clone.wake();
-        assert_yields!(core::iter::from_fn(|| QUEUE.pop()), [Woken::Task(1)]);
+        assert_yields!(core::iter::from_fn(|| q.pop()), [Woken::Task(1)]);
     }
 
     #[test]
     fn duplicate_wakes_queue_the_slot_once() {
-        static QUEUE: WakeQueue<2> = WakeQueue::new();
-        assert!(QUEUE.claim().is_some());
-        let waker = QUEUE.waker(0);
+        let q = queue!(2);
+        let waker = q.waker(0);
         waker.wake_by_ref();
         waker.wake_by_ref();
         waker.wake();
-        assert_yields!(core::iter::from_fn(|| QUEUE.pop()), [Woken::Task(0)]);
+        assert_yields!(core::iter::from_fn(|| q.pop()), [Woken::Task(0)]);
     }
 
     #[test]
     fn waking_after_the_queue_was_mutated() {
-        static QUEUE: WakeQueue<2> = WakeQueue::new();
-        assert!(QUEUE.claim().is_some());
-        let waker = QUEUE.waker(0);
-        QUEUE.push(1);
+        let q = queue!(2);
+        let waker = q.waker(0);
+        q.push(1);
         waker.wake_by_ref();
-        assert_eq!(QUEUE.pop(), Some(Woken::Task(1)));
+        assert_eq!(q.pop(), Some(Woken::Task(1)));
         waker.wake();
-        assert_yields!(core::iter::from_fn(|| QUEUE.pop()), [Woken::Task(0)]);
+        assert_yields!(core::iter::from_fn(|| q.pop()), [Woken::Task(0)]);
     }
 
     #[test]
     fn dropping_does_not_wake() {
-        static QUEUE: WakeQueue<2> = WakeQueue::new();
-        assert!(QUEUE.claim().is_some());
-        let waker = QUEUE.waker(0);
+        let q = queue!(2);
+        let waker = q.waker(0);
         drop(waker.clone());
         drop(waker);
-        assert!(QUEUE.is_empty());
+        assert!(q.is_empty());
     }
 
     #[test]
@@ -216,17 +220,16 @@ mod tests {
 
     #[test]
     fn waking_the_root_queues_it_in_order() {
-        static QUEUE: WakeQueue<2> = WakeQueue::new();
-        assert!(QUEUE.claim().is_some());
-        let root = QUEUE.root_waker();
-        QUEUE.push(1);
+        let q = queue!(2);
+        let root = q.root_waker();
+        q.push(1);
         root.wake_by_ref();
-        QUEUE.push(0);
+        q.push(0);
         let clone = root.clone();
         drop(root);
         clone.wake();
         assert_yields!(
-            core::iter::from_fn(|| QUEUE.pop()),
+            core::iter::from_fn(|| q.pop()),
             [Woken::Task(1), Woken::Root, Woken::Task(0)]
         );
     }
