@@ -20,7 +20,7 @@ pub struct TaskReservation<
 impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
     TaskReservation<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
-    pub(crate) const fn new(
+    pub(super) const fn new(
         tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
         claimed: Claimed<'a>,
         id: TaskId<TASK_SIZE>,
@@ -80,7 +80,7 @@ mod tests {
     use crate::{
         NotEnoughResources,
         tasks::TaskReservation,
-        testing::{TasksStorage, claimed_forever, spawn_static},
+        testing::{TasksStorage, claimed_forever},
     };
 
     #[test]
@@ -104,7 +104,7 @@ mod tests {
         static STORAGE: TasksStorage<2, 64, 0> = TasksStorage::new();
         let tasks = &STORAGE.tasks;
         assert!(tasks.queue.claim().is_some());
-        let waiter = spawn_static(tasks, pending()).unwrap();
+        let waiter = tasks.spawn_task(claimed_forever(), pending()).unwrap();
         let _ = tasks.run_ready();
         let (id, entry) = tasks.pool.alloc().unwrap();
         let reservation = TaskReservation::new(tasks, claimed_forever(), id, entry);
@@ -124,7 +124,7 @@ mod tests {
         let (id, entry) = tasks.pool.alloc().unwrap();
         let _reservation = TaskReservation::new(tasks, claimed_forever(), id, entry);
         assert_eq!(
-            spawn_static(tasks, async {}),
+            tasks.spawn_task(claimed_forever(), async {}),
             Err(NotEnoughResources::Tasks)
         );
     }

@@ -15,7 +15,6 @@ use rustix::{
 };
 
 use crate::{
-    const_default::ConstDefault,
     selector::{Directions, EVENTS_PER_CALL, IoChange, KernelTimer, SelectorEvent, TimerChange},
     strace::{syscall, syscall_end, syscall_start},
     time::Instant,
@@ -66,7 +65,7 @@ impl EpollSelector {
             epoll,
             timer_fd,
             notify_fd,
-            timer: Cell::new(KernelTimer::DEFAULT),
+            timer: Cell::new(KernelTimer::default()),
         })
     }
 

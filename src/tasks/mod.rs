@@ -1,4 +1,3 @@
-mod root_status;
 mod slot_waiter_taken_error;
 mod task_entry;
 mod task_reservation;
@@ -10,21 +9,21 @@ use core::{
     task::{Poll, Waker},
 };
 
-use self::task_slot::TaskSlot;
-pub(crate) use self::{
-    root_status::RootStatus,
-    task_entry::{TaskEntry, TaskId},
-    wake_queue::{RootSlot, WakeQueue, Woken},
-};
+pub(crate) use self::wake_queue::RootSlot;
 pub use self::{slot_waiter_taken_error::SlotWaiterTakenError, task_reservation::TaskReservation};
+use self::{
+    task_entry::{TaskEntry, TaskId},
+    task_slot::TaskSlot,
+    wake_queue::{WakeQueue, Woken},
+};
 use crate::{NotEnoughResources, claimed::Claimed, data::pool::ObjectPool, waker_slot::WakerSlot};
 
 #[must_use]
 pub(crate) struct Tasks<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> {
-    pub(crate) pool: ObjectPool<TaskEntry<TASK_SIZE>, TASKS>,
-    pub(crate) queue: WakeQueue<TASKS>,
-    pub(crate) root: TaskEntry<ROOT_TASK_SIZE>,
-    pub(crate) slot_waiter: WakerSlot,
+    pool: ObjectPool<TaskEntry<TASK_SIZE>, TASKS>,
+    queue: WakeQueue<TASKS>,
+    root: TaskEntry<ROOT_TASK_SIZE>,
+    slot_waiter: WakerSlot,
 }
 
 impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
@@ -39,7 +38,19 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         }
     }
 
-    pub(crate) fn set_join_waiter(&self, id: TaskId<TASK_SIZE>, waker: &Waker) -> Poll<()> {
+    pub(crate) fn claim(&self) -> Option<RootSlot> {
+        self.queue.claim()
+    }
+
+    pub(crate) const fn has_root(&self) -> bool {
+        self.root.has_task()
+    }
+
+    pub(crate) const fn has_woken(&self) -> bool {
+        !self.queue.is_empty()
+    }
+
+    fn set_join_waiter(&self, id: TaskId<TASK_SIZE>, waker: &Waker) -> Poll<()> {
         if let Some(entry) = self.pool.get_versioned(id)
             && entry.has_task()
         {
@@ -55,7 +66,7 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         }
     }
 
-    pub(crate) async fn join(&'static self, id: TaskId<TASK_SIZE>) {
+    async fn join(&'static self, id: TaskId<TASK_SIZE>) {
         let guard = DropGuard::new(self, |tasks: &Self| tasks.clear_join_waiter(id));
         core::future::poll_fn(|cx| self.set_join_waiter(id, cx.waker())).await;
         DropGuard::dismiss(guard);
@@ -89,13 +100,28 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
     pub(crate) fn spawn<'a, Fut>(
         &'static self,
         claimed: Claimed<'a>,
-        f: impl FnOnce() -> Fut,
+        future: Fut,
+    ) -> Result<
+        impl Future<Output = ()> + use<TASKS, TASK_SIZE, ROOT_TASK_SIZE, Fut>,
+        NotEnoughResources,
+    >
+    where
+        Fut: Future<Output = ()> + 'a,
+    {
+        let id = self.spawn_task(claimed, future)?;
+        Ok(self.join(id))
+    }
+
+    fn spawn_task<'a, Fut>(
+        &'static self,
+        claimed: Claimed<'a>,
+        future: Fut,
     ) -> Result<TaskId<TASK_SIZE>, NotEnoughResources>
     where
         Fut: Future<Output = ()> + 'a,
     {
         let (id, entry) = self.pool.alloc().ok_or(NotEnoughResources::Tasks)?;
-        entry.write(claimed, f());
+        entry.write(claimed, future);
         self.queue.push(id.idx);
         Ok(id)
     }
@@ -108,7 +134,7 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         self.queue.push_root();
     }
 
-    pub(crate) fn spawn_reserved<'a, Fut>(
+    fn spawn_reserved<'a, Fut>(
         &self,
         claimed: Claimed<'a>,
         id: TaskId<TASK_SIZE>,
@@ -121,7 +147,7 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         self.queue.push(id.idx);
     }
 
-    pub(crate) fn release(&self, id: TaskId<TASK_SIZE>) {
+    fn release(&self, id: TaskId<TASK_SIZE>) {
         self.pool.free(id);
         self.slot_waiter.wake_by_ref();
     }
@@ -132,13 +158,13 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         join_waiter
     }
 
-    pub(crate) fn run_ready(&'static self) -> RootStatus {
+    pub(crate) fn run_ready(&'static self) -> Poll<()> {
         loop {
             match self.queue.pop() {
-                None => return RootStatus::Running,
+                None => return Poll::Pending,
                 Some(Woken::Root) => {
-                    if self.run_root() == RootStatus::Finished {
-                        return RootStatus::Finished;
+                    if self.run_root().is_ready() {
+                        return Poll::Ready(());
                     }
                 }
                 Some(Woken::Task(idx)) => self.run_task(idx),
@@ -146,13 +172,13 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         }
     }
 
-    fn run_root(&'static self) -> RootStatus {
+    fn run_root(&'static self) -> Poll<()> {
         let waker = self.queue.root_waker();
         let mut cx = core::task::Context::from_waker(&waker);
         if self.root.poll(&mut cx) == Some(Poll::Ready(())) {
-            return RootStatus::Finished;
+            return Poll::Ready(());
         }
-        RootStatus::Running
+        Poll::Pending
     }
 
     fn run_task(&'static self, idx: u32) {

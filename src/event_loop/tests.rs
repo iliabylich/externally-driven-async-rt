@@ -372,8 +372,9 @@ fn loop_exposes_the_selector_fd() {
 }
 
 #[test]
-fn spawning_into_a_full_pool_fails_without_calling_the_closure() {
-    static CALLED: AtomicBool = AtomicBool::new(false);
+fn spawning_into_a_full_pool_drops_the_future_unpolled() {
+    static POLLED: AtomicBool = AtomicBool::new(false);
+    static DROPPED: AtomicBool = AtomicBool::new(false);
     let mut selector = Selector::new().unwrap();
     let event_loop = EventLoop::new(
         {
@@ -384,8 +385,11 @@ fn spawning_into_a_full_pool_fails_without_calling_the_closure() {
         async |ctx| {
             let _running = ctx.spawn(async |_| pending().await).unwrap();
             let spawned = ctx.spawn(|_| {
-                CALLED.store(true, Relaxed);
-                async {}
+                let flag = FlagOnDrop::new(&DROPPED);
+                async move {
+                    let _flag = flag;
+                    POLLED.store(true, Relaxed);
+                }
             });
             assert_eq!(spawned.err(), Some(NotEnoughResources::Tasks));
             ctx.dispatch(1).unwrap();
@@ -394,7 +398,8 @@ fn spawning_into_a_full_pool_fails_without_calling_the_closure() {
     )
     .unwrap();
     assert_yields!(event_loop.events(), [1]);
-    assert!(!CALLED.load(Relaxed));
+    assert!(DROPPED.load(Relaxed));
+    assert!(!POLLED.load(Relaxed));
 }
 
 #[test]

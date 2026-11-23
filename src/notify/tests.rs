@@ -10,7 +10,6 @@ use core::{
 use crate::{
     Selector,
     notify::Notification,
-    tasks::RootStatus,
     testing::{
         EventLoopTestingExt, FdTestingExt, TestContext, TestLoop, TestStorage, assert_yields,
         counting_waker, fake_instant, wake_expired_timers,
@@ -91,15 +90,15 @@ fn notification_without_a_waiter_is_kept() {
         ctx.dispatch(2).unwrap();
         pending::<()>().await;
     });
-    assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
+    assert_eq!(ctx.storage.tasks.run_ready(), Poll::Pending);
 
     ctx.storage.notification.fire();
-    assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
+    assert_eq!(ctx.storage.tasks.run_ready(), Poll::Pending);
     assert_yields!(ctx.storage.events.iter_removing(), []);
 
     NOW.store(10, Relaxed);
     wake_expired_timers(&ctx.storage.timers);
-    assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
+    assert_eq!(ctx.storage.tasks.run_ready(), Poll::Pending);
     assert_yields!(ctx.storage.events.iter_removing(), [1, 2]);
     ctx.clear();
 }

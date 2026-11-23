@@ -11,14 +11,14 @@ use crate::{claimed::Claimed, data::pool::VersionedIndex, tasks::TaskSlot, waker
 
 #[repr(C, align(16))]
 #[must_use]
-pub(crate) struct TaskEntry<const SIZE: usize> {
+pub(super) struct TaskEntry<const SIZE: usize> {
     bytes: UnsafeCell<MaybeUninit<[u8; SIZE]>>,
     task: Cell<TaskSlot>,
     join_waiter: WakerSlot,
 }
 
 impl<const SIZE: usize> TaskEntry<SIZE> {
-    pub(crate) const fn new() -> Self {
+    pub(super) const fn new() -> Self {
         Self {
             bytes: UnsafeCell::new(MaybeUninit::uninit()),
             task: Cell::new(TaskSlot::Empty),
@@ -26,7 +26,7 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
         }
     }
 
-    pub(crate) fn write<'a, Fut>(&'static self, _: Claimed<'a>, future: Fut)
+    pub(super) fn write<'a, Fut>(&'static self, _: Claimed<'a>, future: Fut)
     where
         Fut: Future<Output = ()> + 'a,
     {
@@ -62,11 +62,11 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
         self.join_waiter.take();
     }
 
-    pub(crate) const fn has_task(&self) -> bool {
+    pub(super) const fn has_task(&self) -> bool {
         matches!(self.task.get(), TaskSlot::Idle(_) | TaskSlot::Polling)
     }
 
-    pub(crate) fn poll(&self, cx: &mut Context<'_>) -> Option<Poll<()>> {
+    pub(super) fn poll(&self, cx: &mut Context<'_>) -> Option<Poll<()>> {
         let mut future = match self.task.replace(TaskSlot::Polling) {
             TaskSlot::Idle(future) => future,
             TaskSlot::Polling => unreachable!("a task can't be polled re-entrantly"),
@@ -94,7 +94,7 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
         Some(Poll::Ready(()))
     }
 
-    pub(crate) fn drop_idle(&self) -> bool {
+    pub(super) fn drop_idle(&self) -> bool {
         let TaskSlot::Idle(future) = self.task.get() else {
             return false;
         };
@@ -107,16 +107,16 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
         true
     }
 
-    pub(crate) fn set_join_waiter(&self, waker: &Waker) {
+    pub(super) fn set_join_waiter(&self, waker: &Waker) {
         self.join_waiter.store(waker);
     }
 
-    pub(crate) const fn take_join_waiter(&self) -> Option<Waker> {
+    pub(super) const fn take_join_waiter(&self) -> Option<Waker> {
         self.join_waiter.take()
     }
 }
 
-pub(crate) type TaskId<const SIZE: usize> = VersionedIndex<TaskEntry<SIZE>>;
+pub(super) type TaskId<const SIZE: usize> = VersionedIndex<TaskEntry<SIZE>>;
 
 #[cfg(test)]
 mod tests {

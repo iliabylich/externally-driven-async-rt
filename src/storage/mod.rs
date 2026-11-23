@@ -79,7 +79,7 @@ impl<
         Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         RootSlot,
     )> {
-        let root = self.tasks.queue.claim()?;
+        let root = self.tasks.claim()?;
         let ctx = Context {
             storage: self,
             selector,

@@ -151,20 +151,27 @@ mod tests {
 
     use crate::{
         NotEnoughResources,
-        tasks::WakeQueue,
         testing::{assert_yields, counting_waker, fake_instant},
         time::{Instant, Timers},
     };
 
+    fn waker_idx(drops: &[Cell<u32>], waker: &Waker) -> u32 {
+        let position = drops
+            .iter()
+            .position(|drop| waker.data() == core::ptr::from_ref(drop).cast())
+            .unwrap();
+        u32::try_from(position).unwrap()
+    }
+
     #[track_caller]
-    fn assert_expires<const N: usize, const W: usize>(
+    fn assert_expires<const N: usize>(
         timers: &Timers<N>,
-        wakers: &'static WakeQueue<W>,
+        drops: &[Cell<u32>],
         now: Instant,
         idxs: impl IntoIterator<Item = u32>,
     ) {
         let expired = core::iter::from_fn(|| timers.take_expired(now));
-        assert_yields!(expired.map(|waker| wakers.idx_by_waker_data(&waker)), idxs);
+        assert_yields!(expired.map(|waker| waker_idx(drops, &waker)), idxs);
     }
 
     #[test]
@@ -194,40 +201,40 @@ mod tests {
 
     #[test]
     fn expire_wakes_due_timers_in_deadline_order() {
-        static WAKERS: WakeQueue<8> = WakeQueue::new();
+        let drops: [Cell<u32>; 8] = [const { Cell::new(0) }; 8];
         let earliest = Instant::now();
         let now = earliest.saturating_add(Duration::from_millis(1));
         let timers = &Timers::<8>::new(Instant::now);
         let _ = timers
             .alloc(
                 now.saturating_add(Duration::from_millis(5)),
-                &WAKERS.waker(3),
+                &counting_waker(&drops[3]),
             )
             .unwrap();
-        let _ = timers.alloc(now, &WAKERS.waker(2)).unwrap();
+        let _ = timers.alloc(now, &counting_waker(&drops[2])).unwrap();
         let _ = timers
             .alloc(
                 now.saturating_add(Duration::from_millis(5)),
-                &WAKERS.waker(4),
+                &counting_waker(&drops[4]),
             )
             .unwrap();
         let _ = timers
             .alloc(
                 now.saturating_add(Duration::from_millis(10)),
-                &WAKERS.waker(5),
+                &counting_waker(&drops[5]),
             )
             .unwrap();
-        let _ = timers.alloc(earliest, &WAKERS.waker(1)).unwrap();
+        let _ = timers.alloc(earliest, &counting_waker(&drops[1])).unwrap();
 
         assert_expires(
             timers,
-            &WAKERS,
+            &drops,
             now.saturating_add(Duration::from_millis(5)),
             [1, 2, 3, 4],
         );
         assert_expires(
             timers,
-            &WAKERS,
+            &drops,
             now.saturating_add(Duration::from_millis(9)),
             [],
         );
@@ -239,35 +246,35 @@ mod tests {
 
     #[test]
     fn equal_deadlines_expire_in_insertion_order_across_slot_reuse() {
-        static WAKERS: WakeQueue<8> = WakeQueue::new();
+        let drops: [Cell<u32>; 8] = [const { Cell::new(0) }; 8];
         let now = Instant::now();
         let timers = &Timers::<2>::new(Instant::now);
         let first = timers.alloc(now, Waker::noop()).unwrap();
-        let _ = timers.alloc(now, &WAKERS.waker(1)).unwrap();
+        let _ = timers.alloc(now, &counting_waker(&drops[1])).unwrap();
         timers.release(first);
-        let _ = timers.alloc(now, &WAKERS.waker(2)).unwrap();
-        assert_expires(timers, &WAKERS, now, [1, 2]);
+        let _ = timers.alloc(now, &counting_waker(&drops[2])).unwrap();
+        assert_expires(timers, &drops, now, [1, 2]);
     }
 
     #[test]
     fn released_timer_is_not_woken() {
-        static WAKERS: WakeQueue<8> = WakeQueue::new();
+        let drops: [Cell<u32>; 8] = [const { Cell::new(0) }; 8];
         let now = Instant::now();
         let timers = &Timers::<1>::new(Instant::now);
-        let index = timers.alloc(now, &WAKERS.waker(1)).unwrap();
+        let index = timers.alloc(now, &counting_waker(&drops[1])).unwrap();
         timers.release(index);
-        assert_expires(timers, &WAKERS, now, []);
+        assert_expires(timers, &drops, now, []);
         assert_eq!(timers.next_deadline(), None);
     }
 
     #[test]
     fn replaced_waker_is_the_one_woken() {
-        static WAKERS: WakeQueue<8> = WakeQueue::new();
+        let drops: [Cell<u32>; 8] = [const { Cell::new(0) }; 8];
         let now = Instant::now();
         let timers = &Timers::<1>::new(Instant::now);
-        let index = timers.alloc(now, &WAKERS.waker(1)).unwrap();
-        timers.set_waker(index, &WAKERS.waker(2));
-        assert_expires(timers, &WAKERS, now, [2]);
+        let index = timers.alloc(now, &counting_waker(&drops[1])).unwrap();
+        timers.set_waker(index, &counting_waker(&drops[2]));
+        assert_expires(timers, &drops, now, [2]);
     }
 
     #[test]
@@ -359,16 +366,16 @@ mod tests {
 
     #[test]
     fn repolling_a_pending_sleep_replaces_its_waker() {
-        static WAKERS: WakeQueue<2> = WakeQueue::new();
+        let drops: [Cell<u32>; 2] = [const { Cell::new(0) }; 2];
         let timers = &Timers::<1>::new(Instant::now);
         let deadline = Instant::now().saturating_add(Duration::from_secs(60));
         let mut sleep = pin!(timers.sleep_until(deadline));
         for idx in [0, 1] {
-            let waker = WAKERS.waker(idx);
+            let waker = counting_waker(&drops[idx]);
             let mut cx = Context::from_waker(&waker);
             assert_eq!(sleep.as_mut().poll(&mut cx), Poll::Pending);
         }
         let woken = timers.take_expired(deadline).unwrap();
-        assert_eq!(WAKERS.idx_by_waker_data(&woken), 1);
+        assert_eq!(waker_idx(&drops, &woken), 1);
     }
 }

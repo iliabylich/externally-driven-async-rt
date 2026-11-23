@@ -1,10 +1,12 @@
 mod error;
 
+use core::task::Poll;
+
 use rustix::fd::{AsFd, BorrowedFd};
 
 pub use self::error::Error;
 
-use crate::{context::Context, selector::Selector, storage::LoopStorage, tasks::RootStatus};
+use crate::{context::Context, selector::Selector, storage::LoopStorage};
 
 /// The main type, an event loop.
 #[must_use]
@@ -57,8 +59,8 @@ impl<
         let event_loop = Self { ctx };
         ctx.storage.tasks.spawn_root(root, ctx.claimed, f(ctx));
         match ctx.storage.tasks.run_ready() {
-            RootStatus::Running => {}
-            RootStatus::Finished => return Err(Error::RootFinished),
+            Poll::Pending => {}
+            Poll::Ready(()) => return Err(Error::RootFinished),
         }
         ctx.flush()?;
         Ok(event_loop)
@@ -76,15 +78,15 @@ impl<
     /// 2. root future completed
     pub fn drain_events_without_blocking(&mut self) -> Result<(), Error> {
         let ctx = self.ctx;
-        if !ctx.storage.tasks.root.has_task() {
+        if !ctx.storage.tasks.has_root() {
             return Err(Error::RootFinished);
         }
         loop {
             ctx.process_selector_events()?;
-            if ctx.storage.tasks.queue.is_empty() {
+            if !ctx.storage.tasks.has_woken() {
                 break;
             }
-            if ctx.storage.tasks.run_ready() == RootStatus::Finished {
+            if ctx.storage.tasks.run_ready().is_ready() {
                 ctx.storage.tasks.drop_all();
                 ctx.flush()?;
                 return Err(Error::RootFinished);

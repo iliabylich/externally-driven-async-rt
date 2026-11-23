@@ -65,8 +65,9 @@ impl<
     ///
     /// # Errors
     ///
-    /// Returns an error if all `TASKS` task slots are taken, `f` isn't called then. Use
-    /// [`reserve_task`](Self::reserve_task) to wait for a free slot instead.
+    /// Returns an error if all `TASKS` task slots are taken, the future returned by `f` is dropped
+    /// without being polled then. Use [`reserve_task`](Self::reserve_task) to wait for a free
+    /// slot instead.
     pub fn spawn<F, Fut>(
         &self,
         f: F,
@@ -78,9 +79,7 @@ impl<
         F: FnOnce(Self) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
-        let ctx = *self;
-        let id = self.storage.tasks.spawn(self.claimed, move || f(ctx))?;
-        Ok(self.storage.tasks.join(id))
+        self.storage.tasks.spawn(self.claimed, f(*self))
     }
 
     /// Reserves a task slot.
@@ -250,7 +249,6 @@ mod tests {
 
     use crate::{
         Selector,
-        tasks::RootStatus,
         testing::{
             EventLoopTestingExt, FlagOnDrop, TestContext, TestLoop, TestStorage, assert_yields,
             fake_instant, wake_expired_timers,
@@ -273,10 +271,10 @@ mod tests {
             ctx.dispatch(result.map_or(0, |()| 1)).unwrap();
             pending::<()>().await;
         });
-        assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
+        assert_eq!(ctx.storage.tasks.run_ready(), Poll::Pending);
         assert!(ctx.storage.timers.next_deadline().is_some());
         ctx.storage.notification.fire();
-        assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
+        assert_eq!(ctx.storage.tasks.run_ready(), Poll::Pending);
         assert_yields!(ctx.storage.events.iter_removing(), [1]);
         assert_eq!(ctx.storage.timers.next_deadline(), None);
         ctx.clear();
@@ -305,11 +303,11 @@ mod tests {
             ctx.dispatch(result.map_or(0, |()| 1)).unwrap();
             pending::<()>().await;
         });
-        assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
+        assert_eq!(ctx.storage.tasks.run_ready(), Poll::Pending);
         assert!(!DROPPED.load(Relaxed));
         NOW.store(10, Relaxed);
         wake_expired_timers(&ctx.storage.timers);
-        assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
+        assert_eq!(ctx.storage.tasks.run_ready(), Poll::Pending);
         assert_yields!(ctx.storage.events.iter_removing(), [0]);
         assert!(DROPPED.load(Relaxed));
         assert_eq!(ctx.storage.timers.next_deadline(), None);
@@ -398,10 +396,10 @@ mod tests {
                 handle.await;
             }
         });
-        assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Running);
+        assert_eq!(ctx.storage.tasks.run_ready(), Poll::Pending);
         NOW.store(300, Relaxed);
         wake_expired_timers(&ctx.storage.timers);
-        assert_eq!(ctx.storage.tasks.run_ready(), RootStatus::Finished);
+        assert_eq!(ctx.storage.tasks.run_ready(), Poll::Ready(()));
         assert_yields!(ctx.storage.events.iter_removing(), [100, 200, 300]);
         ctx.clear();
     }

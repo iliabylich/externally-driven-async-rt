@@ -14,7 +14,7 @@ const UNCLAIMED: usize = 0;
 
 #[repr(C)]
 #[must_use]
-pub(crate) struct WakeQueue<const N: usize> {
+pub(super) struct WakeQueue<const N: usize> {
     owner: AtomicUsize,
     queue: Queue<N>,
     idxs: [u32; N],
@@ -23,7 +23,7 @@ pub(crate) struct WakeQueue<const N: usize> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
-pub(crate) enum Woken {
+pub(super) enum Woken {
     Root,
     Task(u32),
 }
@@ -44,7 +44,7 @@ impl RootSlot {
 unsafe impl<const N: usize> Sync for WakeQueue<N> {}
 
 impl<const N: usize> WakeQueue<N> {
-    pub(crate) const fn new() -> Self {
+    pub(super) const fn new() -> Self {
         const {
             assert!(N > 0, "wake queue capacity must not be zero");
             assert!(
@@ -69,14 +69,14 @@ impl<const N: usize> WakeQueue<N> {
         }
     }
 
-    pub(crate) fn claim(&self) -> Option<RootSlot> {
+    pub(super) fn claim(&self) -> Option<RootSlot> {
         self.owner
             .compare_exchange(UNCLAIMED, ThreadId::current().to_raw(), Relaxed, Relaxed)
             .ok()
             .map(|_| RootSlot::new())
     }
 
-    pub(crate) fn waker(&'static self, idx: u32) -> Waker {
+    pub(super) fn waker(&'static self, idx: u32) -> Waker {
         let idx = u32_to_usize(idx);
         if idx >= N {
             unreachable!("slot {idx} is out of bounds");
@@ -90,7 +90,7 @@ impl<const N: usize> WakeQueue<N> {
         unsafe { Waker::from_raw(RawWaker::new(ptr.cast(), vtable::<N>())) }
     }
 
-    pub(crate) fn root_waker(&'static self) -> Waker {
+    pub(super) fn root_waker(&'static self) -> Waker {
         let ptr = core::ptr::from_ref(self)
             .wrapping_byte_add(offset_of!(Self, root_idx))
             .cast::<u32>();
@@ -99,15 +99,15 @@ impl<const N: usize> WakeQueue<N> {
         unsafe { Waker::from_raw(RawWaker::new(ptr.cast(), vtable::<N>())) }
     }
 
-    pub(crate) fn push(&self, idx: u32) {
+    pub(super) fn push(&self, idx: u32) {
         self.queue.push(idx);
     }
 
-    pub(crate) fn push_root(&self) {
+    pub(super) fn push_root(&self) {
         self.queue.push_extra();
     }
 
-    pub(crate) fn pop(&self) -> Option<Woken> {
+    pub(super) fn pop(&self) -> Option<Woken> {
         match self.queue.pop() {
             None => None,
             Some(Popped::Extra) => Some(Woken::Root),
@@ -115,15 +115,8 @@ impl<const N: usize> WakeQueue<N> {
         }
     }
 
-    pub(crate) const fn is_empty(&self) -> bool {
+    pub(super) const fn is_empty(&self) -> bool {
         self.queue.is_empty()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn idx_by_waker_data(&'static self, waker: &Waker) -> u32 {
-        (0..u32::try_from(N).unwrap())
-            .find(|&idx| waker.data() == self.waker(idx).data())
-            .expect("the waker comes from `waker`")
     }
 }
 
