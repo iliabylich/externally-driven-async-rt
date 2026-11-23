@@ -76,6 +76,3 @@ impl Selector {
         self.backend.as_fd()
     }
 }
-
-#[cfg(test)]
-mod tests;

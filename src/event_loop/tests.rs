@@ -5,13 +5,11 @@ use core::{
     task::Poll,
 };
 
-use rustix::fd::{AsFd, AsRawFd};
-
 use crate::{
     Error, EventLoop, LoopStorage, NotEnoughResources, Selector,
     testing::{
-        DispatchOnDrop, EventLoopTestingExt, FdTestingExt, FlagOnDrop, TEST_EVENTS, TEST_FDS,
-        TEST_TASK_SIZE, TEST_TASKS, TEST_TIMERS, TestContext, TestLoop, TestStorage, assert_yields,
+        DispatchOnDrop, EventLoopTestingExt, FlagOnDrop, TEST_EVENTS, TEST_FDS, TEST_TASK_SIZE,
+        TEST_TASKS, TEST_TIMERS, TestContext, TestLoop, TestStorage, assert_yields,
     },
 };
 
@@ -46,24 +44,6 @@ fn events_dispatched_during_new_are_queued() {
     )
     .unwrap();
     assert_yields!(event_loop.events(), [1, 2]);
-}
-
-#[test]
-#[cfg_attr(miri, ignore)]
-fn idle_loop_is_not_readable_and_drains_to_nothing() {
-    let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async |_| pending().await,
-    )
-    .unwrap();
-    assert!(!event_loop.is_readable_now());
-    assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
-    assert_yields!(event_loop.events(), []);
 }
 
 #[test]
@@ -352,23 +332,6 @@ fn waking_after_the_loop_is_gone_is_harmless() {
         drop(event_loop);
     }
     escaped.take().unwrap().wake();
-}
-
-#[test]
-#[cfg_attr(miri, ignore)]
-fn loop_exposes_the_selector_fd() {
-    let mut selector = Selector::new().unwrap();
-    let fd = selector.as_fd().as_raw_fd();
-    let event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async |_| pending().await,
-    )
-    .unwrap();
-    assert_eq!(event_loop.as_fd().as_raw_fd(), fd);
 }
 
 #[test]

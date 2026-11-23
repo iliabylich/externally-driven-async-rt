@@ -35,7 +35,6 @@ fn raw_listener() -> (OwnedFd, SocketAddr) {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn echo_with_a_raw_peer() {
     let (listener, addr) = raw_listener();
     let mut selector = Selector::new().unwrap();
@@ -75,7 +74,6 @@ fn echo_with_a_raw_peer() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn listener_accepts_a_raw_client() {
     let mut listener = TcpListener::bind(LOCALHOST).unwrap();
     let addr = listener.local_addr().unwrap();
@@ -115,7 +113,6 @@ fn listener_accepts_a_raw_client() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn connect_to_a_closed_port_fails() {
     let addr = TcpListener::bind(LOCALHOST).unwrap().local_addr().unwrap();
     let mut selector = Selector::new().unwrap();
@@ -139,7 +136,6 @@ fn connect_to_a_closed_port_fails() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn borrowed_halves_read_and_write_concurrently_in_one_task() {
     const LEN: usize = 1 << 20;
     const CHUNK: usize = 512;
@@ -221,7 +217,6 @@ fn borrowed_halves_read_and_write_concurrently_in_one_task() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn listener_binds_to_ipv6() {
     let localhost = SocketAddr::new(core::net::IpAddr::V6(core::net::Ipv6Addr::LOCALHOST), 0);
     let listener = TcpListener::bind(localhost).unwrap();
@@ -229,7 +224,6 @@ fn listener_binds_to_ipv6() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn split_halves_wait_for_readiness_and_try_io() {
     let (listener, addr) = raw_listener();
     let mut selector = Selector::new().unwrap();
@@ -265,7 +259,6 @@ fn split_halves_wait_for_readiness_and_try_io() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn set_keepalive_on_a_connected_stream() {
     let (listener, addr) = raw_listener();
     let mut selector = Selector::new().unwrap();

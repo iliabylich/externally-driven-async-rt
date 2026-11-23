@@ -69,22 +69,17 @@ impl<E: core::error::Error> core::error::Error for WriteAllError<E> {}
 #[cfg(test)]
 mod tests {
     use core::{
-        future::{Future, pending, ready},
-        net::SocketAddr,
+        future::{Future, ready},
         pin::pin,
         task::{Context, Poll, Waker},
     };
 
-    use rustix::{
-        io::Errno,
-        net::{AddressFamily, SocketType},
-    };
+    use rustix::io::Errno;
 
     use crate::{
         Selector,
         io::{AsyncWrite, AsyncWriteExt, WriteAllError},
-        net::TcpStream,
-        testing::{EventLoopTestingExt, TestContext, TestLoop, TestStorage, raw_accept},
+        testing::{TestContext, TestStorage},
     };
 
     struct Scripted {
@@ -92,6 +87,7 @@ mod tests {
         error: Option<Errno>,
         written: [u8; 32],
         len: usize,
+        yielding: bool,
         calls: usize,
     }
 
@@ -102,12 +98,28 @@ mod tests {
                 error,
                 written: [0; 32],
                 len: 0,
+                yielding: false,
                 calls: 0,
             }
         }
 
+        const fn yielding(mut self) -> Self {
+            self.yielding = true;
+            self
+        }
+
         fn written(&self) -> &[u8] {
             &self.written[..self.len]
+        }
+
+        fn write_now(&mut self, buf: &[u8]) -> rustix::io::Result<usize> {
+            if let Some(errno) = self.error {
+                return Err(errno);
+            }
+            let len = buf.len().min(self.max_per_call);
+            self.written[self.len..self.len + len].copy_from_slice(&buf[..len]);
+            self.len += len;
+            Ok(len)
         }
     }
 
@@ -129,13 +141,15 @@ mod tests {
             buf: &'a [u8],
         ) -> impl Future<Output = rustix::io::Result<usize>> {
             self.calls += 1;
-            if let Some(errno) = self.error {
-                return ready(Err(errno));
-            }
-            let len = buf.len().min(self.max_per_call);
-            self.written[self.len..self.len + len].copy_from_slice(&buf[..len]);
-            self.len += len;
-            ready(Ok(len))
+            let mut pending = self.yielding;
+            core::future::poll_fn(move |cx| {
+                if pending {
+                    pending = false;
+                    cx.waker().wake_by_ref();
+                    return Poll::Pending;
+                }
+                Poll::Ready(self.write_now(buf))
+            })
         }
 
         fn flush<
@@ -236,53 +250,19 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
-    fn write_all_fills_a_socket_beyond_its_buffer() {
-        const LEN: usize = 1 << 20;
-        static DATA: [u8; LEN] = {
-            let mut data = [0; LEN];
-            let mut i = 0;
-            let mut byte = 0;
-            while i < LEN {
-                data[i] = byte;
-                byte = if byte == 250 { 0 } else { byte + 1 };
-                i += 1;
-            }
-            data
-        };
-
-        let listener = crate::testing::raw_socket(AddressFamily::INET, SocketType::STREAM);
-        let localhost = SocketAddr::from(([127, 0, 0, 1], 0));
-        rustix::net::bind(&listener, &localhost).unwrap();
-        rustix::net::listen(&listener, 1).unwrap();
-        let addr: SocketAddr = rustix::net::getsockname(&listener)
-            .unwrap()
-            .try_into()
-            .unwrap();
-
-        let mut selector = Selector::new().unwrap();
-        let mut event_loop = TestLoop::new(
-            {
-                static STORAGE: TestStorage = TestStorage::new();
-                &STORAGE
-            },
-            &mut selector,
-            async move |ctx| {
-                let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
-                stream.write_all(&ctx, &DATA).await.unwrap();
-                ctx.dispatch(1).unwrap();
-                pending::<()>().await;
-            },
-        )
-        .unwrap();
-
-        let peer = raw_accept(&listener);
-        let mut received = [0; 4096];
-        for chunk in DATA.chunks(received.len()) {
-            let received = &mut received[..chunk.len()];
-            event_loop.peer_read_exact(&peer, received);
-            assert_eq!(received, chunk);
+    fn write_all_resumes_after_a_pending_write() {
+        static STORAGE: TestStorage = TestStorage::new();
+        let selector = Selector::new().unwrap();
+        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
+        let mut writer = Scripted::new(6, None).yielding();
+        let mut cx = Context::from_waker(Waker::noop());
+        {
+            let mut write = pin!(writer.write_all(&ctx, b"hello world"));
+            assert_eq!(write.as_mut().poll(&mut cx), Poll::Pending);
+            assert_eq!(write.as_mut().poll(&mut cx), Poll::Pending);
+            assert_eq!(write.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
         }
-        assert_eq!(event_loop.run_until_events(), [1]);
+        assert_eq!(writer.written(), b"hello world");
+        assert_eq!(writer.calls, 2);
     }
 }

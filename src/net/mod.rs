@@ -14,6 +14,3 @@ pub use self::{
     net_error::NetError, tcp_listener::TcpListener, tcp_stream::TcpStream, udp_socket::UdpSocket,
     unix_datagram::UnixDatagram, unix_listener::UnixListener, unix_stream::UnixStream,
 };
-
-#[cfg(test)]
-mod tests;

@@ -26,7 +26,6 @@ fn raw_peer() -> (OwnedFd, SocketAddr) {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn round_trip_with_a_raw_peer() {
     let (peer, peer_addr) = raw_peer();
     let mut selector = Selector::new().unwrap();
@@ -70,7 +69,6 @@ fn round_trip_with_a_raw_peer() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn connected_socket_reports_a_refused_peer() {
     let closed = raw_peer().1;
     let mut selector = Selector::new().unwrap();
@@ -102,7 +100,6 @@ fn connected_socket_reports_a_refused_peer() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn waiting_on_more_sockets_than_fds_fails() {
     let mut selector = Selector::new().unwrap();
     let event_loop = EventLoop::new(

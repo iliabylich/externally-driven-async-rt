@@ -19,3 +19,22 @@ pub(crate) fn counting_waker(drops: &Cell<u32>) -> Waker {
     // waker (see above).
     unsafe { Waker::new(core::ptr::from_ref(drops).cast(), &VTABLE) }
 }
+
+pub(crate) fn flag_waker(woken: &Cell<bool>) -> Waker {
+    const VTABLE: RawWakerVTable = RawWakerVTable::new(
+        |data| RawWaker::new(data, &VTABLE),
+        set_woken,
+        set_woken,
+        |_| {},
+    );
+    // SAFETY: the vtable only reads the data as a `&Cell<bool>`, and `woken` outlives the waker
+    // (see `set_woken`).
+    unsafe { Waker::new(core::ptr::from_ref(woken).cast(), &VTABLE) }
+}
+
+fn set_woken(data: *const ()) {
+    // SAFETY: the data is the `Cell` from `flag_waker`, which every test keeps alive for as long
+    // as its wakers.
+    let woken = unsafe { &*data.cast::<Cell<bool>>() };
+    woken.set(true);
+}

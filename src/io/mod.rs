@@ -17,6 +17,3 @@ pub use self::{
     frame_reader::{FrameReader, FrameReaderError},
     frame_writer::{FrameWriter, FrameWriterError},
 };
-
-#[cfg(test)]
-mod tests;

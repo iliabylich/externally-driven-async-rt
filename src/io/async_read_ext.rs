@@ -72,31 +72,24 @@ impl<E: core::error::Error> core::error::Error for ReadExactError<E> {}
 #[cfg(test)]
 mod tests {
     use core::{
-        future::{Future, pending, ready},
-        net::SocketAddr,
+        future::Future,
         pin::pin,
         task::{Context, Poll, Waker},
     };
 
-    use rustix::{
-        io::Errno,
-        net::{AddressFamily, SocketType},
-    };
+    use rustix::io::Errno;
 
     use crate::{
         Selector,
         io::{AsyncRead, AsyncReadExt, ReadExactError},
-        net::TcpStream,
-        testing::{
-            EventLoopTestingExt, FdTestingExt, TestContext, TestLoop, TestStorage, assert_yields,
-            raw_accept,
-        },
+        testing::{TestContext, TestStorage},
     };
 
     struct Scripted {
         data: &'static [u8],
         max_per_call: usize,
         error: Option<Errno>,
+        yielding: bool,
         calls: usize,
     }
 
@@ -106,8 +99,24 @@ mod tests {
                 data,
                 max_per_call,
                 error,
+                yielding: false,
                 calls: 0,
             }
+        }
+
+        const fn yielding(mut self) -> Self {
+            self.yielding = true;
+            self
+        }
+
+        fn read_now(&mut self, buf: &mut [u8]) -> rustix::io::Result<usize> {
+            if let Some(errno) = self.error {
+                return Err(errno);
+            }
+            let len = buf.len().min(self.max_per_call).min(self.data.len());
+            buf[..len].copy_from_slice(&self.data[..len]);
+            self.data = &self.data[len..];
+            Ok(len)
         }
     }
 
@@ -129,13 +138,15 @@ mod tests {
             buf: &'a mut [u8],
         ) -> impl Future<Output = rustix::io::Result<usize>> {
             self.calls += 1;
-            if let Some(errno) = self.error {
-                return ready(Err(errno));
-            }
-            let len = buf.len().min(self.max_per_call).min(self.data.len());
-            buf[..len].copy_from_slice(&self.data[..len]);
-            self.data = &self.data[len..];
-            ready(Ok(len))
+            let mut pending = self.yielding;
+            core::future::poll_fn(move |cx| {
+                if pending {
+                    pending = false;
+                    cx.waker().wake_by_ref();
+                    return Poll::Pending;
+                }
+                Poll::Ready(self.read_now(buf))
+            })
         }
     }
 
@@ -225,46 +236,20 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
-    fn read_exact_waits_for_the_rest_from_a_socket() {
-        let listener = crate::testing::raw_socket(AddressFamily::INET, SocketType::STREAM);
-        let localhost = SocketAddr::from(([127, 0, 0, 1], 0));
-        rustix::net::bind(&listener, &localhost).unwrap();
-        rustix::net::listen(&listener, 1).unwrap();
-        let addr: SocketAddr = rustix::net::getsockname(&listener)
-            .unwrap()
-            .try_into()
-            .unwrap();
-
-        let mut selector = Selector::new().unwrap();
-        let mut event_loop = TestLoop::new(
-            {
-                static STORAGE: TestStorage = TestStorage::new();
-                &STORAGE
-            },
-            &mut selector,
-            async move |ctx| {
-                let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
-                ctx.dispatch(1).unwrap();
-                let mut buf = [0; 11];
-                stream.read_exact(&ctx, &mut buf).await.unwrap();
-                assert_eq!(&buf, b"hello world");
-                ctx.dispatch(2).unwrap();
-                pending::<()>().await;
-            },
-        )
-        .unwrap();
-
-        let peer = raw_accept(&listener);
-        assert_eq!(event_loop.run_until_events(), [1]);
-
-        rustix::io::write(&peer, b"hello ").unwrap();
-        assert!(event_loop.wait_readable_blocking(1000));
-        assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
-        assert!(!event_loop.is_readable_now());
-        assert_yields!(event_loop.events(), []);
-
-        rustix::io::write(&peer, b"world").unwrap();
-        assert_eq!(event_loop.run_until_events(), [2]);
+    fn read_exact_resumes_after_a_pending_read() {
+        static STORAGE: TestStorage = TestStorage::new();
+        let selector = Selector::new().unwrap();
+        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
+        let mut reader = Scripted::new(b"hello world", 6, None).yielding();
+        let mut buf = [0; 11];
+        let mut cx = Context::from_waker(Waker::noop());
+        {
+            let mut read = pin!(reader.read_exact(&ctx, &mut buf));
+            assert_eq!(read.as_mut().poll(&mut cx), Poll::Pending);
+            assert_eq!(read.as_mut().poll(&mut cx), Poll::Pending);
+            assert_eq!(read.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
+        }
+        assert_eq!(&buf, b"hello world");
+        assert_eq!(reader.calls, 2);
     }
 }

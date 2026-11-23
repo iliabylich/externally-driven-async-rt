@@ -64,7 +64,6 @@ fn path_of(addr: &SocketAddrUnix) -> &[u8] {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn stream_echo_with_a_raw_peer() {
     let path = TempPath::new("stream-echo");
     let server_addr = path.addr();
@@ -107,7 +106,6 @@ fn stream_echo_with_a_raw_peer() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn listener_accepts_a_raw_client() {
     let path = TempPath::new("listener");
     let listener_addr = path.addr();
@@ -148,7 +146,6 @@ fn listener_accepts_a_raw_client() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn datagram_round_trip_with_a_raw_peer() {
     let ours = TempPath::new("dgram-ours");
     let theirs = TempPath::new("dgram-theirs");
@@ -196,7 +193,6 @@ fn datagram_round_trip_with_a_raw_peer() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn unbound_datagram_sender_has_an_unnamed_address() {
     let path = TempPath::new("dgram-unbound");
     let bound_addr = path.addr();
@@ -224,7 +220,6 @@ fn unbound_datagram_sender_has_an_unnamed_address() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn connect_to_a_missing_path_fails() {
     let path = TempPath::new("missing");
     let addr = path.addr();
@@ -246,7 +241,6 @@ fn connect_to_a_missing_path_fails() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn stream_halves_echo_with_a_raw_peer() {
     let path = TempPath::new("stream-halves");
     let server_addr = path.addr();

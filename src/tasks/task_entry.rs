@@ -116,33 +116,37 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
     }
 }
 
+// SAFETY: a `TaskEntry` never leaves the crate. In the event loop every entry lives in a
+// `LoopStorage`, which is only used from its loop's thread, and tests only use a static entry
+// from the single test that declares it.
+unsafe impl<const SIZE: usize> Sync for TaskEntry<SIZE> {}
+
 pub(super) type TaskId<const SIZE: usize> = VersionedIndex<TaskEntry<SIZE>>;
 
 #[cfg(test)]
 mod tests {
     use core::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
-    use crate::testing::{FlagOnDrop, TasksStorage, claimed_forever};
-
-    type Storage = TasksStorage<1, 0, 64>;
+    use crate::{
+        tasks::TaskEntry,
+        testing::{FlagOnDrop, claimed_forever},
+    };
 
     #[test]
     fn dropping_drops_the_future_in_place() {
-        static STORAGE: Storage = Storage::new();
+        static ENTRY: TaskEntry<64> = TaskEntry::new();
         static DROPPED: AtomicBool = AtomicBool::new(false);
-        let root = &STORAGE.tasks.root;
-        root.write(claimed_forever(), FlagOnDrop::new(&DROPPED));
-        assert!(root.drop_idle());
+        ENTRY.write(claimed_forever(), FlagOnDrop::new(&DROPPED));
+        assert!(ENTRY.drop_idle());
         assert!(DROPPED.load(Relaxed));
     }
 
     #[test]
     fn dropping_frees_the_entry_for_the_next_write() {
-        static STORAGE: Storage = Storage::new();
-        let root = &STORAGE.tasks.root;
-        root.write(claimed_forever(), async {});
-        assert!(root.drop_idle());
-        root.write(claimed_forever(), async {});
-        assert!(root.drop_idle());
+        static ENTRY: TaskEntry<64> = TaskEntry::new();
+        ENTRY.write(claimed_forever(), async {});
+        assert!(ENTRY.drop_idle());
+        ENTRY.write(claimed_forever(), async {});
+        assert!(ENTRY.drop_idle());
     }
 }

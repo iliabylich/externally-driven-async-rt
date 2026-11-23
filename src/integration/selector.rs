@@ -69,7 +69,6 @@ fn ready_directions(selector: &Selector, fd: &OwnedFd) -> Directions {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn nothing_armed_produces_no_events() {
     let selector = Selector::new().unwrap();
     let (_rx, tx) = socketpair();
@@ -80,7 +79,6 @@ fn nothing_armed_produces_no_events() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn armed_write_is_reported_with_its_fd() {
     let selector = Selector::new().unwrap();
     let (a, _b) = socketpair();
@@ -91,7 +89,6 @@ fn armed_write_is_reported_with_its_fd() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn read_interest_is_one_shot() {
     let selector = Selector::new().unwrap();
     let (rx, tx) = socketpair();
@@ -112,7 +109,6 @@ fn read_interest_is_one_shot() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn data_that_arrived_before_arming_is_reported() {
     let selector = Selector::new().unwrap();
     let (rx, tx) = socketpair();
@@ -124,7 +120,6 @@ fn data_that_arrived_before_arming_is_reported() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn disarming_prevents_events() {
     let selector = Selector::new().unwrap();
     let (rx, tx) = socketpair();
@@ -137,7 +132,6 @@ fn disarming_prevents_events() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn apply_now_deletes_an_armed_filter_without_flush() {
     let selector = Selector::new().unwrap();
     let (rx, tx) = socketpair();
@@ -150,7 +144,6 @@ fn apply_now_deletes_an_armed_filter_without_flush() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn deleted_then_closed_fd_produces_no_events() {
     let selector = Selector::new().unwrap();
     let (rx, tx) = socketpair();
@@ -164,7 +157,6 @@ fn deleted_then_closed_fd_produces_no_events() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn disarming_a_filter_that_already_fired_is_ok() {
     let selector = Selector::new().unwrap();
     let (a, _b) = socketpair();
@@ -176,7 +168,6 @@ fn disarming_a_filter_that_already_fired_is_ok() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn reused_fd_number_reports_the_new_socket() {
     let selector = Selector::new().unwrap();
     let (a, _b) = socketpair();
@@ -194,7 +185,6 @@ fn reused_fd_number_reports_the_new_socket() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn read_and_write_on_one_fd_are_both_reported() {
     let selector = Selector::new().unwrap();
     let (a, b) = socketpair();
@@ -204,7 +194,6 @@ fn read_and_write_on_one_fd_are_both_reported() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn arming_one_direction_keeps_the_other() {
     let selector = Selector::new().unwrap();
     let (a, b) = socketpair();
@@ -220,7 +209,6 @@ fn arming_one_direction_keeps_the_other() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn releasing_one_direction_keeps_the_other() {
     let selector = Selector::new().unwrap();
     let (a, b) = socketpair();
@@ -237,7 +225,6 @@ fn releasing_one_direction_keeps_the_other() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn changes_and_events_beyond_one_batch_are_all_delivered() {
     let selector = Selector::new().unwrap();
     let [(a0, b0), (a1, b1), (a2, b2)] = core::array::from_fn(|_| socketpair());
@@ -258,7 +245,6 @@ fn changes_and_events_beyond_one_batch_are_all_delivered() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn timer_fires_after_flush() {
     let selector = Selector::new().unwrap();
     let start = Instant::now();
@@ -276,7 +262,6 @@ fn timer_fires_after_flush() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn disarm_prevents_firing() {
     let selector = Selector::new().unwrap();
     selector
@@ -292,7 +277,6 @@ fn disarm_prevents_firing() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn disarm_after_timer_fired_is_ok() {
     let selector = Selector::new().unwrap();
     selector
@@ -304,7 +288,6 @@ fn disarm_after_timer_fired_is_ok() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn disarm_when_never_armed_is_ok() {
     let selector = Selector::new().unwrap();
     selector.flush([], None, Instant::ZERO).unwrap();

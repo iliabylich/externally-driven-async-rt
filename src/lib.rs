@@ -15,6 +15,8 @@ mod context;
 mod conversions;
 mod data;
 mod event_loop;
+#[cfg(test)]
+mod integration;
 /// IO traits, implemented by streams from [`net`].
 pub mod io;
 /// A module that implements TCP/UDP/Unix sockets.

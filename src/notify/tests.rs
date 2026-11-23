@@ -1,107 +1,14 @@
 use core::{
     cell::Cell,
-    future::{Future, pending},
+    future::Future,
     pin::pin,
-    sync::atomic::{AtomicU64, Ordering::Relaxed},
     task::{Context, Poll, Waker},
-    time::Duration,
 };
 
 use crate::{
-    Selector,
     notify::Notification,
-    testing::{
-        EventLoopTestingExt, FdTestingExt, TestContext, TestLoop, TestStorage, assert_yields,
-        counting_waker, fake_instant, wake_expired_timers,
-    },
-    time::Instant,
+    testing::{counting_waker, flag_waker},
 };
-
-#[test]
-#[cfg_attr(miri, ignore)]
-fn notify_makes_the_loop_readable_and_wakes_the_waiter() {
-    let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async |ctx| {
-            for i in 1..=u32::MAX {
-                ctx.notified().await;
-                ctx.dispatch(i).unwrap();
-            }
-        },
-    )
-    .unwrap();
-    assert!(!event_loop.is_readable_now());
-
-    event_loop.notify().unwrap();
-    assert_eq!(event_loop.run_until_events(), [1]);
-    assert!(!event_loop.is_readable_now());
-
-    event_loop.notify().unwrap();
-    assert_eq!(event_loop.run_until_events(), [2]);
-    assert!(!event_loop.is_readable_now());
-}
-
-#[test]
-#[cfg_attr(miri, ignore)]
-fn notifications_coalesce() {
-    let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async |ctx| {
-            for i in 1..=u32::MAX {
-                ctx.notified().await;
-                ctx.dispatch(i).unwrap();
-            }
-        },
-    )
-    .unwrap();
-
-    event_loop.notify().unwrap();
-    event_loop.notify().unwrap();
-    event_loop.notify().unwrap();
-    assert_eq!(event_loop.run_until_events(), [1]);
-    assert!(!event_loop.is_readable_now());
-}
-
-#[test]
-fn notification_without_a_waiter_is_kept() {
-    static NOW: AtomicU64 = AtomicU64::new(0);
-    fn now() -> Instant {
-        fake_instant(&NOW)
-    }
-    let selector = Selector::new().unwrap();
-    let (ctx, root): (TestContext<'_>, _) = {
-        static STORAGE: TestStorage = TestStorage::with_clock(now);
-        STORAGE.claim(&selector).unwrap()
-    };
-    ctx.storage.tasks.spawn_root(root, ctx.claimed, async move {
-        ctx.sleep(Duration::from_millis(10)).await.unwrap();
-        ctx.dispatch(1).unwrap();
-        ctx.notified().await;
-        ctx.dispatch(2).unwrap();
-        pending::<()>().await;
-    });
-    assert_eq!(ctx.storage.tasks.run_ready(), Poll::Pending);
-
-    ctx.storage.notification.fire();
-    assert_eq!(ctx.storage.tasks.run_ready(), Poll::Pending);
-    assert_yields!(ctx.storage.events.iter_removing(), []);
-
-    NOW.store(10, Relaxed);
-    wake_expired_timers(&ctx.storage.timers);
-    assert_eq!(ctx.storage.tasks.run_ready(), Poll::Pending);
-    assert_yields!(ctx.storage.events.iter_removing(), [1, 2]);
-    ctx.clear();
-}
 
 #[test]
 fn fire_before_poll_resolves_immediately() {
@@ -131,5 +38,30 @@ fn clear_drops_a_pending_notification() {
     notification.fire();
     notification.clear();
     let mut cx = Context::from_waker(Waker::noop());
+    assert_eq!(pin!(notification.notified()).poll(&mut cx), Poll::Pending);
+}
+
+#[test]
+fn fire_wakes_a_pending_waiter() {
+    let woken = Cell::new(false);
+    let notification = Notification::new();
+    let waker = flag_waker(&woken);
+    let mut cx = Context::from_waker(&waker);
+    let mut notified = pin!(notification.notified());
+    assert_eq!(notified.as_mut().poll(&mut cx), Poll::Pending);
+    assert!(!woken.get());
+    notification.fire();
+    assert!(woken.get());
+    assert_eq!(notified.as_mut().poll(&mut cx), Poll::Ready(()));
+}
+
+#[test]
+fn fires_coalesce() {
+    let notification = Notification::new();
+    let mut cx = Context::from_waker(Waker::noop());
+    notification.fire();
+    notification.fire();
+    notification.fire();
+    assert_eq!(pin!(notification.notified()).poll(&mut cx), Poll::Ready(()));
     assert_eq!(pin!(notification.notified()).poll(&mut cx), Poll::Pending);
 }

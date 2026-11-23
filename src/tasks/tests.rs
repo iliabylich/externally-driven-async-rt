@@ -1,23 +1,19 @@
 use core::{
     cell::Cell,
-    future::{Future, pending, poll_fn},
+    future::{Future, poll_fn},
     pin::pin,
     sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed},
     task::{Context, Poll, Waker},
 };
 
 use crate::{
-    Selector,
     tasks::{SlotWaiterTakenError, TaskId, Tasks},
-    testing::{
-        FixedFuture, FlagOnDrop, TasksStorage, TestLoop, TestStorage, assert_yields,
-        claimed_forever, counting_waker,
-    },
+    testing::{FixedFuture, FlagOnDrop, claimed_forever, counting_waker},
 };
 
 const TASK_SIZE: usize = 1024;
 
-type Storage<const TASKS: usize> = TasksStorage<TASKS, TASK_SIZE, 0>;
+type TestTasks<const TASKS: usize> = Tasks<TASKS, TASK_SIZE, 0>;
 
 fn contains<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>(
     tasks: &Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
@@ -38,33 +34,31 @@ fn waker<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
 
 #[test]
 fn dropping_a_task_drops_its_future_and_finishes_it() {
-    static STORAGE: Storage<2> = Storage::new();
+    static TASKS: TestTasks<2> = TestTasks::new();
     static DROPPED: AtomicBool = AtomicBool::new(false);
-    let tasks = &STORAGE.tasks;
-    let id = tasks
+    let id = TASKS
         .spawn_task(claimed_forever(), FlagOnDrop::new(&DROPPED))
         .unwrap();
-    assert!(contains(tasks, id));
-    assert_eq!(tasks.set_join_waiter(id, Waker::noop()), Poll::Pending);
-    tasks.drop_all();
+    assert!(contains(&TASKS, id));
+    assert_eq!(TASKS.set_join_waiter(id, Waker::noop()), Poll::Pending);
+    TASKS.drop_all();
     assert!(DROPPED.load(Relaxed));
-    assert!(!contains(tasks, id));
-    assert_eq!(tasks.pool.iter().count(), 0);
-    assert_eq!(tasks.set_join_waiter(id, Waker::noop()), Poll::Ready(()));
-    assert_eq!(tasks.run_ready(), Poll::Pending);
-    assert!(tasks.queue.is_empty());
+    assert!(!contains(&TASKS, id));
+    assert_eq!(TASKS.pool.iter().count(), 0);
+    assert_eq!(TASKS.set_join_waiter(id, Waker::noop()), Poll::Ready(()));
+    assert_eq!(TASKS.run_ready(), Poll::Pending);
+    assert!(TASKS.queue.is_empty());
 }
 
 #[test]
 fn finished_task_id_never_matches_a_reused_slot() {
-    static STORAGE: Storage<1> = Storage::new();
-    let tasks = &STORAGE.tasks;
-    let first = tasks.spawn_task(claimed_forever(), async {}).unwrap();
-    tasks.drop_all();
-    let second = tasks.spawn_task(claimed_forever(), async {}).unwrap();
+    static TASKS: TestTasks<1> = TestTasks::new();
+    let first = TASKS.spawn_task(claimed_forever(), async {}).unwrap();
+    TASKS.drop_all();
+    let second = TASKS.spawn_task(claimed_forever(), async {}).unwrap();
     assert_ne!(first, second);
-    assert!(!contains(tasks, first));
-    assert_eq!(tasks.set_join_waiter(first, Waker::noop()), Poll::Ready(()));
+    assert!(!contains(&TASKS, first));
+    assert_eq!(TASKS.set_join_waiter(first, Waker::noop()), Poll::Ready(()));
 }
 
 #[test]
@@ -86,32 +80,30 @@ fn a_task_spawned_while_one_is_dropped_gets_another_slot() {
         }
     }
 
-    static STORAGE: Storage<2> = Storage::new();
+    static TASKS: TestTasks<2> = TestTasks::new();
 
-    let tasks = &STORAGE.tasks;
-    let (id, entry) = tasks.pool.alloc().unwrap();
-    let spawn_on_drop = SpawnOnDrop { tasks, id };
-    tasks.spawn_reserved(claimed_forever(), id, entry, async move {
+    let (id, entry) = TASKS.pool.alloc().unwrap();
+    let spawn_on_drop = SpawnOnDrop { tasks: &TASKS, id };
+    TASKS.spawn_reserved(claimed_forever(), id, entry, async move {
         let _spawn_on_drop = spawn_on_drop;
     });
-    tasks.drop_all();
-    assert_eq!(tasks.pool.iter().count(), 0);
+    TASKS.drop_all();
+    assert_eq!(TASKS.pool.iter().count(), 0);
 }
 
 #[test]
 fn full_size_futures_in_neighbouring_slots_do_not_overlap() {
-    static STORAGE: Storage<2> = Storage::new();
-    let tasks = &STORAGE.tasks;
+    static TASKS: TestTasks<2> = TestTasks::new();
     let ids = [1u8, 2].map(|byte| {
         let data = [byte; TASK_SIZE - 16];
-        tasks
+        TASKS
             .spawn_task(claimed_forever(), async move {
                 assert!(data.iter().all(|b| *b == byte));
             })
             .unwrap()
     });
-    assert_eq!(tasks.run_ready(), Poll::Pending);
-    assert!(ids.iter().all(|id| !contains(tasks, *id)));
+    assert_eq!(TASKS.run_ready(), Poll::Pending);
+    assert!(ids.iter().all(|id| !contains(&TASKS, *id)));
 }
 
 #[test]
@@ -119,19 +111,18 @@ fn futures_up_to_task_size_fit() {
     #[repr(align(16))]
     struct Align16;
 
-    static STORAGE: TasksStorage<2, 100, 0> = TasksStorage::new();
+    static TASKS: Tasks<2, 100, 0> = Tasks::new();
 
-    let tasks = &STORAGE.tasks;
     let ids = [
-        tasks
+        TASKS
             .spawn_task(claimed_forever(), FixedFuture::new([1u8; 100]))
             .unwrap(),
-        tasks
+        TASKS
             .spawn_task(claimed_forever(), FixedFuture::new((Align16, [2u8; 80])))
             .unwrap(),
     ];
-    assert_eq!(tasks.run_ready(), Poll::Pending);
-    assert!(ids.iter().all(|id| !contains(tasks, *id)));
+    assert_eq!(TASKS.run_ready(), Poll::Pending);
+    assert!(ids.iter().all(|id| !contains(&TASKS, *id)));
 }
 
 #[test]
@@ -150,21 +141,19 @@ fn root_region_holds_a_root_bigger_than_a_slab_block() {
         }
     }
 
-    static STORAGE: TasksStorage<2, TASK_SIZE, { size_of::<BigRoot<'static>>() }> =
-        TasksStorage::new();
+    static TASKS: Tasks<2, TASK_SIZE, { size_of::<BigRoot<'static>>() }> = Tasks::new();
 
     static DROPPED: AtomicBool = AtomicBool::new(false);
-    let tasks = &STORAGE.tasks;
     let root = BigRoot {
         data: [3; 9000],
         _flag: FlagOnDrop::new(&DROPPED),
     };
-    tasks.spawn_root(tasks.queue.claim().unwrap(), claimed_forever(), root);
-    let _ = tasks.spawn_task(claimed_forever(), async {}).unwrap();
-    assert_eq!(tasks.run_ready(), Poll::Pending);
-    assert!(tasks.root.has_task());
+    TASKS.spawn_root(TASKS.queue.claim().unwrap(), claimed_forever(), root);
+    let _ = TASKS.spawn_task(claimed_forever(), async {}).unwrap();
+    assert_eq!(TASKS.run_ready(), Poll::Pending);
+    assert!(TASKS.root.has_task());
     assert!(!DROPPED.load(Relaxed));
-    tasks.drop_all();
+    TASKS.drop_all();
     assert!(DROPPED.load(Relaxed));
 }
 
@@ -177,68 +166,63 @@ fn counting(polls: &AtomicU32) -> impl Future<Output = ()> {
 
 #[test]
 fn finished_task_is_removed() {
-    static STORAGE: Storage<1> = Storage::new();
-    let tasks = &STORAGE.tasks;
-    let id = tasks.spawn_task(claimed_forever(), async {}).unwrap();
-    assert_eq!(tasks.run_ready(), Poll::Pending);
-    assert!(!contains(tasks, id));
+    static TASKS: TestTasks<1> = TestTasks::new();
+    let id = TASKS.spawn_task(claimed_forever(), async {}).unwrap();
+    assert_eq!(TASKS.run_ready(), Poll::Pending);
+    assert!(!contains(&TASKS, id));
 }
 
 #[test]
 fn a_stale_wake_of_a_freed_slot_polls_nothing() {
-    static STORAGE: Storage<1> = Storage::new();
-    let tasks = &STORAGE.tasks;
-    assert!(tasks.queue.claim().is_some());
-    let id = tasks.spawn_task(claimed_forever(), async {}).unwrap();
-    let waker = waker(tasks, id);
-    let _ = tasks.run_ready();
+    static TASKS: TestTasks<1> = TestTasks::new();
+    assert!(TASKS.queue.claim().is_some());
+    let id = TASKS.spawn_task(claimed_forever(), async {}).unwrap();
+    let waker = waker(&TASKS, id);
+    let _ = TASKS.run_ready();
     waker.wake();
-    assert_eq!(tasks.run_ready(), Poll::Pending);
-    assert!(tasks.queue.is_empty());
+    assert_eq!(TASKS.run_ready(), Poll::Pending);
+    assert!(TASKS.queue.is_empty());
 }
 
 #[test]
 fn a_stale_wake_of_a_reserved_slot_is_skipped() {
-    static STORAGE: Storage<1> = Storage::new();
+    static TASKS: TestTasks<1> = TestTasks::new();
     static POLLS: AtomicU32 = AtomicU32::new(0);
-    let tasks = &STORAGE.tasks;
-    assert!(tasks.queue.claim().is_some());
-    let id = tasks.spawn_task(claimed_forever(), async {}).unwrap();
-    let waker = waker(tasks, id);
-    let _ = tasks.run_ready();
-    let (id, entry) = tasks.pool.alloc().unwrap();
+    assert!(TASKS.queue.claim().is_some());
+    let id = TASKS.spawn_task(claimed_forever(), async {}).unwrap();
+    let waker = waker(&TASKS, id);
+    let _ = TASKS.run_ready();
+    let (id, entry) = TASKS.pool.alloc().unwrap();
     waker.wake();
-    assert_eq!(tasks.run_ready(), Poll::Pending);
-    tasks.spawn_reserved(claimed_forever(), id, entry, counting(&POLLS));
-    let _ = tasks.run_ready();
+    assert_eq!(TASKS.run_ready(), Poll::Pending);
+    TASKS.spawn_reserved(claimed_forever(), id, entry, counting(&POLLS));
+    let _ = TASKS.run_ready();
     assert_eq!(POLLS.load(Relaxed), 1);
 }
 
 #[test]
 fn a_stale_wake_of_a_reused_slot_polls_its_new_task() {
-    static STORAGE: Storage<1> = Storage::new();
+    static TASKS: TestTasks<1> = TestTasks::new();
     static POLLS: AtomicU32 = AtomicU32::new(0);
-    let tasks = &STORAGE.tasks;
-    assert!(tasks.queue.claim().is_some());
-    let id = tasks.spawn_task(claimed_forever(), async {}).unwrap();
-    let waker = waker(tasks, id);
-    let _ = tasks.run_ready();
-    let _ = tasks
+    assert!(TASKS.queue.claim().is_some());
+    let id = TASKS.spawn_task(claimed_forever(), async {}).unwrap();
+    let waker = waker(&TASKS, id);
+    let _ = TASKS.run_ready();
+    let _ = TASKS
         .spawn_task(claimed_forever(), counting(&POLLS))
         .unwrap();
-    let _ = tasks.run_ready();
+    let _ = TASKS.run_ready();
     waker.wake();
-    let _ = tasks.run_ready();
+    let _ = TASKS.run_ready();
     assert_eq!(POLLS.load(Relaxed), 2);
 }
 
 #[test]
 fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
-    static STORAGE: Storage<1> = Storage::new();
+    static TASKS: TestTasks<1> = TestTasks::new();
     static POLLS: AtomicU32 = AtomicU32::new(0);
-    let tasks = &STORAGE.tasks;
-    assert!(tasks.queue.claim().is_some());
-    let _ = tasks
+    assert!(TASKS.queue.claim().is_some());
+    let _ = TASKS
         .spawn_task(claimed_forever(), {
             poll_fn(|cx| {
                 POLLS.fetch_add(1, Relaxed);
@@ -249,118 +233,110 @@ fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
             })
         })
         .unwrap();
-    let _ = tasks.run_ready();
+    let _ = TASKS.run_ready();
     assert_eq!(POLLS.load(Relaxed), 3);
 }
 
 #[test]
 fn task_spawned_during_a_poll_runs_in_the_same_run() {
-    static STORAGE: Storage<2> = Storage::new();
+    static TASKS: TestTasks<2> = TestTasks::new();
     static POLLS: AtomicU32 = AtomicU32::new(0);
-    let tasks = &STORAGE.tasks;
     let child = counting(&POLLS);
-    let _ = tasks
+    let _ = TASKS
         .spawn_task(claimed_forever(), async move {
-            let _ = tasks.spawn_task(claimed_forever(), child).unwrap();
+            let _ = TASKS.spawn_task(claimed_forever(), child).unwrap();
         })
         .unwrap();
-    let _ = tasks.run_ready();
+    let _ = TASKS.run_ready();
     assert_eq!(POLLS.load(Relaxed), 1);
 }
 
 #[test]
 fn join_waiter_is_woken_when_the_task_finishes() {
-    static STORAGE: Storage<2> = Storage::new();
+    static TASKS: TestTasks<2> = TestTasks::new();
     static POLLS: AtomicU32 = AtomicU32::new(0);
-    let tasks = &STORAGE.tasks;
-    assert!(tasks.queue.claim().is_some());
-    let waiter = tasks
+    assert!(TASKS.queue.claim().is_some());
+    let waiter = TASKS
         .spawn_task(claimed_forever(), counting(&POLLS))
         .unwrap();
-    let task = tasks.spawn_task(claimed_forever(), async {}).unwrap();
-    let _ = tasks.set_join_waiter(task, &waker(tasks, waiter));
-    let _ = tasks.run_ready();
+    let task = TASKS.spawn_task(claimed_forever(), async {}).unwrap();
+    let _ = TASKS.set_join_waiter(task, &waker(&TASKS, waiter));
+    let _ = TASKS.run_ready();
     assert_eq!(POLLS.load(Relaxed), 2);
 }
 
 #[test]
 fn root_finishing_stops_the_run() {
-    static STORAGE: TasksStorage<2, TASK_SIZE, 64> = TasksStorage::new();
+    static TASKS: Tasks<2, TASK_SIZE, 64> = Tasks::new();
     static POLLS: AtomicU32 = AtomicU32::new(0);
-    let tasks = &STORAGE.tasks;
-    tasks.spawn_root(tasks.queue.claim().unwrap(), claimed_forever(), async {});
-    let _ = tasks
+    TASKS.spawn_root(TASKS.queue.claim().unwrap(), claimed_forever(), async {});
+    let _ = TASKS
         .spawn_task(claimed_forever(), counting(&POLLS))
         .unwrap();
-    assert_eq!(tasks.run_ready(), Poll::Ready(()));
+    assert_eq!(TASKS.run_ready(), Poll::Ready(()));
     assert_eq!(POLLS.load(Relaxed), 0);
-    assert!(!tasks.root.has_task());
+    assert!(!TASKS.root.has_task());
 }
 
 #[test]
 fn releasing_a_slot_wakes_the_slot_waiter() {
-    static STORAGE: Storage<2> = Storage::new();
+    static TASKS: TestTasks<2> = TestTasks::new();
     static POLLS: AtomicU32 = AtomicU32::new(0);
-    let tasks = &STORAGE.tasks;
-    assert!(tasks.queue.claim().is_some());
-    let waiter = tasks
+    assert!(TASKS.queue.claim().is_some());
+    let waiter = TASKS
         .spawn_task(claimed_forever(), counting(&POLLS))
         .unwrap();
-    let _ = tasks.run_ready();
-    tasks.slot_waiter.store(&waker(tasks, waiter));
-    let (id, _) = tasks.pool.alloc().unwrap();
-    tasks.release(id);
-    let _ = tasks.run_ready();
+    let _ = TASKS.run_ready();
+    TASKS.slot_waiter.store(&waker(&TASKS, waiter));
+    let (id, _) = TASKS.pool.alloc().unwrap();
+    TASKS.release(id);
+    let _ = TASKS.run_ready();
     assert_eq!(POLLS.load(Relaxed), 2);
-    assert!(tasks.slot_waiter.is_set());
+    assert!(TASKS.slot_waiter.is_set());
 }
 
 #[test]
 fn finishing_a_task_wakes_the_slot_waiter() {
-    static STORAGE: Storage<2> = Storage::new();
+    static TASKS: TestTasks<2> = TestTasks::new();
     static POLLS: AtomicU32 = AtomicU32::new(0);
-    let tasks = &STORAGE.tasks;
-    assert!(tasks.queue.claim().is_some());
-    let waiter = tasks
+    assert!(TASKS.queue.claim().is_some());
+    let waiter = TASKS
         .spawn_task(claimed_forever(), counting(&POLLS))
         .unwrap();
-    let _ = tasks.run_ready();
-    tasks.slot_waiter.store(&waker(tasks, waiter));
-    let _ = tasks.spawn_task(claimed_forever(), async {}).unwrap();
-    let _ = tasks.run_ready();
+    let _ = TASKS.run_ready();
+    TASKS.slot_waiter.store(&waker(&TASKS, waiter));
+    let _ = TASKS.spawn_task(claimed_forever(), async {}).unwrap();
+    let _ = TASKS.run_ready();
     assert_eq!(POLLS.load(Relaxed), 2);
 }
 
 #[test]
 fn join_is_pending_until_the_task_finishes() {
-    static STORAGE: Storage<2> = Storage::new();
-    let tasks = &STORAGE.tasks;
+    static TASKS: TestTasks<2> = TestTasks::new();
     let mut cx = Context::from_waker(Waker::noop());
-    let mut join = pin!(tasks.join(tasks.spawn_task(claimed_forever(), async {}).unwrap()));
+    let mut join = pin!(TASKS.join(TASKS.spawn_task(claimed_forever(), async {}).unwrap()));
     assert_eq!(join.as_mut().poll(&mut cx), Poll::Pending);
-    let _ = tasks.run_ready();
+    let _ = TASKS.run_ready();
     assert_eq!(join.as_mut().poll(&mut cx), Poll::Ready(()));
 }
 
 #[test]
 fn joining_a_finished_task_resolves_immediately() {
-    static STORAGE: Storage<2> = Storage::new();
-    let tasks = &STORAGE.tasks;
+    static TASKS: TestTasks<2> = TestTasks::new();
     let mut cx = Context::from_waker(Waker::noop());
-    let id = tasks.spawn_task(claimed_forever(), async {}).unwrap();
-    let _ = tasks.run_ready();
-    assert_eq!(pin!(tasks.join(id)).poll(&mut cx), Poll::Ready(()));
+    let id = TASKS.spawn_task(claimed_forever(), async {}).unwrap();
+    let _ = TASKS.run_ready();
+    assert_eq!(pin!(TASKS.join(id)).poll(&mut cx), Poll::Ready(()));
 }
 
 #[test]
 fn dropping_a_polled_join_drops_its_join_waiter() {
-    static STORAGE: Storage<2> = Storage::new();
-    let tasks = &STORAGE.tasks;
+    static TASKS: TestTasks<2> = TestTasks::new();
     let drops = Cell::new(0);
     {
         let waker = counting_waker(&drops);
         let mut cx = Context::from_waker(&waker);
-        let mut join = pin!(tasks.join(tasks.spawn_task(claimed_forever(), async {}).unwrap()));
+        let mut join = pin!(TASKS.join(TASKS.spawn_task(claimed_forever(), async {}).unwrap()));
         assert_eq!(join.as_mut().poll(&mut cx), Poll::Pending);
     }
     assert_eq!(drops.get(), 2);
@@ -368,19 +344,18 @@ fn dropping_a_polled_join_drops_its_join_waiter() {
 
 #[test]
 fn dropping_a_stale_join_keeps_the_new_tasks_join_waiter() {
-    static STORAGE: Storage<2> = Storage::new();
-    let tasks = &STORAGE.tasks;
+    static TASKS: TestTasks<2> = TestTasks::new();
     let drops = Cell::new(0);
     let mut cx = Context::from_waker(Waker::noop());
-    let stale = tasks.spawn_task(claimed_forever(), async {}).unwrap();
+    let stale = TASKS.spawn_task(claimed_forever(), async {}).unwrap();
     {
-        let mut join = pin!(tasks.join(stale));
+        let mut join = pin!(TASKS.join(stale));
         assert_eq!(join.as_mut().poll(&mut cx), Poll::Pending);
-        let _ = tasks.run_ready();
-        let id = tasks.spawn_task(claimed_forever(), async {}).unwrap();
+        let _ = TASKS.run_ready();
+        let id = TASKS.spawn_task(claimed_forever(), async {}).unwrap();
         assert_eq!(id.idx, stale.idx);
         assert_eq!(
-            tasks.set_join_waiter(id, &counting_waker(&drops)),
+            TASKS.set_join_waiter(id, &counting_waker(&drops)),
             Poll::Pending
         );
         assert_eq!(drops.get(), 1);
@@ -390,72 +365,69 @@ fn dropping_a_stale_join_keeps_the_new_tasks_join_waiter() {
 
 #[test]
 fn dropping_a_join_detaches_the_task() {
-    static STORAGE: Storage<2> = Storage::new();
+    static TASKS: TestTasks<2> = TestTasks::new();
     static RAN: AtomicBool = AtomicBool::new(false);
-    let tasks = &STORAGE.tasks;
     let mut cx = Context::from_waker(Waker::noop());
-    let id = tasks
+    let id = TASKS
         .spawn_task(claimed_forever(), async { RAN.store(true, Relaxed) })
         .unwrap();
-    assert_eq!(pin!(tasks.join(id)).poll(&mut cx), Poll::Pending);
-    let _ = tasks.run_ready();
+    assert_eq!(pin!(TASKS.join(id)).poll(&mut cx), Poll::Pending);
+    let _ = TASKS.run_ready();
     assert!(RAN.load(Relaxed));
 }
 
 #[test]
-fn spawned_task_can_spawn_and_join() {
-    let mut selector = Selector::new().unwrap();
-    let event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async |ctx| {
-            ctx.spawn(async |ctx| {
-                ctx.spawn(async |ctx| ctx.dispatch(1).unwrap())
-                    .unwrap()
-                    .await;
-                ctx.dispatch(2).unwrap();
-            })
-            .unwrap()
-            .await;
-            ctx.dispatch(3).unwrap();
-            pending::<()>().await;
-        },
-    )
-    .unwrap();
-    assert_yields!(event_loop.events(), [1, 2, 3]);
+fn a_task_can_spawn_and_join_a_task() {
+    static TASKS: TestTasks<3> = TestTasks::new();
+    static STEP: AtomicU32 = AtomicU32::new(0);
+    assert!(TASKS.claim().is_some());
+    let _ = TASKS
+        .spawn_task(claimed_forever(), async {
+            TASKS
+                .spawn(claimed_forever(), async {
+                    TASKS
+                        .spawn(claimed_forever(), async {
+                            assert_eq!(STEP.fetch_add(1, Relaxed), 0);
+                        })
+                        .unwrap()
+                        .await;
+                    assert_eq!(STEP.fetch_add(1, Relaxed), 1);
+                })
+                .unwrap()
+                .await;
+            assert_eq!(STEP.fetch_add(1, Relaxed), 2);
+        })
+        .unwrap();
+    assert_eq!(TASKS.run_ready(), Poll::Pending);
+    assert_eq!(STEP.load(Relaxed), 3);
 }
 
 #[test]
 fn reserve_waits_until_a_task_finishes() {
-    static STORAGE: Storage<1> = Storage::new();
-    let tasks = &STORAGE.tasks;
+    static TASKS: TestTasks<1> = TestTasks::new();
     let mut cx = Context::from_waker(Waker::noop());
-    let _ = tasks.spawn_task(claimed_forever(), async {}).unwrap();
-    let mut reserve = pin!(tasks.reserve(claimed_forever()));
+    let _ = TASKS.spawn_task(claimed_forever(), async {}).unwrap();
+    let mut reserve = pin!(TASKS.reserve(claimed_forever()));
     assert!(reserve.as_mut().poll(&mut cx).is_pending());
-    assert!(tasks.slot_waiter.is_set());
-    let _ = tasks.run_ready();
+    assert!(TASKS.slot_waiter.is_set());
+    let _ = TASKS.run_ready();
     assert!(reserve.as_mut().poll(&mut cx).is_ready());
-    assert!(!tasks.slot_waiter.is_set());
+    assert!(!TASKS.slot_waiter.is_set());
 }
 
 #[test]
 fn a_second_reserve_gets_an_error() {
-    static STORAGE: Storage<1> = Storage::new();
-    let tasks = &STORAGE.tasks;
+    static TASKS: TestTasks<1> = TestTasks::new();
     let mut cx = Context::from_waker(Waker::noop());
-    let _ = tasks.spawn_task(claimed_forever(), async {}).unwrap();
-    let mut first = pin!(tasks.reserve(claimed_forever()));
-    let mut second = pin!(tasks.reserve(claimed_forever()));
+    let _ = TASKS.spawn_task(claimed_forever(), async {}).unwrap();
+    let mut first = pin!(TASKS.reserve(claimed_forever()));
+    let mut second = pin!(TASKS.reserve(claimed_forever()));
     assert!(first.as_mut().poll(&mut cx).is_pending());
     assert!(matches!(
         second.as_mut().poll(&mut cx),
         Poll::Ready(Err(SlotWaiterTakenError))
     ));
-    assert!(tasks.slot_waiter.is_set());
-    let _ = tasks.run_ready();
+    assert!(TASKS.slot_waiter.is_set());
+    let _ = TASKS.run_ready();
     assert!(first.as_mut().poll(&mut cx).is_ready());
 }

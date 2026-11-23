@@ -79,21 +79,20 @@ mod tests {
 
     use crate::{
         NotEnoughResources,
-        tasks::TaskReservation,
-        testing::{TasksStorage, claimed_forever},
+        tasks::{TaskReservation, Tasks},
+        testing::claimed_forever,
     };
 
     #[test]
     fn spawning_runs_the_task() {
-        static STORAGE: TasksStorage<1, 64, 0> = TasksStorage::new();
+        static TASKS: Tasks<1, 64, 0> = Tasks::new();
         static RAN: AtomicBool = AtomicBool::new(false);
-        let tasks = &STORAGE.tasks;
-        let (id, entry) = tasks.pool.alloc().unwrap();
+        let (id, entry) = TASKS.pool.alloc().unwrap();
         let mut handle = pin!(
-            TaskReservation::new(tasks, claimed_forever(), id, entry)
+            TaskReservation::new(&TASKS, claimed_forever(), id, entry)
                 .spawn(async { RAN.store(true, Relaxed) })
         );
-        let _ = tasks.run_ready();
+        let _ = TASKS.run_ready();
         assert!(RAN.load(Relaxed));
         let mut cx = Context::from_waker(Waker::noop());
         assert_eq!(handle.as_mut().poll(&mut cx), Poll::Ready(()));
@@ -101,30 +100,28 @@ mod tests {
 
     #[test]
     fn dropping_frees_the_slot_and_wakes_the_waiter() {
-        static STORAGE: TasksStorage<2, 64, 0> = TasksStorage::new();
-        let tasks = &STORAGE.tasks;
-        assert!(tasks.queue.claim().is_some());
-        let waiter = tasks.spawn_task(claimed_forever(), pending()).unwrap();
-        let _ = tasks.run_ready();
-        let (id, entry) = tasks.pool.alloc().unwrap();
-        let reservation = TaskReservation::new(tasks, claimed_forever(), id, entry);
-        let mut reserve = pin!(tasks.reserve(claimed_forever()));
-        let waker = tasks.queue.waker(waiter.idx);
+        static TASKS: Tasks<2, 64, 0> = Tasks::new();
+        assert!(TASKS.queue.claim().is_some());
+        let waiter = TASKS.spawn_task(claimed_forever(), pending()).unwrap();
+        let _ = TASKS.run_ready();
+        let (id, entry) = TASKS.pool.alloc().unwrap();
+        let reservation = TaskReservation::new(&TASKS, claimed_forever(), id, entry);
+        let mut reserve = pin!(TASKS.reserve(claimed_forever()));
+        let waker = TASKS.queue.waker(waiter.idx);
         let mut cx = Context::from_waker(&waker);
         assert!(reserve.as_mut().poll(&mut cx).is_pending());
         drop(reservation);
-        assert!(!tasks.queue.is_empty());
+        assert!(!TASKS.queue.is_empty());
         assert!(reserve.as_mut().poll(&mut cx).is_ready());
     }
 
     #[test]
     fn a_reserved_slot_is_not_handed_to_spawn() {
-        static STORAGE: TasksStorage<1, 64, 0> = TasksStorage::new();
-        let tasks = &STORAGE.tasks;
-        let (id, entry) = tasks.pool.alloc().unwrap();
-        let _reservation = TaskReservation::new(tasks, claimed_forever(), id, entry);
+        static TASKS: Tasks<1, 64, 0> = Tasks::new();
+        let (id, entry) = TASKS.pool.alloc().unwrap();
+        let _reservation = TaskReservation::new(&TASKS, claimed_forever(), id, entry);
         assert_eq!(
-            tasks.spawn_task(claimed_forever(), async {}),
+            TASKS.spawn_task(claimed_forever(), async {}),
             Err(NotEnoughResources::Tasks)
         );
     }

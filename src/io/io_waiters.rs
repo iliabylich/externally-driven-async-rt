@@ -112,13 +112,23 @@ impl<const N: usize> IoWaiters<N> {
 
 #[cfg(test)]
 mod tests {
-    use core::task::Waker;
+    use core::{
+        cell::Cell,
+        future::Future,
+        pin::pin,
+        task::{Context, Poll, Waker},
+    };
+
+    use rustix::{
+        fd::{AsFd, AsRawFd},
+        io::Errno,
+    };
 
     use crate::{
-        NotEnoughResources,
+        NotEnoughResources, Selector,
         io::IoWaiters,
         selector::{Direction, Directions, IoChange},
-        testing::assert_yields,
+        testing::{assert_yields, plain_socketpair},
     };
 
     fn change(fd: i32, interest: Directions) -> IoChange {
@@ -246,6 +256,72 @@ mod tests {
         assert!(!io.waker(Direction::Write).is_set());
         assert_eq!(io_waiters.release(3, Direction::Read), None);
         assert_eq!(io_waiters.release(3, Direction::Write), None);
+        assert_eq!(io_waiters.iter().count(), 0);
+    }
+
+    #[test]
+    fn ready_survives_a_spurious_poll() {
+        let selector = Selector::new().unwrap();
+        let io_waiters = IoWaiters::<1>::new();
+        let (fd, _peer) = plain_socketpair();
+        let mut cx = Context::from_waker(Waker::noop());
+        let mut ready = pin!(io_waiters.ready(&selector, fd.as_fd(), Direction::Read));
+        assert_eq!(ready.as_mut().poll(&mut cx), Poll::Pending);
+        assert_eq!(ready.as_mut().poll(&mut cx), Poll::Pending);
+        io_waiters.wake_ready(fd.as_raw_fd(), Directions::Read);
+        assert_eq!(ready.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
+    }
+
+    #[test]
+    fn dropping_a_pending_ready_releases_the_fd() {
+        let selector = Selector::new().unwrap();
+        let io_waiters = IoWaiters::<1>::new();
+        let (fd, _peer) = plain_socketpair();
+        let mut cx = Context::from_waker(Waker::noop());
+        {
+            let mut ready = pin!(io_waiters.ready(&selector, fd.as_fd(), Direction::Read));
+            assert_eq!(ready.as_mut().poll(&mut cx), Poll::Pending);
+            assert_eq!(io_waiters.iter().count(), 1);
+        }
+        assert_eq!(io_waiters.iter().count(), 0);
+    }
+
+    #[test]
+    fn sequential_readies_reuse_the_slot() {
+        let selector = Selector::new().unwrap();
+        let io_waiters = IoWaiters::<1>::new();
+        let (fd, _peer) = plain_socketpair();
+        let mut cx = Context::from_waker(Waker::noop());
+        for _ in 0..3 {
+            let mut ready = pin!(io_waiters.ready(&selector, fd.as_fd(), Direction::Read));
+            assert_eq!(ready.as_mut().poll(&mut cx), Poll::Pending);
+            io_waiters.wake_ready(fd.as_raw_fd(), Directions::Read);
+            assert_eq!(ready.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
+        }
+        assert_eq!(io_waiters.iter().count(), 0);
+    }
+
+    #[test]
+    fn retry_waits_on_again_and_returns_the_result() {
+        let selector = Selector::new().unwrap();
+        let io_waiters = IoWaiters::<1>::new();
+        let (fd, _peer) = plain_socketpair();
+        let attempts = Cell::new(0);
+        let mut cx = Context::from_waker(Waker::noop());
+        let mut retry = pin!(
+            io_waiters.retry(&selector, fd.as_fd(), Direction::Read, || {
+                attempts.set(attempts.get() + 1);
+                if attempts.get() == 1 {
+                    return Err(Errno::AGAIN);
+                }
+                Ok(5)
+            })
+        );
+        assert_eq!(retry.as_mut().poll(&mut cx), Poll::Pending);
+        assert_eq!(attempts.get(), 1);
+        io_waiters.wake_ready(fd.as_raw_fd(), Directions::Read);
+        assert_eq!(retry.as_mut().poll(&mut cx), Poll::Ready(Ok(Ok(5))));
+        assert_eq!(attempts.get(), 2);
         assert_eq!(io_waiters.iter().count(), 0);
     }
 }

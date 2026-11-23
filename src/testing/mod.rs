@@ -19,9 +19,9 @@ pub(crate) use self::{
     fixed_future::FixedFuture,
     flag_on_drop::FlagOnDrop,
     poll::{fake_instant, wake_expired_timers},
-    sockets::{raw_accept, raw_socket, socketpair},
+    sockets::{plain_socketpair, raw_accept, raw_socket, socketpair},
     spawn::claimed_forever,
-    wakers::counting_waker,
+    wakers::{counting_waker, flag_waker},
 };
 
 pub(crate) const TEST_EVENTS: usize = 16;
@@ -40,12 +40,6 @@ pub(crate) type TestStorage<E = u32> = LoopStorage<
     TEST_TIMERS,
     TEST_FDS,
 >;
-
-pub(crate) type TasksStorage<
-    const TASKS: usize,
-    const TASK_SIZE: usize,
-    const ROOT_TASK_SIZE: usize,
-> = LoopStorage<(), 1, TASKS, TASK_SIZE, ROOT_TASK_SIZE, 1, 1>;
 
 pub(crate) type TestLoop<'a, E = u32> = EventLoop<
     'a,

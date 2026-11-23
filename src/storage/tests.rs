@@ -6,12 +6,14 @@ use core::{
     time::Duration,
 };
 
-use rustix::{
-    fd::AsFd,
-    net::{AddressFamily, SocketFlags, SocketType},
-};
+use rustix::fd::AsFd;
 
-use crate::{LoopStorage, Selector, selector::Direction, testing::counting_waker, time::Instant};
+use crate::{
+    LoopStorage, Selector,
+    selector::Direction,
+    testing::{counting_waker, plain_socketpair},
+    time::Instant,
+};
 
 type SmallStorage = LoopStorage<(), 1, 1, 64, 0, 2, 2>;
 
@@ -34,13 +36,7 @@ fn clearing_drops_live_wakers() {
         Poll::Pending
     );
     drop(timer_waker);
-    let (fd, _peer) = rustix::net::socketpair(
-        AddressFamily::UNIX,
-        SocketType::STREAM,
-        SocketFlags::empty(),
-        None,
-    )
-    .unwrap();
+    let (fd, _peer) = plain_socketpair();
     let io_waker = counting_waker(&drops);
     let mut ready = pin!(
         ctx.storage

@@ -5,14 +5,18 @@ use rustix::{
 
 use crate::testing::FdTestingExt;
 
-pub(crate) fn socketpair() -> (OwnedFd, OwnedFd) {
-    let (a, b) = rustix::net::socketpair(
+pub(crate) fn plain_socketpair() -> (OwnedFd, OwnedFd) {
+    rustix::net::socketpair(
         AddressFamily::UNIX,
         SocketType::STREAM,
         SocketFlags::empty(),
         None,
     )
-    .unwrap();
+    .unwrap()
+}
+
+pub(crate) fn socketpair() -> (OwnedFd, OwnedFd) {
+    let (a, b) = plain_socketpair();
     rustix::io::ioctl_fionbio(&a, true).unwrap();
     rustix::io::ioctl_fionbio(&b, true).unwrap();
     (a, b)

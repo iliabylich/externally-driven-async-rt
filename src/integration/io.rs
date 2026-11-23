@@ -48,7 +48,6 @@ async fn write_some(ctx: &TestContext<'_>, fd: &OwnedFd) -> rustix::io::Result<u
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn read_waits_until_the_peer_writes() {
     let (rx, tx) = socketpair();
     let mut selector = Selector::new().unwrap();
@@ -65,18 +64,15 @@ fn read_waits_until_the_peer_writes() {
         },
     )
     .unwrap();
-    assert_eq!(event_loop.ctx.storage.io_waiters.iter().count(), 1);
     assert!(!event_loop.is_readable_now());
 
     rustix::io::write(&tx, b"abc").unwrap();
     assert!(event_loop.wait_readable_blocking(1000));
     assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
     assert_yields!(event_loop.events(), [3]);
-    assert_eq!(event_loop.ctx.storage.io_waiters.iter().count(), 0);
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn write_waits_on_a_full_buffer() {
     let (tx, rx) = socketpair();
     tx.fill_send_buffer();
@@ -102,7 +98,6 @@ fn write_waits_on_a_full_buffer() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn read_and_write_wait_on_one_fd_at_the_same_time() {
     let (a, b) = socketpair();
     a.fill_send_buffer();
@@ -138,7 +133,6 @@ fn read_and_write_wait_on_one_fd_at_the_same_time() {
         },
     )
     .unwrap();
-    assert_eq!(event_loop.ctx.storage.io_waiters.iter().count(), 1);
     assert!(!event_loop.is_readable_now());
 
     rustix::io::write(&b, b"abc").unwrap();
@@ -155,7 +149,6 @@ fn read_and_write_wait_on_one_fd_at_the_same_time() {
 type IoStorage = LoopStorage<(), 1, 1, 64, 0, 1, 1>;
 
 #[test]
-#[cfg_attr(miri, ignore)]
 fn dropping_a_pending_wait_deregisters() {
     let selector = Selector::new().unwrap();
     let ctx = {
@@ -173,37 +166,11 @@ fn dropping_a_pending_wait_deregisters() {
         assert_eq!(ready.as_mut().poll(&mut cx), Poll::Pending);
         ctx.flush().unwrap();
     }
-    assert_eq!(ctx.storage.io_waiters.iter().count(), 0);
     rustix::io::write(&tx, b"abc").unwrap();
     assert!(!selector.as_fd().is_readable_now());
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
-fn wait_survives_a_spurious_poll() {
-    let selector = Selector::new().unwrap();
-    let ctx = {
-        static STORAGE: IoStorage = IoStorage::new();
-        STORAGE.claim(&selector).unwrap().0
-    };
-    let (rx, tx) = socketpair();
-    let mut cx = core::task::Context::from_waker(Waker::noop());
-    let mut ready = pin!(
-        ctx.storage
-            .io_waiters
-            .ready(ctx.selector, rx.as_fd(), Direction::Read)
-    );
-    assert_eq!(ready.as_mut().poll(&mut cx), Poll::Pending);
-    assert_eq!(ready.as_mut().poll(&mut cx), Poll::Pending);
-    ctx.flush().unwrap();
-    rustix::io::write(&tx, b"abc").unwrap();
-    assert!(selector.as_fd().wait_readable_blocking(1000));
-    ctx.process_selector_events().unwrap();
-    assert_eq!(ready.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
-}
-
-#[test]
-#[cfg_attr(miri, ignore)]
 fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
     let selector = Selector::new().unwrap();
     let ctx = {
@@ -235,30 +202,4 @@ fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
     assert!(selector.as_fd().wait_readable_blocking(1000));
     ctx.process_selector_events().unwrap();
     assert_eq!(ready.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
-}
-
-#[test]
-#[cfg_attr(miri, ignore)]
-fn sequential_registrations_reuse_the_slot() {
-    let selector = Selector::new().unwrap();
-    let ctx = {
-        static STORAGE: IoStorage = IoStorage::new();
-        STORAGE.claim(&selector).unwrap().0
-    };
-    let (rx, tx) = socketpair();
-    let mut cx = core::task::Context::from_waker(Waker::noop());
-    for _ in 0..3 {
-        let mut ready = pin!(ctx.storage.io_waiters.ready(
-            ctx.selector,
-            rx.as_fd(),
-            Direction::Read
-        ));
-        assert_eq!(ready.as_mut().poll(&mut cx), Poll::Pending);
-        ctx.flush().unwrap();
-        rustix::io::write(&tx, b"x").unwrap();
-        assert!(selector.as_fd().wait_readable_blocking(1000));
-        ctx.process_selector_events().unwrap();
-        assert_eq!(ready.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
-    }
-    assert_eq!(ctx.storage.io_waiters.iter().count(), 0);
 }

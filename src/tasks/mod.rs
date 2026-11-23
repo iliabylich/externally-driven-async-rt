@@ -201,5 +201,13 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
     }
 }
 
+// SAFETY: `Tasks` never leaves the crate. In the event loop it lives in a `LoopStorage`, which is
+// only used from its loop's thread, and tests only use a static `Tasks` from the single test that
+// declares it. Its `WakeQueue` also asserts that every waker is woken on the owner thread.
+unsafe impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> Sync
+    for Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>
+{
+}
+
 #[cfg(test)]
 mod tests;

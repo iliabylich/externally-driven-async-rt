@@ -250,8 +250,7 @@ mod tests {
     use crate::{
         Selector,
         testing::{
-            EventLoopTestingExt, FlagOnDrop, TestContext, TestLoop, TestStorage, assert_yields,
-            fake_instant, wake_expired_timers,
+            FlagOnDrop, TestContext, TestStorage, assert_yields, fake_instant, wake_expired_timers,
         },
         time::Instant,
     };
@@ -351,29 +350,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
-    fn sleep_waits_at_least_its_duration() {
-        let start = Instant::now();
-        let mut selector = Selector::new().unwrap();
-        let mut event_loop = TestLoop::new(
-            {
-                static STORAGE: TestStorage = TestStorage::new();
-                &STORAGE
-            },
-            &mut selector,
-            async |ctx| {
-                ctx.sleep(Duration::from_millis(20)).await.unwrap();
-                ctx.dispatch(1).unwrap();
-            },
-        )
-        .unwrap();
-        assert_yields!(event_loop.events(), []);
-        event_loop.run_until_root_finishes();
-        assert!(Instant::now().saturating_sub(start) >= Duration::from_millis(20));
-        assert_yields!(event_loop.events(), [1]);
-    }
-
-    #[test]
     fn sleeps_complete_in_deadline_order() {
         static NOW: AtomicU64 = AtomicU64::new(0);
         fn now() -> Instant {
@@ -402,34 +378,5 @@ mod tests {
         assert_eq!(ctx.storage.tasks.run_ready(), Poll::Ready(()));
         assert_yields!(ctx.storage.events.iter_removing(), [100, 200, 300]);
         ctx.clear();
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)]
-    fn drift_free_interval_from_relative_sleeps() {
-        let period = Duration::from_millis(10);
-        let start = Instant::now();
-        let mut selector = Selector::new().unwrap();
-        let mut event_loop = TestLoop::new(
-            {
-                static STORAGE: TestStorage = TestStorage::new();
-                &STORAGE
-            },
-            &mut selector,
-            async move |ctx| {
-                let mut next = Instant::now();
-                for i in 0..5 {
-                    next = next.saturating_add(period);
-                    ctx.sleep(next.saturating_sub(Instant::now()))
-                        .await
-                        .unwrap();
-                    ctx.dispatch(i).unwrap();
-                }
-            },
-        )
-        .unwrap();
-        event_loop.run_until_root_finishes();
-        assert_yields!(event_loop.events(), [0, 1, 2, 3, 4]);
-        assert!(Instant::now().saturating_sub(start) >= period * 5);
     }
 }
