@@ -248,20 +248,18 @@ mod tests {
     };
 
     use crate::{
-        Selector,
-        testing::{
-            FlagOnDrop, TestContext, TestStorage, assert_yields, fake_instant, wake_expired_timers,
-        },
+        LoopStorage, Selector,
+        testing::{FlagOnDrop, assert_yields, fake_instant, wake_expired_timers},
         time::Instant,
     };
 
+    type Storage = LoopStorage<u32, 3, 3, 128, 512, 3, 1>;
+
     #[test]
     fn future_finishing_first_wins() {
+        static STORAGE: Storage = Storage::new();
         let selector = Selector::new().unwrap();
-        let (ctx, root): (TestContext<'_>, _) = {
-            static STORAGE: TestStorage = TestStorage::new();
-            STORAGE.claim(&selector).unwrap()
-        };
+        let (ctx, root) = STORAGE.claim(&selector).unwrap();
         ctx.storage.tasks.spawn_root(root, ctx.claimed, async move {
             let result = ctx
                 .timeout(Duration::from_secs(60), ctx.notified())
@@ -286,11 +284,9 @@ mod tests {
         fn now() -> Instant {
             fake_instant(&NOW)
         }
+        static STORAGE: Storage = Storage::with_clock(now);
         let selector = Selector::new().unwrap();
-        let (ctx, root): (TestContext<'_>, _) = {
-            static STORAGE: TestStorage = TestStorage::with_clock(now);
-            STORAGE.claim(&selector).unwrap()
-        };
+        let (ctx, root) = STORAGE.claim(&selector).unwrap();
         ctx.storage.tasks.spawn_root(root, ctx.claimed, async move {
             let result = ctx
                 .timeout(Duration::from_millis(10), async {
@@ -315,9 +311,9 @@ mod tests {
 
     #[test]
     fn ready_future_beats_a_zero_timeout() {
-        static STORAGE: TestStorage = TestStorage::new();
+        static STORAGE: Storage = Storage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
+        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut cx = Context::from_waker(Waker::noop());
         let mut timeout = pin!(ctx.timeout(Duration::ZERO, async {
             let value = 1;
@@ -331,9 +327,9 @@ mod tests {
 
     #[test]
     fn pending_pinned_future_keeps_its_timer_until_dropped() {
-        static STORAGE: TestStorage = TestStorage::new();
+        static STORAGE: Storage = Storage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
+        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut cx = Context::from_waker(Waker::noop());
         {
             let mut timeout = pin!(ctx.timeout(Duration::from_secs(60), async {
@@ -355,11 +351,9 @@ mod tests {
         fn now() -> Instant {
             fake_instant(&NOW)
         }
+        static STORAGE: Storage = Storage::with_clock(now);
         let selector = Selector::new().unwrap();
-        let (ctx, root): (TestContext<'_>, _) = {
-            static STORAGE: TestStorage = TestStorage::with_clock(now);
-            STORAGE.claim(&selector).unwrap()
-        };
+        let (ctx, root) = STORAGE.claim(&selector).unwrap();
         ctx.storage.tasks.spawn_root(root, ctx.claimed, async move {
             let handles = [300, 100, 200].map(|ms| {
                 ctx.spawn(async move |ctx| {

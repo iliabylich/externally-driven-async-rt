@@ -83,10 +83,9 @@ mod tests {
 
     use super::{AsyncRead, AsyncReadExt, ReadExactError};
 
-    use crate::{
-        Selector,
-        testing::{TestContext, TestStorage},
-    };
+    use crate::{LoopStorage, Selector};
+
+    type Storage = LoopStorage<(), 1, 1, 0, 0, 1, 1>;
 
     struct Scripted {
         data: &'static [u8],
@@ -154,29 +153,23 @@ mod tests {
     }
 
     fn read_exact(
-        storage: &'static TestStorage,
+        storage: &'static Storage,
         reader: &mut Scripted,
         buf: &mut [u8],
     ) -> Poll<Result<(), ReadExactError<Errno>>> {
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = storage.claim(&selector).unwrap().0;
+        let ctx = storage.claim(&selector).unwrap().0;
         let mut cx = Context::from_waker(Waker::noop());
         pin!(reader.read_exact(&ctx, buf)).poll(&mut cx)
     }
 
     #[test]
     fn read_exact_retries_partial_reads() {
+        static STORAGE: Storage = Storage::new();
         let mut reader = Scripted::new(b"hello world!", 3, None);
         let mut buf = [0; 11];
         assert_eq!(
-            read_exact(
-                {
-                    static STORAGE: TestStorage = TestStorage::new();
-                    &STORAGE
-                },
-                &mut reader,
-                &mut buf
-            ),
+            read_exact(&STORAGE, &mut reader, &mut buf),
             Poll::Ready(Ok(()))
         );
         assert_eq!(&buf, b"hello world");
@@ -186,16 +179,10 @@ mod tests {
 
     #[test]
     fn read_exact_into_nothing_never_reads() {
+        static STORAGE: Storage = Storage::new();
         let mut reader = Scripted::new(b"hello", 3, None);
         assert_eq!(
-            read_exact(
-                {
-                    static STORAGE: TestStorage = TestStorage::new();
-                    &STORAGE
-                },
-                &mut reader,
-                &mut []
-            ),
+            read_exact(&STORAGE, &mut reader, &mut []),
             Poll::Ready(Ok(()))
         );
         assert_eq!(reader.calls, 0);
@@ -203,17 +190,11 @@ mod tests {
 
     #[test]
     fn read_exact_fails_when_the_stream_ends_early() {
+        static STORAGE: Storage = Storage::new();
         let mut reader = Scripted::new(b"hel", 2, None);
         let mut buf = [0; 5];
         assert_eq!(
-            read_exact(
-                {
-                    static STORAGE: TestStorage = TestStorage::new();
-                    &STORAGE
-                },
-                &mut reader,
-                &mut buf
-            ),
+            read_exact(&STORAGE, &mut reader, &mut buf),
             Poll::Ready(Err(ReadExactError::UnexpectedEof))
         );
         assert_eq!(&buf[..3], b"hel");
@@ -222,17 +203,11 @@ mod tests {
 
     #[test]
     fn read_exact_returns_syscall_errors() {
+        static STORAGE: Storage = Storage::new();
         let mut reader = Scripted::new(b"hello", 3, Some(Errno::CONNRESET));
         let mut buf = [0; 5];
         assert_eq!(
-            read_exact(
-                {
-                    static STORAGE: TestStorage = TestStorage::new();
-                    &STORAGE
-                },
-                &mut reader,
-                &mut buf
-            ),
+            read_exact(&STORAGE, &mut reader, &mut buf),
             Poll::Ready(Err(ReadExactError::Io(Errno::CONNRESET)))
         );
         assert_eq!(reader.calls, 1);
@@ -240,9 +215,9 @@ mod tests {
 
     #[test]
     fn read_exact_resumes_after_a_pending_read() {
-        static STORAGE: TestStorage = TestStorage::new();
+        static STORAGE: Storage = Storage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
+        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut reader = Scripted::new(b"hello world", 6, None).yielding();
         let mut buf = [0; 11];
         let mut cx = Context::from_waker(Waker::noop());

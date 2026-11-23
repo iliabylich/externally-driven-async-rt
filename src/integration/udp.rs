@@ -13,10 +13,12 @@ use crate::{
     Either2, EventLoop, LoopStorage, NotEnoughResources, Selector,
     net::{NetError, UdpSocket},
     select2,
-    testing::{EventLoopTestingExt, TestLoop, TestStorage, assert_yields},
+    testing::{EventLoopTestingExt, assert_yields},
 };
 
 use super::{EventLoopExt, raw_socket};
+
+type Storage<E> = LoopStorage<E, 2, 1, 0, 1024, 1, 1>;
 
 const LOCALHOST: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
 
@@ -29,32 +31,26 @@ fn raw_peer() -> (OwnedFd, SocketAddr) {
 
 #[test]
 fn round_trip_with_a_raw_peer() {
+    static STORAGE: Storage<u32> = Storage::new();
     let (peer, peer_addr) = raw_peer();
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async move |ctx| {
-            let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
-            assert!(socket.local_addr().unwrap().port() != 0);
-            let mut buf = [0; 64];
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
+        let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
+        assert!(socket.local_addr().unwrap().port() != 0);
+        let mut buf = [0; 64];
 
-            assert_eq!(socket.send_to(&ctx, b"ping", peer_addr).await.unwrap(), 4);
-            let (len, from) = socket.recv_from(&ctx, &mut buf).await.unwrap();
-            assert_eq!((&buf[..len], from), (&b"ping"[..], peer_addr));
+        assert_eq!(socket.send_to(&ctx, b"ping", peer_addr).await.unwrap(), 4);
+        let (len, from) = socket.recv_from(&ctx, &mut buf).await.unwrap();
+        assert_eq!((&buf[..len], from), (&b"ping"[..], peer_addr));
 
-            socket.connect(peer_addr).unwrap();
-            assert_eq!(socket.send(&ctx, b"hello").await.unwrap(), 5);
-            let len = socket.recv(&ctx, &mut buf).await.unwrap();
-            assert_eq!(&buf[..len], b"hello");
+        socket.connect(peer_addr).unwrap();
+        assert_eq!(socket.send(&ctx, b"hello").await.unwrap(), 5);
+        let len = socket.recv(&ctx, &mut buf).await.unwrap();
+        assert_eq!(&buf[..len], b"hello");
 
-            ctx.dispatch(1).unwrap();
-            pending::<()>().await;
-        },
-    )
+        ctx.dispatch(1).unwrap();
+        pending::<()>().await;
+    })
     .unwrap();
     let mut buf = [0; 64];
     for expected in [&b"ping"[..], b"hello"] {
@@ -72,30 +68,24 @@ fn round_trip_with_a_raw_peer() {
 
 #[test]
 fn connected_socket_reports_a_refused_peer() {
+    static STORAGE: Storage<NetError> = Storage::new();
     let closed = raw_peer().1;
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage<NetError> = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async move |ctx| {
-            let mut buf = [0; 8];
-            let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
-            socket.connect(closed).unwrap();
-            socket.send(&ctx, b"x").await.unwrap();
-            let err = socket.recv(&ctx, &mut buf).await.err().unwrap();
-            ctx.dispatch(err).unwrap();
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
+        let mut buf = [0; 8];
+        let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
+        socket.connect(closed).unwrap();
+        socket.send(&ctx, b"x").await.unwrap();
+        let err = socket.recv(&ctx, &mut buf).await.err().unwrap();
+        ctx.dispatch(err).unwrap();
 
-            let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
-            socket.connect(closed).unwrap();
-            socket.send(&ctx, b"x").await.unwrap();
-            let err = socket.recv_from(&ctx, &mut buf).await.err().unwrap();
-            ctx.dispatch(err).unwrap();
-            pending::<()>().await;
-        },
-    )
+        let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
+        socket.connect(closed).unwrap();
+        socket.send(&ctx, b"x").await.unwrap();
+        let err = socket.recv_from(&ctx, &mut buf).await.err().unwrap();
+        ctx.dispatch(err).unwrap();
+        pending::<()>().await;
+    })
     .unwrap();
     let refused = NetError::Os(Errno::CONNREFUSED);
     assert_eq!(event_loop.run_until_events(), [refused, refused]);
@@ -103,29 +93,23 @@ fn connected_socket_reports_a_refused_peer() {
 
 #[test]
 fn waiting_on_more_sockets_than_fds_fails() {
+    static STORAGE: Storage<NetError> = Storage::new();
     let mut selector = Selector::new().unwrap();
-    let event_loop = EventLoop::new(
-        {
-            static STORAGE: LoopStorage<NetError, 1, 1, 64, 1024, 1, 1> = LoopStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async |ctx| {
-            let mut first = UdpSocket::bind(LOCALHOST).unwrap();
-            let mut second = UdpSocket::bind(LOCALHOST).unwrap();
-            let (mut first_buf, mut second_buf) = ([0; 1], [0; 1]);
-            let Either2::Right(result) = select2(
-                first.recv(&ctx, &mut first_buf),
-                second.recv(&ctx, &mut second_buf),
-            )
-            .await
-            else {
-                panic!("nothing is sent to the first socket");
-            };
-            ctx.dispatch(result.unwrap_err()).unwrap();
-            pending::<()>().await;
-        },
-    )
+    let event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
+        let mut first = UdpSocket::bind(LOCALHOST).unwrap();
+        let mut second = UdpSocket::bind(LOCALHOST).unwrap();
+        let (mut first_buf, mut second_buf) = ([0; 1], [0; 1]);
+        let Either2::Right(result) = select2(
+            first.recv(&ctx, &mut first_buf),
+            second.recv(&ctx, &mut second_buf),
+        )
+        .await
+        else {
+            panic!("nothing is sent to the first socket");
+        };
+        ctx.dispatch(result.unwrap_err()).unwrap();
+        pending::<()>().await;
+    })
     .unwrap();
     assert_yields!(
         event_loop.events(),

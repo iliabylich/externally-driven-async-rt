@@ -80,10 +80,9 @@ mod tests {
 
     use super::{AsyncWrite, AsyncWriteExt, WriteAllError};
 
-    use crate::{
-        Selector,
-        testing::{TestContext, TestStorage},
-    };
+    use crate::{LoopStorage, Selector};
+
+    type Storage = LoopStorage<(), 1, 1, 0, 0, 1, 1>;
 
     struct Scripted {
         max_per_call: usize,
@@ -173,28 +172,22 @@ mod tests {
     }
 
     fn write_all(
-        storage: &'static TestStorage,
+        storage: &'static Storage,
         writer: &mut Scripted,
         buf: &[u8],
     ) -> Poll<Result<(), WriteAllError<Errno>>> {
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = storage.claim(&selector).unwrap().0;
+        let ctx = storage.claim(&selector).unwrap().0;
         let mut cx = Context::from_waker(Waker::noop());
         pin!(writer.write_all(&ctx, buf)).poll(&mut cx)
     }
 
     #[test]
     fn write_all_retries_partial_writes() {
+        static STORAGE: Storage = Storage::new();
         let mut writer = Scripted::new(3, None);
         assert_eq!(
-            write_all(
-                {
-                    static STORAGE: TestStorage = TestStorage::new();
-                    &STORAGE
-                },
-                &mut writer,
-                b"hello world"
-            ),
+            write_all(&STORAGE, &mut writer, b"hello world"),
             Poll::Ready(Ok(()))
         );
         assert_eq!(writer.written(), b"hello world");
@@ -203,33 +196,18 @@ mod tests {
 
     #[test]
     fn write_all_of_nothing_never_writes() {
+        static STORAGE: Storage = Storage::new();
         let mut writer = Scripted::new(3, None);
-        assert_eq!(
-            write_all(
-                {
-                    static STORAGE: TestStorage = TestStorage::new();
-                    &STORAGE
-                },
-                &mut writer,
-                b""
-            ),
-            Poll::Ready(Ok(()))
-        );
+        assert_eq!(write_all(&STORAGE, &mut writer, b""), Poll::Ready(Ok(())));
         assert_eq!(writer.calls, 0);
     }
 
     #[test]
     fn write_all_fails_when_zero_bytes_are_accepted() {
+        static STORAGE: Storage = Storage::new();
         let mut writer = Scripted::new(0, None);
         assert_eq!(
-            write_all(
-                {
-                    static STORAGE: TestStorage = TestStorage::new();
-                    &STORAGE
-                },
-                &mut writer,
-                b"hello"
-            ),
+            write_all(&STORAGE, &mut writer, b"hello"),
             Poll::Ready(Err(WriteAllError::WriteZero))
         );
         assert_eq!(writer.calls, 1);
@@ -237,16 +215,10 @@ mod tests {
 
     #[test]
     fn write_all_returns_syscall_errors() {
+        static STORAGE: Storage = Storage::new();
         let mut writer = Scripted::new(3, Some(Errno::PIPE));
         assert_eq!(
-            write_all(
-                {
-                    static STORAGE: TestStorage = TestStorage::new();
-                    &STORAGE
-                },
-                &mut writer,
-                b"hello"
-            ),
+            write_all(&STORAGE, &mut writer, b"hello"),
             Poll::Ready(Err(WriteAllError::Io(Errno::PIPE)))
         );
         assert_eq!(writer.calls, 1);
@@ -254,9 +226,9 @@ mod tests {
 
     #[test]
     fn write_all_resumes_after_a_pending_write() {
-        static STORAGE: TestStorage = TestStorage::new();
+        static STORAGE: Storage = Storage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
+        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut writer = Scripted::new(6, None).yielding();
         let mut cx = Context::from_waker(Waker::noop());
         {

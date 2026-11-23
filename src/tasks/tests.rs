@@ -22,8 +22,6 @@ macro_rules! tasks {
     }};
 }
 
-const TASK_SIZE: usize = 1024;
-
 fn contains<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>(
     tasks: &Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
     id: TaskId<TASK_SIZE>,
@@ -75,7 +73,7 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> Dr
 #[test]
 fn dropping_a_task_drops_its_future_and_finishes_it() {
     static DROPPED: AtomicBool = AtomicBool::new(false);
-    let (tasks, _root, claimed, _scope) = tasks!(2, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(2, 1024, 0);
     let id = tasks
         .spawn_task(claimed, FlagOnDrop::new(&DROPPED))
         .unwrap();
@@ -92,7 +90,7 @@ fn dropping_a_task_drops_its_future_and_finishes_it() {
 
 #[test]
 fn finished_task_id_never_matches_a_reused_slot() {
-    let (tasks, _root, claimed, _scope) = tasks!(1, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(1, 1024, 0);
     let first = tasks.spawn_task(claimed, async {}).unwrap();
     tasks.drop_all();
     let second = tasks.spawn_task(claimed, async {}).unwrap();
@@ -104,8 +102,8 @@ fn finished_task_id_never_matches_a_reused_slot() {
 #[test]
 fn a_task_spawned_while_one_is_dropped_gets_another_slot() {
     struct SpawnOnDrop {
-        tasks: &'static Tasks<2, TASK_SIZE, 0>,
-        id: TaskId<TASK_SIZE>,
+        tasks: &'static Tasks<2, 1024, 0>,
+        id: TaskId<1024>,
     }
 
     impl Drop for SpawnOnDrop {
@@ -120,7 +118,7 @@ fn a_task_spawned_while_one_is_dropped_gets_another_slot() {
         }
     }
 
-    let (tasks, _root, claimed, _scope) = tasks!(2, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(2, 1024, 0);
 
     let (id, entry) = tasks.pool.alloc().unwrap();
     let spawn_on_drop = SpawnOnDrop { tasks, id };
@@ -133,9 +131,9 @@ fn a_task_spawned_while_one_is_dropped_gets_another_slot() {
 
 #[test]
 fn full_size_futures_in_neighbouring_slots_do_not_overlap() {
-    let (tasks, _root, claimed, _scope) = tasks!(2, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(2, 1024, 0);
     let ids = [1u8, 2].map(|byte| {
-        let data = [byte; TASK_SIZE - 16];
+        let data = [byte; 1024 - 16];
         tasks
             .spawn_task(claimed, async move {
                 assert!(data.iter().all(|b| *b == byte));
@@ -182,7 +180,7 @@ fn root_region_holds_a_root_bigger_than_a_slab_block() {
     }
 
     static DROPPED: AtomicBool = AtomicBool::new(false);
-    let (tasks, root, claimed, _scope) = tasks!(2, TASK_SIZE, { size_of::<BigRoot<'static>>() });
+    let (tasks, root, claimed, _scope) = tasks!(2, 1024, { size_of::<BigRoot<'static>>() });
 
     let big_root = BigRoot {
         data: [3; 9000],
@@ -206,7 +204,7 @@ fn counting(polls: &Cell<u32>) -> impl Future<Output = ()> {
 
 #[test]
 fn finished_task_is_removed() {
-    let (tasks, _root, claimed, _scope) = tasks!(1, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(1, 1024, 0);
     let id = tasks.spawn_task(claimed, async {}).unwrap();
     assert_eq!(tasks.run_ready(), Poll::Pending);
     assert!(!contains(tasks, id));
@@ -214,7 +212,7 @@ fn finished_task_is_removed() {
 
 #[test]
 fn a_stale_wake_of_a_freed_slot_polls_nothing() {
-    let (tasks, _root, claimed, _scope) = tasks!(1, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(1, 1024, 0);
     let id = tasks.spawn_task(claimed, async {}).unwrap();
     let waker = waker(tasks, id);
     let _ = tasks.run_ready();
@@ -226,7 +224,7 @@ fn a_stale_wake_of_a_freed_slot_polls_nothing() {
 #[test]
 fn a_stale_wake_of_a_reserved_slot_is_skipped() {
     let polls = Cell::new(0);
-    let (tasks, _root, claimed, _scope) = tasks!(1, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(1, 1024, 0);
     let id = tasks.spawn_task(claimed, async {}).unwrap();
     let waker = waker(tasks, id);
     let _ = tasks.run_ready();
@@ -241,7 +239,7 @@ fn a_stale_wake_of_a_reserved_slot_is_skipped() {
 #[test]
 fn a_stale_wake_of_a_reused_slot_polls_its_new_task() {
     let polls = Cell::new(0);
-    let (tasks, _root, claimed, _scope) = tasks!(1, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(1, 1024, 0);
     let id = tasks.spawn_task(claimed, async {}).unwrap();
     let waker = waker(tasks, id);
     let _ = tasks.run_ready();
@@ -255,7 +253,7 @@ fn a_stale_wake_of_a_reused_slot_polls_its_new_task() {
 #[test]
 fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
     let polls = Cell::new(0);
-    let (tasks, _root, claimed, _scope) = tasks!(1, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(1, 1024, 0);
     let _ = tasks
         .spawn_task(claimed, {
             poll_fn(|cx| {
@@ -274,7 +272,7 @@ fn task_woken_during_its_poll_is_polled_again_in_the_same_run() {
 #[test]
 fn task_spawned_during_a_poll_runs_in_the_same_run() {
     let polls = Cell::new(0);
-    let (tasks, _root, claimed, _scope) = tasks!(2, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(2, 1024, 0);
     let child = counting(&polls);
     let _ = tasks
         .spawn_task(claimed, async move {
@@ -288,7 +286,7 @@ fn task_spawned_during_a_poll_runs_in_the_same_run() {
 #[test]
 fn join_waiter_is_woken_when_the_task_finishes() {
     let polls = Cell::new(0);
-    let (tasks, _root, claimed, _scope) = tasks!(2, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(2, 1024, 0);
     let waiter = tasks.spawn_task(claimed, counting(&polls)).unwrap();
     let task = tasks.spawn_task(claimed, async {}).unwrap();
     let _ = tasks.set_join_waiter(task, &waker(tasks, waiter));
@@ -299,7 +297,7 @@ fn join_waiter_is_woken_when_the_task_finishes() {
 #[test]
 fn root_finishing_stops_the_run() {
     let polls = Cell::new(0);
-    let (tasks, root, claimed, _scope) = tasks!(2, TASK_SIZE, 64);
+    let (tasks, root, claimed, _scope) = tasks!(2, 1024, 64);
     tasks.spawn_root(root, claimed, async {});
     let _ = tasks.spawn_task(claimed, counting(&polls)).unwrap();
     assert_eq!(tasks.run_ready(), Poll::Ready(()));
@@ -310,7 +308,7 @@ fn root_finishing_stops_the_run() {
 #[test]
 fn releasing_a_slot_wakes_the_slot_waiter() {
     let polls = Cell::new(0);
-    let (tasks, _root, claimed, _scope) = tasks!(2, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(2, 1024, 0);
     let waiter = tasks.spawn_task(claimed, counting(&polls)).unwrap();
     let _ = tasks.run_ready();
     tasks.slot_waiter.store(&waker(tasks, waiter));
@@ -324,7 +322,7 @@ fn releasing_a_slot_wakes_the_slot_waiter() {
 #[test]
 fn finishing_a_task_wakes_the_slot_waiter() {
     let polls = Cell::new(0);
-    let (tasks, _root, claimed, _scope) = tasks!(2, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(2, 1024, 0);
     let waiter = tasks.spawn_task(claimed, counting(&polls)).unwrap();
     let _ = tasks.run_ready();
     tasks.slot_waiter.store(&waker(tasks, waiter));
@@ -335,7 +333,7 @@ fn finishing_a_task_wakes_the_slot_waiter() {
 
 #[test]
 fn join_is_pending_until_the_task_finishes() {
-    let (tasks, _root, claimed, _scope) = tasks!(2, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(2, 1024, 0);
     let mut cx = Context::from_waker(Waker::noop());
     let mut join = pin!(tasks.join(tasks.spawn_task(claimed, async {}).unwrap()));
     assert_eq!(join.as_mut().poll(&mut cx), Poll::Pending);
@@ -345,7 +343,7 @@ fn join_is_pending_until_the_task_finishes() {
 
 #[test]
 fn joining_a_finished_task_resolves_immediately() {
-    let (tasks, _root, claimed, _scope) = tasks!(2, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(2, 1024, 0);
     let mut cx = Context::from_waker(Waker::noop());
     let id = tasks.spawn_task(claimed, async {}).unwrap();
     let _ = tasks.run_ready();
@@ -355,7 +353,7 @@ fn joining_a_finished_task_resolves_immediately() {
 #[test]
 fn dropping_a_polled_join_drops_its_join_waiter() {
     let drops = Cell::new(0);
-    let (tasks, _root, claimed, _scope) = tasks!(2, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(2, 1024, 0);
     {
         let waker = counting_waker(&drops);
         let mut cx = Context::from_waker(&waker);
@@ -368,7 +366,7 @@ fn dropping_a_polled_join_drops_its_join_waiter() {
 #[test]
 fn dropping_a_stale_join_keeps_the_new_tasks_join_waiter() {
     let drops = Cell::new(0);
-    let (tasks, _root, claimed, _scope) = tasks!(2, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(2, 1024, 0);
     let mut cx = Context::from_waker(Waker::noop());
     let stale = tasks.spawn_task(claimed, async {}).unwrap();
     {
@@ -389,7 +387,7 @@ fn dropping_a_stale_join_keeps_the_new_tasks_join_waiter() {
 #[test]
 fn dropping_a_join_detaches_the_task() {
     let ran = Cell::new(false);
-    let (tasks, _root, claimed, _scope) = tasks!(2, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(2, 1024, 0);
     let mut cx = Context::from_waker(Waker::noop());
     let id = tasks.spawn_task(claimed, async { ran.set(true) }).unwrap();
     assert_eq!(pin!(tasks.join(id)).poll(&mut cx), Poll::Pending);
@@ -400,7 +398,7 @@ fn dropping_a_join_detaches_the_task() {
 #[test]
 fn a_task_can_spawn_and_join_a_task() {
     let step = &Cell::new(0);
-    let (tasks, _root, claimed, _scope) = tasks!(3, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(3, 1024, 0);
     let _ = tasks
         .spawn_task(claimed, async move {
             tasks
@@ -424,7 +422,7 @@ fn a_task_can_spawn_and_join_a_task() {
 
 #[test]
 fn reserve_waits_until_a_task_finishes() {
-    let (tasks, _root, claimed, _scope) = tasks!(1, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(1, 1024, 0);
     let mut cx = Context::from_waker(Waker::noop());
     let _ = tasks.spawn_task(claimed, async {}).unwrap();
     let mut reserve = pin!(tasks.reserve(claimed));
@@ -437,7 +435,7 @@ fn reserve_waits_until_a_task_finishes() {
 
 #[test]
 fn a_second_reserve_gets_an_error() {
-    let (tasks, _root, claimed, _scope) = tasks!(1, TASK_SIZE, 0);
+    let (tasks, _root, claimed, _scope) = tasks!(1, 1024, 0);
     let mut cx = Context::from_waker(Waker::noop());
     let _ = tasks.spawn_task(claimed, async {}).unwrap();
     let mut first = pin!(tasks.reserve(claimed));

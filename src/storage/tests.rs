@@ -15,16 +15,14 @@ use crate::{
     time::Instant,
 };
 
-type SmallStorage = LoopStorage<(), 1, 1, 64, 0, 2, 2>;
+type Storage = LoopStorage<(), 1, 1, 0, 0, 1, 1>;
 
 #[test]
 fn clearing_drops_live_wakers() {
+    static STORAGE: Storage = Storage::new();
     let drops = Cell::new(0);
     let selector = Selector::new().unwrap();
-    let ctx = {
-        static STORAGE: SmallStorage = SmallStorage::new();
-        STORAGE.claim(&selector).unwrap().0
-    };
+    let ctx = STORAGE.claim(&selector).unwrap().0;
     let timer_waker = counting_waker(&drops);
     let mut sleep = pin!(
         ctx.storage
@@ -55,7 +53,7 @@ fn clearing_drops_live_wakers() {
 
 #[test]
 fn a_storage_can_only_be_claimed_once() {
-    static STORAGE: SmallStorage = SmallStorage::new();
+    static STORAGE: Storage = Storage::new();
     let selector = Selector::new().unwrap();
     assert!(STORAGE.claim(&selector).is_some());
     assert!(STORAGE.claim(&selector).is_none());
@@ -63,5 +61,5 @@ fn a_storage_can_only_be_claimed_once() {
 
 #[test]
 fn storage_can_be_built_at_runtime() {
-    let _storage = SmallStorage::new();
+    let _storage = Storage::new();
 }

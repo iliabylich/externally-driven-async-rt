@@ -133,10 +133,9 @@ mod tests {
 
     use super::{AsyncWrite, FrameWriter, FrameWriterError};
 
-    use crate::{
-        Selector,
-        testing::{TestContext, TestStorage},
-    };
+    use crate::{LoopStorage, Selector};
+
+    type Storage = LoopStorage<(), 1, 1, 0, 0, 1, 1>;
 
     struct Sink {
         max_per_call: usize,
@@ -220,9 +219,9 @@ mod tests {
 
     #[test]
     fn writes_frames_on_the_next_write_and_flush() {
-        static STORAGE: TestStorage = TestStorage::new();
+        static STORAGE: Storage = Storage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
+        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut writer = FrameWriter::<_, 5>::new(Sink::new(2, 16, None));
 
         assert_eq!(
@@ -243,9 +242,9 @@ mod tests {
 
     #[test]
     fn resumes_a_cancelled_write() {
-        static STORAGE: TestStorage = TestStorage::new();
+        static STORAGE: Storage = Storage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
+        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut writer = FrameWriter::<_, 5>::new(Sink::new(2, 3, None));
 
         assert_eq!(
@@ -268,9 +267,9 @@ mod tests {
 
     #[test]
     fn fails_when_zero_bytes_are_accepted() {
-        static STORAGE: TestStorage = TestStorage::new();
+        static STORAGE: Storage = Storage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
+        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut writer = FrameWriter::<_, 5>::new(Sink::new(0, 16, None));
 
         assert_eq!(
@@ -285,9 +284,9 @@ mod tests {
 
     #[test]
     fn returns_syscall_errors() {
-        static STORAGE: TestStorage = TestStorage::new();
+        static STORAGE: Storage = Storage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
+        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut writer = FrameWriter::<_, 5>::new(Sink::new(2, 16, Some(Errno::PIPE)));
 
         assert_eq!(

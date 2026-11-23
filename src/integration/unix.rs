@@ -6,13 +6,15 @@ use rustix::{
 };
 
 use crate::{
-    Selector,
+    EventLoop, LoopStorage, Selector,
     io::{AsyncRead, AsyncWrite},
     net::{NetError, UnixDatagram, UnixListener, UnixStream},
-    testing::{EventLoopTestingExt, TestLoop, TestStorage, assert_yields},
+    testing::{EventLoopTestingExt, assert_yields},
 };
 
 use super::{EventLoopExt, raw_accept, raw_socket};
+
+type Storage<E = u32> = LoopStorage<E, 1, 1, 0, 2048, 1, 1>;
 
 struct TempPath {
     bytes: [u8; 104],
@@ -67,34 +69,28 @@ fn path_of(addr: &SocketAddrUnix) -> &[u8] {
 
 #[test]
 fn stream_echo_with_a_raw_peer() {
+    static STORAGE: Storage = Storage::new();
     let path = TempPath::new("stream-echo");
     let server_addr = path.addr();
     let listener = raw_socket(AddressFamily::UNIX, SocketType::STREAM);
     rustix::net::bind(&listener, &server_addr).unwrap();
     rustix::net::listen(&listener, 1).unwrap();
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async move |ctx| {
-            let mut stream = UnixStream::connect(&ctx, &server_addr).await.unwrap();
-            assert_eq!(path_of(&stream.peer_addr().unwrap()), path_of(&server_addr));
-            stream.write(&ctx, b"hello").await.unwrap();
-            let mut buf = [0; 5];
-            let mut len = 0;
-            while len < 5 {
-                len += stream.read(&ctx, &mut buf[len..]).await.unwrap();
-            }
-            assert_eq!(&buf, b"hello");
-            stream.shutdown(Shutdown::Write).unwrap();
-            assert_eq!(stream.read(&ctx, &mut buf).await.unwrap(), 0);
-            ctx.dispatch(1).unwrap();
-            pending::<()>().await;
-        },
-    )
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
+        let mut stream = UnixStream::connect(&ctx, &server_addr).await.unwrap();
+        assert_eq!(path_of(&stream.peer_addr().unwrap()), path_of(&server_addr));
+        stream.write(&ctx, b"hello").await.unwrap();
+        let mut buf = [0; 5];
+        let mut len = 0;
+        while len < 5 {
+            len += stream.read(&ctx, &mut buf[len..]).await.unwrap();
+        }
+        assert_eq!(&buf, b"hello");
+        stream.shutdown(Shutdown::Write).unwrap();
+        assert_eq!(stream.read(&ctx, &mut buf).await.unwrap(), 0);
+        ctx.dispatch(1).unwrap();
+        pending::<()>().await;
+    })
     .unwrap();
     let peer = raw_accept(&listener);
     let mut buf = [0; 5];
@@ -109,6 +105,7 @@ fn stream_echo_with_a_raw_peer() {
 
 #[test]
 fn listener_accepts_a_raw_client() {
+    static STORAGE: Storage = Storage::new();
     let path = TempPath::new("listener");
     let listener_addr = path.addr();
     let mut listener = UnixListener::bind(&listener_addr).unwrap();
@@ -117,26 +114,19 @@ fn listener_accepts_a_raw_client() {
         path_of(&listener_addr)
     );
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async move |ctx| {
-            let (mut stream, peer) = listener.accept(&ctx).await.unwrap();
-            assert_eq!(path_of(&peer), []);
-            let mut buf = [0; 4];
-            let mut len = 0;
-            while len < 4 {
-                len += stream.read(&ctx, &mut buf[len..]).await.unwrap();
-            }
-            assert_eq!(&buf, b"ping");
-            stream.write(&ctx, b"pong").await.unwrap();
-            ctx.dispatch(1).unwrap();
-            pending::<()>().await;
-        },
-    )
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
+        let (mut stream, peer) = listener.accept(&ctx).await.unwrap();
+        assert_eq!(path_of(&peer), []);
+        let mut buf = [0; 4];
+        let mut len = 0;
+        while len < 4 {
+            len += stream.read(&ctx, &mut buf[len..]).await.unwrap();
+        }
+        assert_eq!(&buf, b"ping");
+        stream.write(&ctx, b"pong").await.unwrap();
+        ctx.dispatch(1).unwrap();
+        pending::<()>().await;
+    })
     .unwrap();
     let client = raw_socket(AddressFamily::UNIX, SocketType::STREAM);
     rustix::net::connect(&client, &path.addr()).unwrap();
@@ -149,37 +139,31 @@ fn listener_accepts_a_raw_client() {
 
 #[test]
 fn datagram_round_trip_with_a_raw_peer() {
+    static STORAGE: Storage = Storage::new();
     let ours = TempPath::new("dgram-ours");
     let theirs = TempPath::new("dgram-theirs");
     let (ours_addr, theirs_addr) = (ours.addr(), theirs.addr());
     let peer = raw_socket(AddressFamily::UNIX, SocketType::DGRAM);
     rustix::net::bind(&peer, &theirs_addr).unwrap();
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async move |ctx| {
-            let mut socket = UnixDatagram::bind(&ours_addr).unwrap();
-            assert_eq!(path_of(&socket.local_addr().unwrap()), path_of(&ours_addr));
-            let mut buf = [0; 64];
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
+        let mut socket = UnixDatagram::bind(&ours_addr).unwrap();
+        assert_eq!(path_of(&socket.local_addr().unwrap()), path_of(&ours_addr));
+        let mut buf = [0; 64];
 
-            socket.send_to(&ctx, b"ping", &theirs_addr).await.unwrap();
-            let (len, from) = socket.recv_from(&ctx, &mut buf).await.unwrap();
-            assert_eq!(&buf[..len], b"ping");
-            assert_eq!(path_of(&from), path_of(&theirs_addr));
+        socket.send_to(&ctx, b"ping", &theirs_addr).await.unwrap();
+        let (len, from) = socket.recv_from(&ctx, &mut buf).await.unwrap();
+        assert_eq!(&buf[..len], b"ping");
+        assert_eq!(path_of(&from), path_of(&theirs_addr));
 
-            socket.connect(&theirs_addr).unwrap();
-            socket.send(&ctx, b"hello").await.unwrap();
-            let len = socket.recv(&ctx, &mut buf).await.unwrap();
-            assert_eq!(&buf[..len], b"hello");
+        socket.connect(&theirs_addr).unwrap();
+        socket.send(&ctx, b"hello").await.unwrap();
+        let len = socket.recv(&ctx, &mut buf).await.unwrap();
+        assert_eq!(&buf[..len], b"hello");
 
-            ctx.dispatch(1).unwrap();
-            pending::<()>().await;
-        },
-    )
+        ctx.dispatch(1).unwrap();
+        pending::<()>().await;
+    })
     .unwrap();
     let mut buf = [0; 64];
     for expected in [&b"ping"[..], b"hello"] {
@@ -196,80 +180,62 @@ fn datagram_round_trip_with_a_raw_peer() {
 
 #[test]
 fn unbound_datagram_sender_has_an_unnamed_address() {
+    static STORAGE: Storage = Storage::new();
     let path = TempPath::new("dgram-unbound");
     let bound_addr = path.addr();
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async move |ctx| {
-            let mut bound = UnixDatagram::bind(&bound_addr).unwrap();
-            let mut unbound = UnixDatagram::unbound().unwrap();
-            unbound.send_to(&ctx, b"hi", &bound_addr).await.unwrap();
-            let mut buf = [0; 8];
-            let (len, from) = bound.recv_from(&ctx, &mut buf).await.unwrap();
-            assert_eq!(&buf[..len], b"hi");
-            assert_eq!(path_of(&from), []);
-            ctx.dispatch(1).unwrap();
-            pending::<()>().await;
-        },
-    )
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
+        let mut bound = UnixDatagram::bind(&bound_addr).unwrap();
+        let mut unbound = UnixDatagram::unbound().unwrap();
+        unbound.send_to(&ctx, b"hi", &bound_addr).await.unwrap();
+        let mut buf = [0; 8];
+        let (len, from) = bound.recv_from(&ctx, &mut buf).await.unwrap();
+        assert_eq!(&buf[..len], b"hi");
+        assert_eq!(path_of(&from), []);
+        ctx.dispatch(1).unwrap();
+        pending::<()>().await;
+    })
     .unwrap();
     event_loop.run_until_events::<1>();
 }
 
 #[test]
 fn connect_to_a_missing_path_fails() {
+    static STORAGE: Storage<NetError> = Storage::new();
     let path = TempPath::new("missing");
     let addr = path.addr();
     let mut selector = Selector::new().unwrap();
-    let event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage<NetError> = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async move |ctx| {
-            let err = UnixStream::connect(&ctx, &addr).await.err().unwrap();
-            ctx.dispatch(err).unwrap();
-            pending::<()>().await;
-        },
-    )
+    let event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
+        let err = UnixStream::connect(&ctx, &addr).await.err().unwrap();
+        ctx.dispatch(err).unwrap();
+        pending::<()>().await;
+    })
     .unwrap();
     assert_yields!(event_loop.events(), [NetError::Os(Errno::NOENT)]);
 }
 
 #[test]
 fn stream_halves_echo_with_a_raw_peer() {
+    static STORAGE: Storage = Storage::new();
     let path = TempPath::new("stream-halves");
     let server_addr = path.addr();
     let listener = raw_socket(AddressFamily::UNIX, SocketType::STREAM);
     rustix::net::bind(&listener, &server_addr).unwrap();
     rustix::net::listen(&listener, 1).unwrap();
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async move |ctx| {
-            let mut stream = UnixStream::connect(&ctx, &server_addr).await.unwrap();
-            let (mut read, mut write) = stream.split();
-            write.write(&ctx, b"ping").await.unwrap();
-            let mut buf = [0; 4];
-            let mut len = 0;
-            while len < 4 {
-                len += read.read(&ctx, &mut buf[len..]).await.unwrap();
-            }
-            assert_eq!(&buf, b"ping");
-            ctx.dispatch(1).unwrap();
-            pending::<()>().await;
-        },
-    )
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
+        let mut stream = UnixStream::connect(&ctx, &server_addr).await.unwrap();
+        let (mut read, mut write) = stream.split();
+        write.write(&ctx, b"ping").await.unwrap();
+        let mut buf = [0; 4];
+        let mut len = 0;
+        while len < 4 {
+            len += read.read(&ctx, &mut buf[len..]).await.unwrap();
+        }
+        assert_eq!(&buf, b"ping");
+        ctx.dispatch(1).unwrap();
+        pending::<()>().await;
+    })
     .unwrap();
     let peer = raw_accept(&listener);
     let mut buf = [0; 4];

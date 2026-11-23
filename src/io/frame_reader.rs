@@ -108,10 +108,9 @@ mod tests {
 
     use super::{AsyncRead, FrameReader, FrameReaderError};
 
-    use crate::{
-        Selector,
-        testing::{TestContext, TestStorage},
-    };
+    use crate::{LoopStorage, Selector};
+
+    type Storage = LoopStorage<(), 1, 1, 0, 0, 1, 1>;
 
     struct Chunks {
         chunks: &'static [&'static [u8]],
@@ -153,9 +152,9 @@ mod tests {
 
     #[test]
     fn reads_consecutive_frames_from_partial_reads() {
-        static STORAGE: TestStorage = TestStorage::new();
+        static STORAGE: Storage = Storage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
+        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut reader = FrameReader::<_, 5>::new(Chunks {
             chunks: &[b"hel", b"lo", b"wor", b"ld"],
             end: None,
@@ -173,9 +172,9 @@ mod tests {
 
     #[test]
     fn resumes_a_cancelled_read() {
-        static STORAGE: TestStorage = TestStorage::new();
+        static STORAGE: Storage = Storage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
+        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut reader = FrameReader::<_, 5>::new(Chunks {
             chunks: &[b"he", b"l"],
             end: None,
@@ -192,9 +191,9 @@ mod tests {
 
     #[test]
     fn returns_none_when_the_stream_ends_between_frames() {
-        static STORAGE: TestStorage = TestStorage::new();
+        static STORAGE: Storage = Storage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
+        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut reader = FrameReader::<_, 5>::new(Chunks {
             chunks: &[b"hello"],
             end: Some(Ok(0)),
@@ -209,9 +208,9 @@ mod tests {
 
     #[test]
     fn fails_when_the_stream_ends_in_the_middle_of_a_frame() {
-        static STORAGE: TestStorage = TestStorage::new();
+        static STORAGE: Storage = Storage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
+        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut reader = FrameReader::<_, 5>::new(Chunks {
             chunks: &[b"hel"],
             end: Some(Ok(0)),
@@ -225,9 +224,9 @@ mod tests {
 
     #[test]
     fn returns_syscall_errors() {
-        static STORAGE: TestStorage = TestStorage::new();
+        static STORAGE: Storage = Storage::new();
         let selector = Selector::new().unwrap();
-        let ctx: TestContext<'_> = STORAGE.claim(&selector).unwrap().0;
+        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut reader = FrameReader::<_, 5>::new(Chunks {
             chunks: &[],
             end: Some(Err(Errno::CONNRESET)),

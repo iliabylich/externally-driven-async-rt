@@ -13,13 +13,15 @@ use rustix::{
 };
 
 use crate::{
-    Selector,
+    EventLoop, LoopStorage, Selector,
     io::{AsyncRead, AsyncWrite},
     net::{NetError, TcpListener, TcpStream},
-    testing::{EventLoopTestingExt, TestLoop, TestStorage},
+    testing::EventLoopTestingExt,
 };
 
 use super::{EventLoopExt, FdExt, raw_accept, raw_socket};
+
+type Storage<E = u32> = LoopStorage<E, 1, 1, 1024, 2048, 1, 3>;
 
 const LOCALHOST: SocketAddr =
     SocketAddr::new(core::net::IpAddr::V4(core::net::Ipv4Addr::LOCALHOST), 0);
@@ -34,31 +36,25 @@ fn raw_listener() -> (OwnedFd, SocketAddr) {
 
 #[test]
 fn echo_with_a_raw_peer() {
+    static STORAGE: Storage = Storage::new();
     let (listener, addr) = raw_listener();
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async move |ctx| {
-            let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
-            assert_eq!(stream.peer_addr().unwrap(), addr);
-            assert!(stream.local_addr().unwrap().ip().is_loopback());
-            assert_eq!(stream.write(&ctx, b"hello").await.unwrap(), 5);
-            let mut buf = [0; 5];
-            let mut len = 0;
-            while len < 5 {
-                len += stream.read(&ctx, &mut buf[len..]).await.unwrap();
-            }
-            assert_eq!(&buf, b"hello");
-            stream.shutdown(Shutdown::Write).unwrap();
-            assert_eq!(stream.read(&ctx, &mut buf).await.unwrap(), 0);
-            ctx.dispatch(1).unwrap();
-            pending::<()>().await;
-        },
-    )
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
+        let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
+        assert_eq!(stream.peer_addr().unwrap(), addr);
+        assert!(stream.local_addr().unwrap().ip().is_loopback());
+        assert_eq!(stream.write(&ctx, b"hello").await.unwrap(), 5);
+        let mut buf = [0; 5];
+        let mut len = 0;
+        while len < 5 {
+            len += stream.read(&ctx, &mut buf[len..]).await.unwrap();
+        }
+        assert_eq!(&buf, b"hello");
+        stream.shutdown(Shutdown::Write).unwrap();
+        assert_eq!(stream.read(&ctx, &mut buf).await.unwrap(), 0);
+        ctx.dispatch(1).unwrap();
+        pending::<()>().await;
+    })
     .unwrap();
     let peer = raw_accept(&listener);
     let mut buf = [0; 5];
@@ -73,29 +69,23 @@ fn echo_with_a_raw_peer() {
 
 #[test]
 fn listener_accepts_a_raw_client() {
+    static STORAGE: Storage = Storage::new();
     let mut listener = TcpListener::bind(LOCALHOST).unwrap();
     let addr = listener.local_addr().unwrap();
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async move |ctx| {
-            let (mut stream, peer) = listener.accept(&ctx).await.unwrap();
-            assert_eq!(stream.peer_addr().unwrap(), peer);
-            let mut buf = [0; 4];
-            let mut len = 0;
-            while len < 4 {
-                len += stream.read(&ctx, &mut buf[len..]).await.unwrap();
-            }
-            assert_eq!(&buf, b"ping");
-            stream.write(&ctx, b"pong").await.unwrap();
-            ctx.dispatch(1).unwrap();
-            pending::<()>().await;
-        },
-    )
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
+        let (mut stream, peer) = listener.accept(&ctx).await.unwrap();
+        assert_eq!(stream.peer_addr().unwrap(), peer);
+        let mut buf = [0; 4];
+        let mut len = 0;
+        while len < 4 {
+            len += stream.read(&ctx, &mut buf[len..]).await.unwrap();
+        }
+        assert_eq!(&buf, b"ping");
+        stream.write(&ctx, b"pong").await.unwrap();
+        ctx.dispatch(1).unwrap();
+        pending::<()>().await;
+    })
     .unwrap();
     let client = raw_socket(AddressFamily::INET, SocketType::STREAM);
     match rustix::net::connect(&client, &addr) {
@@ -112,20 +102,14 @@ fn listener_accepts_a_raw_client() {
 
 #[test]
 fn connect_to_a_closed_port_fails() {
+    static STORAGE: Storage<NetError> = Storage::new();
     let addr = TcpListener::bind(LOCALHOST).unwrap().local_addr().unwrap();
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage<NetError> = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async move |ctx| {
-            let err = TcpStream::connect(&ctx, addr).await.err().unwrap();
-            ctx.dispatch(err).unwrap();
-            pending::<()>().await;
-        },
-    )
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
+        let err = TcpStream::connect(&ctx, addr).await.err().unwrap();
+        ctx.dispatch(err).unwrap();
+        pending::<()>().await;
+    })
     .unwrap();
     assert_eq!(
         event_loop.run_until_events(),
@@ -135,81 +119,75 @@ fn connect_to_a_closed_port_fails() {
 
 #[test]
 fn borrowed_halves_read_and_write_concurrently_in_one_task() {
+    static STORAGE: Storage = Storage::new();
     const LEN: usize = 1 << 20;
     const CHUNK: usize = 512;
     let mut listener = TcpListener::bind(LOCALHOST).unwrap();
     let addr = listener.local_addr().unwrap();
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async move |ctx| {
-            let handle = ctx
-                .spawn(async move |ctx| {
-                    let (mut stream, _) = listener.accept(&ctx).await.unwrap();
-                    let mut buf = [0; CHUNK];
-                    loop {
-                        let len = stream.read(&ctx, &mut buf).await.unwrap();
-                        if len == 0 {
-                            return;
-                        }
-                        let mut sent = 0;
-                        while sent < len {
-                            sent += stream.write(&ctx, &buf[sent..len]).await.unwrap();
-                        }
-                    }
-                })
-                .unwrap();
-            drop(handle);
-            let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
-            let (mut read, mut write) = stream.split();
-            let mut reading = pin!(async {
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
+        let handle = ctx
+            .spawn(async move |ctx| {
+                let (mut stream, _) = listener.accept(&ctx).await.unwrap();
                 let mut buf = [0; CHUNK];
-                let mut received = 0;
-                while received < LEN {
-                    let len = read.read(&ctx, &mut buf).await.unwrap();
-                    assert_ne!(len, 0);
-                    for (i, byte) in buf[..len].iter().enumerate() {
-                        assert_eq!(*byte, u8::try_from((received + i) % 256).unwrap());
+                loop {
+                    let len = stream.read(&ctx, &mut buf).await.unwrap();
+                    if len == 0 {
+                        return;
                     }
-                    received += len;
-                }
-                received
-            });
-            let mut writing = pin!(async {
-                let mut sent = 0;
-                while sent < LEN {
-                    let chunk: [u8; CHUNK] =
-                        core::array::from_fn(|i| u8::try_from((sent + i) % 256).unwrap());
-                    let len = CHUNK.min(LEN - sent);
-                    sent += write.write(&ctx, &chunk[..len]).await.unwrap();
-                }
-            });
-            let (mut received, mut written) = (None, false);
-            poll_fn(|cx| {
-                if received.is_none()
-                    && let Poll::Ready(len) = reading.as_mut().poll(cx)
-                {
-                    received = Some(len);
-                }
-                if !written && writing.as_mut().poll(cx).is_ready() {
-                    written = true;
-                }
-                if received.is_some() && written {
-                    Poll::Ready(())
-                } else {
-                    Poll::Pending
+                    let mut sent = 0;
+                    while sent < len {
+                        sent += stream.write(&ctx, &buf[sent..len]).await.unwrap();
+                    }
                 }
             })
-            .await;
-            ctx.dispatch(u32::try_from(received.unwrap()).unwrap())
-                .unwrap();
-            pending::<()>().await;
-        },
-    )
+            .unwrap();
+        drop(handle);
+        let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
+        let (mut read, mut write) = stream.split();
+        let mut reading = pin!(async {
+            let mut buf = [0; CHUNK];
+            let mut received = 0;
+            while received < LEN {
+                let len = read.read(&ctx, &mut buf).await.unwrap();
+                assert_ne!(len, 0);
+                for (i, byte) in buf[..len].iter().enumerate() {
+                    assert_eq!(*byte, u8::try_from((received + i) % 256).unwrap());
+                }
+                received += len;
+            }
+            received
+        });
+        let mut writing = pin!(async {
+            let mut sent = 0;
+            while sent < LEN {
+                let chunk: [u8; CHUNK] =
+                    core::array::from_fn(|i| u8::try_from((sent + i) % 256).unwrap());
+                let len = CHUNK.min(LEN - sent);
+                sent += write.write(&ctx, &chunk[..len]).await.unwrap();
+            }
+        });
+        let (mut received, mut written) = (None, false);
+        poll_fn(|cx| {
+            if received.is_none()
+                && let Poll::Ready(len) = reading.as_mut().poll(cx)
+            {
+                received = Some(len);
+            }
+            if !written && writing.as_mut().poll(cx).is_ready() {
+                written = true;
+            }
+            if received.is_some() && written {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        })
+        .await;
+        ctx.dispatch(u32::try_from(received.unwrap()).unwrap())
+            .unwrap();
+        pending::<()>().await;
+    })
     .unwrap();
     assert_eq!(event_loop.run_until_events(), [u32::try_from(LEN).unwrap()]);
 }
@@ -223,30 +201,24 @@ fn listener_binds_to_ipv6() {
 
 #[test]
 fn split_halves_wait_for_readiness_and_try_io() {
+    static STORAGE: Storage = Storage::new();
     let (listener, addr) = raw_listener();
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async move |ctx| {
-            let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
-            let (mut rx, mut tx) = stream.split();
-            let mut buf = [0; 5];
-            assert_eq!(rx.try_read(&mut buf), Err(Errno::AGAIN));
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
+        let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
+        let (mut rx, mut tx) = stream.split();
+        let mut buf = [0; 5];
+        assert_eq!(rx.try_read(&mut buf), Err(Errno::AGAIN));
 
-            tx.writable(&ctx).await.unwrap();
-            assert_eq!(tx.try_write(b"hello").unwrap(), 5);
+        tx.writable(&ctx).await.unwrap();
+        assert_eq!(tx.try_write(b"hello").unwrap(), 5);
 
-            rx.readable(&ctx).await.unwrap();
-            assert_eq!(rx.try_read(&mut buf).unwrap(), 5);
-            assert_eq!(&buf, b"world");
-            ctx.dispatch(1).unwrap();
-            pending::<()>().await;
-        },
-    )
+        rx.readable(&ctx).await.unwrap();
+        assert_eq!(rx.try_read(&mut buf).unwrap(), 5);
+        assert_eq!(&buf, b"world");
+        ctx.dispatch(1).unwrap();
+        pending::<()>().await;
+    })
     .unwrap();
     let peer = raw_accept(&listener);
     let mut buf = [0; 5];
@@ -258,23 +230,17 @@ fn split_halves_wait_for_readiness_and_try_io() {
 
 #[test]
 fn set_keepalive_on_a_connected_stream() {
+    static STORAGE: Storage = Storage::new();
     let (listener, addr) = raw_listener();
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async move |ctx| {
-            let stream = TcpStream::connect(&ctx, addr).await.unwrap();
-            stream
-                .set_keepalive(Duration::from_secs(1), Duration::from_secs(1), 2)
-                .unwrap();
-            ctx.dispatch(1).unwrap();
-            pending::<()>().await;
-        },
-    )
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
+        let stream = TcpStream::connect(&ctx, addr).await.unwrap();
+        stream
+            .set_keepalive(Duration::from_secs(1), Duration::from_secs(1), 2)
+            .unwrap();
+        ctx.dispatch(1).unwrap();
+        pending::<()>().await;
+    })
     .unwrap();
     let _peer = raw_accept(&listener);
     event_loop.run_until_events::<1>();

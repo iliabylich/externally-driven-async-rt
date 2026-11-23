@@ -9,8 +9,6 @@ mod sockets;
 mod spawn;
 mod wakers;
 
-use crate::{Context, EventLoop, LoopStorage};
-
 pub(crate) use self::{
     assert_yields::assert_yields,
     dispatch_on_drop::DispatchOnDrop,
@@ -23,41 +21,3 @@ pub(crate) use self::{
     spawn::claimed_forever,
     wakers::{counting_waker, flag_waker},
 };
-
-pub(crate) const TEST_EVENTS: usize = 16;
-pub(crate) const TEST_TASKS: usize = 16;
-pub(crate) const TEST_TASK_SIZE: usize = 1024;
-const TEST_ROOT_TASK_SIZE: usize = 2048;
-pub(crate) const TEST_TIMERS: usize = 16;
-pub(crate) const TEST_FDS: usize = 8;
-
-pub(crate) type TestStorage<E = u32> = LoopStorage<
-    E,
-    TEST_EVENTS,
-    TEST_TASKS,
-    TEST_TASK_SIZE,
-    TEST_ROOT_TASK_SIZE,
-    TEST_TIMERS,
-    TEST_FDS,
->;
-
-pub(crate) type TestLoop<'a, E = u32> = EventLoop<
-    'a,
-    E,
-    TEST_EVENTS,
-    TEST_TASKS,
-    TEST_TASK_SIZE,
-    TEST_ROOT_TASK_SIZE,
-    TEST_TIMERS,
-    TEST_FDS,
->;
-pub(crate) type TestContext<'a, E = u32> = Context<
-    'a,
-    E,
-    TEST_EVENTS,
-    TEST_TASKS,
-    TEST_TASK_SIZE,
-    TEST_ROOT_TASK_SIZE,
-    TEST_TIMERS,
-    TEST_FDS,
->;

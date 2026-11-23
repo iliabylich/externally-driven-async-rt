@@ -1,11 +1,32 @@
-use crate::testing::TestContext;
+use core::fmt::Debug;
 
-pub(crate) struct DispatchOnDrop<'c, 'a, E: Copy + core::fmt::Debug + 'static>(
-    pub(crate) &'c TestContext<'a, E>,
+use crate::Context;
+
+pub(crate) struct DispatchOnDrop<
+    'c,
+    'a,
+    E: Copy + Debug + 'static,
+    const EVENTS: usize,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+>(
+    pub(crate) &'c Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     pub(crate) E,
 );
 
-impl<E: Copy + core::fmt::Debug + 'static> Drop for DispatchOnDrop<'_, '_, E> {
+impl<
+    E: Copy + Debug + 'static,
+    const EVENTS: usize,
+    const TASKS: usize,
+    const TASK_SIZE: usize,
+    const ROOT_TASK_SIZE: usize,
+    const TIMERS: usize,
+    const FDS: usize,
+> Drop for DispatchOnDrop<'_, '_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+{
     fn drop(&mut self) {
         self.0.dispatch(self.1).unwrap();
     }

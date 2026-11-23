@@ -8,62 +8,50 @@ use core::{
 use super::{Error, EventLoop};
 
 use crate::{
-    LoopStorage, NotEnoughResources, Selector,
-    testing::{
-        DispatchOnDrop, EventLoopTestingExt, FlagOnDrop, TEST_EVENTS, TEST_FDS, TEST_TASK_SIZE,
-        TEST_TASKS, TEST_TIMERS, TestContext, TestLoop, TestStorage, assert_yields,
-    },
+    Context, LoopStorage, NotEnoughResources, Selector,
+    testing::{DispatchOnDrop, EventLoopTestingExt, FlagOnDrop, assert_yields},
 };
+
+const EVENTS: usize = 4;
+const TASKS: usize = 2;
+const TASK_SIZE: usize = 64;
+const ROOT_TASK_SIZE: usize = 128;
+
+type Storage<E = u32> = LoopStorage<E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, 1, 1>;
 
 #[test]
 fn root_finishing_during_new_is_an_error() {
+    static STORAGE: Storage = Storage::new();
     let mut selector = Selector::new().unwrap();
-    let result = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async |ctx| ctx.dispatch(1).unwrap(),
-    );
+    let result = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
+        ctx.dispatch(1).unwrap();
+    });
     assert_eq!(result.err(), Some(Error::RootFinished));
 }
 
 #[test]
 fn events_dispatched_during_new_are_queued() {
+    static STORAGE: Storage = Storage::new();
     let mut selector = Selector::new().unwrap();
-    let event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async |ctx| {
-            ctx.dispatch(1).unwrap();
-            ctx.dispatch(2).unwrap();
-            pending::<()>().await;
-        },
-    )
+    let event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
+        ctx.dispatch(1).unwrap();
+        ctx.dispatch(2).unwrap();
+        pending::<()>().await;
+    })
     .unwrap();
     assert_yields!(event_loop.events(), [1, 2]);
 }
 
 #[test]
 fn root_finishing_inside_a_drain() {
+    static STORAGE: Storage = Storage::new();
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async |ctx| {
-            ctx.dispatch(1).unwrap();
-            ctx.notified().await;
-            ctx.dispatch(2).unwrap();
-            ctx.dispatch(3).unwrap();
-        },
-    )
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
+        ctx.dispatch(1).unwrap();
+        ctx.notified().await;
+        ctx.dispatch(2).unwrap();
+        ctx.dispatch(3).unwrap();
+    })
     .unwrap();
     assert_yields!(event_loop.events(), [1]);
 
@@ -81,20 +69,14 @@ fn root_finishing_inside_a_drain() {
 
 #[test]
 fn root_progresses_across_drains() {
+    static STORAGE: Storage = Storage::new();
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async |ctx| {
-            for i in 0..=u32::MAX {
-                ctx.notified().await;
-                ctx.dispatch(i).unwrap();
-            }
-        },
-    )
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
+        for i in 0..=u32::MAX {
+            ctx.notified().await;
+            ctx.dispatch(i).unwrap();
+        }
+    })
     .unwrap();
     for i in 0..3 {
         event_loop.notify().unwrap();
@@ -105,31 +87,19 @@ fn root_progresses_across_drains() {
 
 #[test]
 fn two_loops_on_one_thread_are_independent() {
+    static FIRST: Storage = Storage::new();
+    static SECOND: Storage = Storage::new();
     let mut selector = Selector::new().unwrap();
-    let mut first = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async |ctx| {
-            ctx.notified().await;
-            ctx.dispatch(1).unwrap();
-        },
-    )
+    let mut first = EventLoop::new(&FIRST, &mut selector, async |ctx| {
+        ctx.notified().await;
+        ctx.dispatch(1).unwrap();
+    })
     .unwrap();
     let mut selector = Selector::new().unwrap();
-    let mut second = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async |ctx| {
-            ctx.notified().await;
-            ctx.dispatch(2).unwrap();
-        },
-    )
+    let mut second = EventLoop::new(&SECOND, &mut selector, async |ctx| {
+        ctx.notified().await;
+        ctx.dispatch(2).unwrap();
+    })
     .unwrap();
 
     first.notify().unwrap();
@@ -144,81 +114,55 @@ fn two_loops_on_one_thread_are_independent() {
 
 #[test]
 fn dispatching_into_a_full_queue_returns_the_event() {
+    static STORAGE: Storage = Storage::new();
     let mut selector = Selector::new().unwrap();
-    let event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async |ctx| {
-            for event in (0..).take(TEST_EVENTS) {
-                ctx.dispatch(event).unwrap();
-            }
-            assert_eq!(ctx.dispatch(99), Err(99));
-            pending::<()>().await;
-        },
-    )
+    let event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
+        for event in (0..).take(EVENTS) {
+            ctx.dispatch(event).unwrap();
+        }
+        assert_eq!(ctx.dispatch(99), Err(99));
+        pending::<()>().await;
+    })
     .unwrap();
-    assert_yields!(event_loop.events(), (0..).take(TEST_EVENTS));
+    assert_yields!(event_loop.events(), (0..).take(EVENTS));
 }
 
 #[test]
 fn root_future_bigger_than_task_size_is_fine() {
-    let data = [7u8; 3 * TEST_TASK_SIZE];
+    static STORAGE: LoopStorage<u32, 1, 1, TASK_SIZE, { 8 * TASK_SIZE }, 1, 1> = LoopStorage::new();
+    let data = [7u8; 3 * TASK_SIZE];
     let mut selector = Selector::new().unwrap();
-    let event_loop = EventLoop::new(
-        {
-            static STORAGE: LoopStorage<
-                u32,
-                TEST_EVENTS,
-                TEST_TASKS,
-                TEST_TASK_SIZE,
-                { 8 * TEST_TASK_SIZE },
-                TEST_TIMERS,
-                TEST_FDS,
-            > = LoopStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async move |ctx| {
-            ctx.dispatch(u32::from(data.iter().all(|byte| *byte == 7)))
-                .unwrap();
-            pending::<()>().await;
-        },
-    )
+    let event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
+        ctx.dispatch(u32::from(data.iter().all(|byte| *byte == 7)))
+            .unwrap();
+        pending::<()>().await;
+    })
     .unwrap();
     assert_yields!(event_loop.events(), [1]);
 }
 
 #[test]
 fn tasks_are_dropped_when_the_root_finishes() {
+    static STORAGE: Storage = Storage::new();
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async |ctx| {
-            let handle = ctx
-                .spawn(async |ctx| {
-                    let _guard = DispatchOnDrop(&ctx, 10);
-                    pending::<()>().await;
-                })
-                .unwrap();
-            drop(handle);
-            let handle = ctx
-                .spawn(async |ctx| {
-                    let _guard = DispatchOnDrop(&ctx, 20);
-                    pending::<()>().await;
-                })
-                .unwrap();
-            drop(handle);
-            ctx.notified().await;
-            ctx.dispatch(1).unwrap();
-        },
-    )
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
+        let handle = ctx
+            .spawn(async |ctx| {
+                let _guard = DispatchOnDrop(&ctx, 10);
+                pending::<()>().await;
+            })
+            .unwrap();
+        drop(handle);
+        let handle = ctx
+            .spawn(async |ctx| {
+                let _guard = DispatchOnDrop(&ctx, 20);
+                pending::<()>().await;
+            })
+            .unwrap();
+        drop(handle);
+        ctx.notified().await;
+        ctx.dispatch(1).unwrap();
+    })
     .unwrap();
     event_loop.notify().unwrap();
     assert_eq!(
@@ -234,7 +178,9 @@ fn tasks_are_dropped_when_the_root_finishes() {
 
 #[test]
 fn spawning_and_dispatching_from_drop_during_teardown() {
-    struct SpawnOnDrop<'c, 'rx>(&'c TestContext<'rx>);
+    struct SpawnOnDrop<'c, 'rx>(
+        &'c Context<'rx, u32, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, 1, 1>,
+    );
 
     impl Drop for SpawnOnDrop<'_, '_> {
         fn drop(&mut self) {
@@ -243,25 +189,19 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
         }
     }
 
+    static STORAGE: Storage = Storage::new();
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async |ctx| {
-            let handle = ctx
-                .spawn(async |ctx| {
-                    let _guard = SpawnOnDrop(&ctx);
-                    pending::<()>().await;
-                })
-                .unwrap();
-            drop(handle);
-            ctx.notified().await;
-            ctx.dispatch(1).unwrap();
-        },
-    )
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
+        let handle = ctx
+            .spawn(async |ctx| {
+                let _guard = SpawnOnDrop(&ctx);
+                pending::<()>().await;
+            })
+            .unwrap();
+        drop(handle);
+        ctx.notified().await;
+        ctx.dispatch(1).unwrap();
+    })
     .unwrap();
     event_loop.notify().unwrap();
     assert_eq!(
@@ -274,7 +214,7 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
 #[test]
 fn undrained_events_are_dropped_with_the_loop() {
     struct DispatchFlagOnDrop<'c, 'a>(
-        &'c TestContext<'a, FlagOnDrop<'static>>,
+        &'c Context<'a, FlagOnDrop<'static>, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, 1, 1>,
         &'static AtomicBool,
     );
 
@@ -284,27 +224,21 @@ fn undrained_events_are_dropped_with_the_loop() {
         }
     }
 
+    static STORAGE: Storage<FlagOnDrop<'static>> = Storage::new();
     static QUEUED: AtomicBool = AtomicBool::new(false);
     static DISPATCHED_WHILE_DROPPING: AtomicBool = AtomicBool::new(false);
     let mut selector = Selector::new().unwrap();
-    let event_loop = TestLoop::new(
-        {
-            static STORAGE: TestStorage<FlagOnDrop<'static>> = TestStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async |ctx| {
-            ctx.dispatch(FlagOnDrop::new(&QUEUED)).unwrap();
-            let handle = ctx
-                .spawn(async |ctx| {
-                    let _guard = DispatchFlagOnDrop(&ctx, &DISPATCHED_WHILE_DROPPING);
-                    pending::<()>().await;
-                })
-                .unwrap();
-            drop(handle);
-            pending::<()>().await;
-        },
-    )
+    let event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
+        ctx.dispatch(FlagOnDrop::new(&QUEUED)).unwrap();
+        let handle = ctx
+            .spawn(async |ctx| {
+                let _guard = DispatchFlagOnDrop(&ctx, &DISPATCHED_WHILE_DROPPING);
+                pending::<()>().await;
+            })
+            .unwrap();
+        drop(handle);
+        pending::<()>().await;
+    })
     .unwrap();
     assert!(!QUEUED.load(Relaxed));
     drop(event_loop);
@@ -314,23 +248,17 @@ fn undrained_events_are_dropped_with_the_loop() {
 
 #[test]
 fn waking_after_the_loop_is_gone_is_harmless() {
+    static STORAGE: Storage = Storage::new();
     let escaped = Cell::new(None);
     {
         let mut selector = Selector::new().unwrap();
-        let event_loop = TestLoop::new(
-            {
-                static STORAGE: TestStorage = TestStorage::new();
-                &STORAGE
-            },
-            &mut selector,
-            async |_| {
-                poll_fn(|cx| {
-                    escaped.set(Some(cx.waker().clone()));
-                    Poll::<()>::Pending
-                })
-                .await;
-            },
-        );
+        let event_loop = EventLoop::new(&STORAGE, &mut selector, async |_| {
+            poll_fn(|cx| {
+                escaped.set(Some(cx.waker().clone()));
+                Poll::<()>::Pending
+            })
+            .await;
+        });
         drop(event_loop);
     }
     escaped.take().unwrap().wake();
@@ -338,46 +266,40 @@ fn waking_after_the_loop_is_gone_is_harmless() {
 
 #[test]
 fn spawning_into_a_full_pool_drops_the_future_unpolled() {
-    static POLLED: AtomicBool = AtomicBool::new(false);
+    static STORAGE: LoopStorage<u32, 1, 1, 64, 1024, 1, 1> = LoopStorage::new();
     static DROPPED: AtomicBool = AtomicBool::new(false);
+    let polled = &Cell::new(false);
     let mut selector = Selector::new().unwrap();
-    let event_loop = EventLoop::new(
-        {
-            static STORAGE: LoopStorage<u32, 1, 1, 64, 1024, 1, 1> = LoopStorage::new();
-            &STORAGE
-        },
-        &mut selector,
-        async |ctx| {
-            let _running = ctx.spawn(async |_| pending().await).unwrap();
-            let spawned = ctx.spawn(|_| {
-                let flag = FlagOnDrop::new(&DROPPED);
-                async move {
-                    let _flag = flag;
-                    POLLED.store(true, Relaxed);
-                }
-            });
-            assert_eq!(spawned.err(), Some(NotEnoughResources::Tasks));
-            ctx.dispatch(1).unwrap();
-            pending::<()>().await;
-        },
-    )
+    let event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
+        let _running = ctx.spawn(async |_| pending().await).unwrap();
+        let spawned = ctx.spawn(|_| {
+            let flag = FlagOnDrop::new(&DROPPED);
+            async move {
+                let _flag = flag;
+                polled.set(true);
+            }
+        });
+        assert_eq!(spawned.err(), Some(NotEnoughResources::Tasks));
+        ctx.dispatch(1).unwrap();
+        pending::<()>().await;
+    })
     .unwrap();
     assert_yields!(event_loop.events(), [1]);
     assert!(DROPPED.load(Relaxed));
-    assert!(!POLLED.load(Relaxed));
+    assert!(!polled.get());
 }
 
 #[test]
 fn a_used_storage_is_an_error_without_calling_the_closure() {
-    static STORAGE: TestStorage = TestStorage::new();
-    static CALLED: AtomicBool = AtomicBool::new(false);
+    static STORAGE: Storage = Storage::new();
+    let called = Cell::new(false);
     let mut first_selector = Selector::new().unwrap();
-    let _first = TestLoop::new(&STORAGE, &mut first_selector, async |_| pending().await).unwrap();
+    let _first = EventLoop::new(&STORAGE, &mut first_selector, async |_| pending().await).unwrap();
     let mut second_selector = Selector::new().unwrap();
-    let second = TestLoop::new(&STORAGE, &mut second_selector, |_| {
-        CALLED.store(true, Relaxed);
+    let second = EventLoop::new(&STORAGE, &mut second_selector, |_| {
+        called.set(true);
         pending()
     });
     assert_eq!(second.err(), Some(Error::StorageAlreadyUsed));
-    assert!(!CALLED.load(Relaxed));
+    assert!(!called.get());
 }
