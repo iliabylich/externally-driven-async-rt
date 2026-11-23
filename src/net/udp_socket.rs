@@ -5,10 +5,9 @@ use rustix::{
     net::{SocketType, addr::SocketAddrArg},
 };
 
-use crate::{
-    context::Context,
-    net::{NetError, socket::Socket},
-};
+use crate::context::Context;
+
+use super::{NetError, socket::Socket};
 
 /// A UDP socket.
 #[must_use]

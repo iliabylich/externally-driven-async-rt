@@ -4,9 +4,11 @@ use rustix::fd::{AsRawFd, OwnedFd};
 
 use crate::{
     selector::{Direction, Directions, EVENTS_PER_CALL, IoChange, Selector, SelectorEvent},
-    testing::{FdTestingExt, assert_yields, socketpair},
+    testing::{FdTestingExt, assert_yields},
     time::Instant,
 };
+
+use super::{FdExt, socketpair};
 
 fn arm(fd: &OwnedFd, direction: Direction) -> IoChange {
     IoChange {

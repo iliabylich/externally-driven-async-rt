@@ -5,8 +5,9 @@ use rustix::{io::Errno, net::Shutdown};
 use crate::{
     context::Context,
     io::{AsyncRead, AsyncWrite},
-    net::{BorrowedReadHalf, BorrowedWriteHalf, NetError, socket::Socket},
 };
+
+use super::{BorrowedReadHalf, BorrowedWriteHalf, NetError, socket::Socket};
 
 /// A TCP stream.
 #[must_use]

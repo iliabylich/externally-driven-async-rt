@@ -1,6 +1,8 @@
 use core::future::Future;
 
-use crate::{Context, io::AsyncWrite};
+use crate::Context;
+
+use super::AsyncWrite;
 
 /// Helper methods on top of [`AsyncWrite`], implemented for every [`AsyncWrite`].
 pub trait AsyncWriteExt: AsyncWrite {
@@ -76,9 +78,10 @@ mod tests {
 
     use rustix::io::Errno;
 
+    use super::{AsyncWrite, AsyncWriteExt, WriteAllError};
+
     use crate::{
         Selector,
-        io::{AsyncWrite, AsyncWriteExt, WriteAllError},
         testing::{TestContext, TestStorage},
     };
 

@@ -4,9 +4,11 @@ use rustix::fd::{AsFd, AsRawFd};
 
 use crate::{
     Selector,
-    testing::{EventLoopTestingExt, FdTestingExt, TestLoop, TestStorage, assert_yields},
+    testing::{TestLoop, TestStorage, assert_yields},
     time::Instant,
 };
+
+use super::{EventLoopExt, FdExt};
 
 #[test]
 fn idle_loop_is_not_readable_and_drains_to_nothing() {

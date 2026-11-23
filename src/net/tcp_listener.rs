@@ -5,10 +5,9 @@ use rustix::{
     net::{SocketType, addr::SocketAddrArg},
 };
 
-use crate::{
-    context::Context,
-    net::{NetError, TcpStream, socket::Socket},
-};
+use crate::context::Context;
+
+use super::{NetError, TcpStream, socket::Socket};
 
 /// A TCP listener.
 #[must_use]

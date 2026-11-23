@@ -9,8 +9,10 @@ use crate::{
     Selector,
     io::{AsyncRead, AsyncWrite},
     net::{NetError, UnixDatagram, UnixListener, UnixStream},
-    testing::{EventLoopTestingExt, TestLoop, TestStorage, assert_yields, raw_accept, raw_socket},
+    testing::{EventLoopTestingExt, TestLoop, TestStorage, assert_yields},
 };
+
+use super::{EventLoopExt, raw_accept, raw_socket};
 
 struct TempPath {
     bytes: [u8; 104],

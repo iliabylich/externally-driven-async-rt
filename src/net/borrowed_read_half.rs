@@ -1,10 +1,6 @@
-use crate::{
-    NotEnoughResources,
-    context::Context,
-    io::AsyncRead,
-    net::{NetError, socket::Socket},
-    selector::Direction,
-};
+use crate::{NotEnoughResources, context::Context, io::AsyncRead, selector::Direction};
+
+use super::{NetError, socket::Socket};
 
 /// Read half of a TCP/Unix stream.
 #[must_use]

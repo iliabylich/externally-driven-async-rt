@@ -5,8 +5,10 @@ use core::{
     task::Poll,
 };
 
+use super::{Error, EventLoop};
+
 use crate::{
-    Error, EventLoop, LoopStorage, NotEnoughResources, Selector,
+    LoopStorage, NotEnoughResources, Selector,
     testing::{
         DispatchOnDrop, EventLoopTestingExt, FlagOnDrop, TEST_EVENTS, TEST_FDS, TEST_TASK_SIZE,
         TEST_TASKS, TEST_TIMERS, TestContext, TestLoop, TestStorage, assert_yields,

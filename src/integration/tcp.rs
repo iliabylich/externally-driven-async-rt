@@ -16,18 +16,16 @@ use crate::{
     Selector,
     io::{AsyncRead, AsyncWrite},
     net::{NetError, TcpListener, TcpStream},
-    testing::{self, EventLoopTestingExt, FdTestingExt, TestLoop, TestStorage, raw_accept},
+    testing::{EventLoopTestingExt, TestLoop, TestStorage},
 };
+
+use super::{EventLoopExt, FdExt, raw_accept, raw_socket};
 
 const LOCALHOST: SocketAddr =
     SocketAddr::new(core::net::IpAddr::V4(core::net::Ipv4Addr::LOCALHOST), 0);
 
-fn raw_socket() -> OwnedFd {
-    testing::raw_socket(AddressFamily::INET, SocketType::STREAM)
-}
-
 fn raw_listener() -> (OwnedFd, SocketAddr) {
-    let fd = raw_socket();
+    let fd = raw_socket(AddressFamily::INET, SocketType::STREAM);
     rustix::net::bind(&fd, &LOCALHOST).unwrap();
     rustix::net::listen(&fd, 1).unwrap();
     let addr = rustix::net::getsockname(&fd).unwrap().try_into().unwrap();
@@ -99,7 +97,7 @@ fn listener_accepts_a_raw_client() {
         },
     )
     .unwrap();
-    let client = raw_socket();
+    let client = raw_socket(AddressFamily::INET, SocketType::STREAM);
     match rustix::net::connect(&client, &addr) {
         Ok(()) | Err(Errno::INPROGRESS) => {}
         Err(errno) => panic!("{errno}"),

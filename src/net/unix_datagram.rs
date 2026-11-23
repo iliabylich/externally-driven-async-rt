@@ -1,9 +1,8 @@
 use rustix::net::{AddressFamily, SocketAddrUnix, SocketType};
 
-use crate::{
-    context::Context,
-    net::{NetError, socket::Socket},
-};
+use crate::context::Context;
+
+use super::{NetError, socket::Socket};
 
 /// A Unix datagram socket.
 #[must_use]

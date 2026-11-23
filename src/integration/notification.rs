@@ -1,7 +1,9 @@
 use crate::{
     Selector,
-    testing::{EventLoopTestingExt, FdTestingExt, TestLoop, TestStorage},
+    testing::{EventLoopTestingExt, TestLoop, TestStorage},
 };
+
+use super::FdExt;
 
 #[test]
 fn notify_makes_the_loop_readable_and_wakes_the_waiter() {

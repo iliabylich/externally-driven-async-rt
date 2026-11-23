@@ -1,4 +1,6 @@
-use crate::{Context, io::AsyncWrite};
+use crate::Context;
+
+use super::AsyncWrite;
 
 /// Writes frames of exactly `N` bytes to an [`AsyncWrite`].
 ///
@@ -129,9 +131,10 @@ mod tests {
 
     use rustix::io::Errno;
 
+    use super::{AsyncWrite, FrameWriter, FrameWriterError};
+
     use crate::{
         Selector,
-        io::{AsyncWrite, FrameWriter, FrameWriterError},
         testing::{TestContext, TestStorage},
     };
 

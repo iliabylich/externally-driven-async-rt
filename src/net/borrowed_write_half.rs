@@ -1,10 +1,6 @@
-use crate::{
-    NotEnoughResources,
-    context::Context,
-    io::AsyncWrite,
-    net::{NetError, socket::Socket},
-    selector::Direction,
-};
+use crate::{NotEnoughResources, context::Context, io::AsyncWrite, selector::Direction};
+
+use super::{NetError, socket::Socket};
 
 /// Write half of a TCP/Unix stream.
 #[must_use]

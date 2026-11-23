@@ -13,8 +13,10 @@ use crate::{
     Either2, EventLoop, LoopStorage, NotEnoughResources, Selector,
     net::{NetError, UdpSocket},
     select2,
-    testing::{EventLoopTestingExt, TestLoop, TestStorage, assert_yields, raw_socket},
+    testing::{EventLoopTestingExt, TestLoop, TestStorage, assert_yields},
 };
+
+use super::{EventLoopExt, raw_socket};
 
 const LOCALHOST: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
 

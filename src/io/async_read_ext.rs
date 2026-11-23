@@ -1,6 +1,8 @@
 use core::future::Future;
 
-use crate::{Context, io::AsyncRead};
+use crate::Context;
+
+use super::AsyncRead;
 
 /// Helper methods on top of [`AsyncRead`], implemented for every [`AsyncRead`].
 pub trait AsyncReadExt: AsyncRead {
@@ -79,9 +81,10 @@ mod tests {
 
     use rustix::io::Errno;
 
+    use super::{AsyncRead, AsyncReadExt, ReadExactError};
+
     use crate::{
         Selector,
-        io::{AsyncRead, AsyncReadExt, ReadExactError},
         testing::{TestContext, TestStorage},
     };
 

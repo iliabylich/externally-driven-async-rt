@@ -1,4 +1,6 @@
-use crate::{Context, io::AsyncRead};
+use crate::Context;
+
+use super::AsyncRead;
 
 /// Reads frames of exactly `N` bytes from an [`AsyncRead`].
 ///
@@ -104,9 +106,10 @@ mod tests {
 
     use rustix::io::Errno;
 
+    use super::{AsyncRead, FrameReader, FrameReaderError};
+
     use crate::{
         Selector,
-        io::{AsyncRead, FrameReader, FrameReaderError},
         testing::{TestContext, TestStorage},
     };
 

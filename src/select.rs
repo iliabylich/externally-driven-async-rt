@@ -79,7 +79,7 @@ pub async fn select3<A: Future, B: Future, C: Future>(
 
 #[cfg(test)]
 mod tests {
-    use crate::{Either2, Either3, select2, select3};
+    use super::{Either2, Either3, select2, select3};
     use core::{
         future::{Future, pending, ready},
         pin::pin,

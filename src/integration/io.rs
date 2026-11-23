@@ -9,11 +9,10 @@ use rustix::fd::{AsFd, OwnedFd};
 use crate::{
     Context, LoopStorage, Selector,
     selector::Direction,
-    testing::{
-        EventLoopTestingExt, FdTestingExt, TestContext, TestLoop, TestStorage, assert_yields,
-        socketpair,
-    },
+    testing::{FdTestingExt, TestContext, TestLoop, TestStorage, assert_yields},
 };
+
+use super::{EventLoopExt, FdExt, socketpair};
 
 async fn read_some<
     E: 'static,

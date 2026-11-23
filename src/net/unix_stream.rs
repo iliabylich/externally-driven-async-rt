@@ -3,8 +3,9 @@ use rustix::net::{Shutdown, SocketAddrUnix};
 use crate::{
     context::Context,
     io::{AsyncRead, AsyncWrite},
-    net::{BorrowedReadHalf, BorrowedWriteHalf, NetError, socket::Socket},
 };
+
+use super::{BorrowedReadHalf, BorrowedWriteHalf, NetError, socket::Socket};
 
 /// A Unix stream.
 #[must_use]

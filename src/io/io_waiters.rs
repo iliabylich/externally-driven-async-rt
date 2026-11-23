@@ -5,10 +5,11 @@ use rustix::{
     io::Errno,
 };
 
+use super::IoWaiter;
+
 use crate::{
     NotEnoughResources,
     data::fd_hash_map::FdHashMap,
-    io::IoWaiter,
     selector::{Direction, Directions, IoChange, Selector},
 };
 
@@ -124,10 +125,10 @@ mod tests {
         io::Errno,
     };
 
+    use super::{Direction, Directions, IoChange, IoWaiters};
+
     use crate::{
         NotEnoughResources, Selector,
-        io::IoWaiters,
-        selector::{Direction, Directions, IoChange},
         testing::{assert_yields, plain_socketpair},
     };
 

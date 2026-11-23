@@ -19,7 +19,7 @@ pub(crate) use self::{
     fixed_future::FixedFuture,
     flag_on_drop::FlagOnDrop,
     poll::{fake_instant, wake_expired_timers},
-    sockets::{plain_socketpair, raw_accept, raw_socket, socketpair},
+    sockets::plain_socketpair,
     spawn::claimed_forever,
     wakers::{counting_waker, flag_waker},
 };

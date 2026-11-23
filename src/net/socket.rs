@@ -16,10 +16,11 @@ use rustix::{
 use crate::{
     NotEnoughResources,
     io::IoWaiters,
-    net::NetError,
     selector::{Direction, Selector},
     strace::{syscall, syscall_end, syscall_start},
 };
+
+use super::NetError;
 
 const LISTEN_BACKLOG: i32 = 1024;
 #[cfg(target_os = "macos")]

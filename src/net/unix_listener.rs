@@ -1,9 +1,8 @@
 use rustix::net::{AddressFamily, SocketAddrUnix, SocketType};
 
-use crate::{
-    context::Context,
-    net::{NetError, UnixStream, socket::Socket},
-};
+use crate::context::Context;
+
+use super::{NetError, UnixStream, socket::Socket};
 
 /// A Unix stream listener.
 #[must_use]
