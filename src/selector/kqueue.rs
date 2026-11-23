@@ -7,7 +7,6 @@ use rustix::{
 };
 
 use crate::{
-    const_default::ConstDefault,
     selector::{
         Direction, Directions, EVENTS_PER_CALL, IoChange, KernelTimer, SelectorEvent, TimerChange,
     },
@@ -37,7 +36,7 @@ impl KqueueSelector {
         result?;
         let selector = Self {
             kq,
-            timer: Cell::new(KernelTimer::DEFAULT),
+            timer: Cell::new(KernelTimer::default()),
         };
         selector.submit([Self::notify_kevent(
             UserFlags::empty(),

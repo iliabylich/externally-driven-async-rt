@@ -1,8 +1,9 @@
-use crate::{const_default::ConstDefault, selector::TimerChange, time::Instant};
+use crate::{selector::TimerChange, time::Instant};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[must_use]
 pub(crate) enum KernelTimer {
+    #[default]
     Disarmed,
     Armed(Instant),
 }
@@ -23,10 +24,6 @@ impl KernelTimer {
             (Self::Disarmed, None) => (self, None),
         }
     }
-}
-
-impl ConstDefault for KernelTimer {
-    const DEFAULT: Self = Self::Disarmed;
 }
 
 #[cfg(test)]
