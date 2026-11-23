@@ -1,6 +1,6 @@
 /// An error that can be returned from an [`EventLoop`](crate::EventLoop).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Error {
+pub enum EventLoopError {
     /// An epoll or kqueue call failed.
     Io(rustix::io::Errno),
     /// [`EventLoop::drain_events_without_blocking`](crate::EventLoop::drain_events_without_blocking)
@@ -13,7 +13,7 @@ pub enum Error {
     StorageAlreadyUsed,
 }
 
-impl core::fmt::Display for Error {
+impl core::fmt::Display for EventLoopError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Io(errno) => write!(f, "event loop IO error: {errno}"),
@@ -25,9 +25,9 @@ impl core::fmt::Display for Error {
     }
 }
 
-impl core::error::Error for Error {}
+impl core::error::Error for EventLoopError {}
 
-impl From<rustix::io::Errno> for Error {
+impl From<rustix::io::Errno> for EventLoopError {
     fn from(errno: rustix::io::Errno) -> Self {
         Self::Io(errno)
     }
@@ -35,7 +35,7 @@ impl From<rustix::io::Errno> for Error {
 
 #[cfg(test)]
 mod tests {
-    use super::Error;
+    use super::EventLoopError;
 
     #[test]
     fn errors_display_their_cause() {
@@ -53,10 +53,13 @@ mod tests {
         }
 
         for (error, expected) in [
-            (Error::RootFinished, "the root future has finished"),
-            (Error::Io(rustix::io::Errno::BADF), "event loop IO error: "),
+            (EventLoopError::RootFinished, "the root future has finished"),
             (
-                Error::StorageAlreadyUsed,
+                EventLoopError::Io(rustix::io::Errno::BADF),
+                "event loop IO error: ",
+            ),
+            (
+                EventLoopError::StorageAlreadyUsed,
                 "the storage has already been used by another event loop",
             ),
         ] {

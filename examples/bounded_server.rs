@@ -9,7 +9,7 @@
 use core::{net::SocketAddr, time::Duration};
 
 use externally_driven_async_rt::{
-    Context, Error, EventLoop, LoopStorage, MaybeTimedOut, Selector,
+    Context, EventLoopError, EventLoop, LoopStorage, MaybeTimedOut, Selector,
     io::{AsyncRead, AsyncWriteExt, WriteAllError},
     net::{NetError, TcpListener, TcpStream},
 };
@@ -215,7 +215,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         match event_loop.drain_events_without_blocking() {
             Ok(()) => {}
-            Err(Error::RootFinished) => return Ok(()),
+            Err(EventLoopError::RootFinished) => return Ok(()),
             Err(err) => return Err(err.into()),
         }
     }

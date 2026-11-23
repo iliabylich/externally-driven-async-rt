@@ -3,7 +3,7 @@ use rustix::{
     fd::AsFd,
 };
 
-use crate::{Error, EventLoop, testing::FdTestingExt};
+use crate::{EventLoop, EventLoopError, testing::FdTestingExt};
 
 pub(super) trait EventLoopExt {
     fn run_until_root_finishes(&mut self);
@@ -31,7 +31,7 @@ impl<
             );
             match self.drain_events_without_blocking() {
                 Ok(()) => {}
-                Err(Error::RootFinished) => return,
+                Err(EventLoopError::RootFinished) => return,
                 Err(err) => panic!("{err}"),
             }
         }

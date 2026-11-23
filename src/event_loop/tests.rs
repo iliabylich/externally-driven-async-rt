@@ -5,7 +5,7 @@ use core::{
     task::Poll,
 };
 
-use super::{Error, EventLoop};
+use super::{EventLoopError, EventLoop};
 
 use crate::{
     Context, LoopStorage, NotEnoughResources, Selector,
@@ -26,7 +26,7 @@ fn root_finishing_during_new_is_an_error() {
     let result = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
         ctx.dispatch(1).unwrap();
     });
-    assert_eq!(result.err(), Some(Error::RootFinished));
+    assert_eq!(result.err(), Some(EventLoopError::RootFinished));
 }
 
 #[test]
@@ -58,12 +58,12 @@ fn root_finishing_inside_a_drain() {
     event_loop.notify().unwrap();
     assert_eq!(
         event_loop.drain_events_without_blocking(),
-        Err(Error::RootFinished)
+        Err(EventLoopError::RootFinished)
     );
     assert_yields!(event_loop.events(), [2, 3]);
     assert_eq!(
         event_loop.drain_events_without_blocking(),
-        Err(Error::RootFinished)
+        Err(EventLoopError::RootFinished)
     );
 }
 
@@ -106,7 +106,7 @@ fn two_loops_on_one_thread_are_independent() {
     assert_eq!(second.drain_events_without_blocking(), Ok(()));
     assert_eq!(
         first.drain_events_without_blocking(),
-        Err(Error::RootFinished)
+        Err(EventLoopError::RootFinished)
     );
     assert_yields!(first.events(), [1]);
     assert_yields!(second.events(), []);
@@ -167,7 +167,7 @@ fn tasks_are_dropped_when_the_root_finishes() {
     event_loop.notify().unwrap();
     assert_eq!(
         event_loop.drain_events_without_blocking(),
-        Err(Error::RootFinished)
+        Err(EventLoopError::RootFinished)
     );
     let [first, mut rest @ ..] = event_loop.run_until_events::<3>();
     assert_eq!(first, 1);
@@ -206,7 +206,7 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
     event_loop.notify().unwrap();
     assert_eq!(
         event_loop.drain_events_without_blocking(),
-        Err(Error::RootFinished)
+        Err(EventLoopError::RootFinished)
     );
     assert_yields!(event_loop.events(), [1, 3]);
 }
@@ -300,6 +300,6 @@ fn a_used_storage_is_an_error_without_calling_the_closure() {
         called.set(true);
         pending()
     });
-    assert_eq!(second.err(), Some(Error::StorageAlreadyUsed));
+    assert_eq!(second.err(), Some(EventLoopError::StorageAlreadyUsed));
     assert!(!called.get());
 }

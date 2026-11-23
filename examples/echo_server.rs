@@ -10,7 +10,7 @@ use core::{net::SocketAddr, time::Duration};
 use std::os::fd::AsFd;
 
 use externally_driven_async_rt::{
-    Context, Error, EventLoop, LoopStorage, Selector,
+    Context, EventLoopError, EventLoop, LoopStorage, Selector,
     io::{AsyncRead, AsyncWriteExt, WriteAllError},
     net::{NetError, TcpListener, TcpStream},
 };
@@ -213,7 +213,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             match result {
                 Ok(()) => {}
-                Err(Error::RootFinished) => return Ok(()),
+                Err(EventLoopError::RootFinished) => return Ok(()),
                 Err(err) => return Err(err.into()),
             }
         }

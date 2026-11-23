@@ -4,7 +4,7 @@ use core::task::Poll;
 
 use rustix::fd::{AsFd, BorrowedFd};
 
-pub use self::error::Error;
+pub use self::error::EventLoopError;
 
 use crate::{context::Context, selector::Selector, storage::LoopStorage};
 
@@ -50,17 +50,17 @@ impl<
         storage: &'static LoopStorage<E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         selector: &'a mut Selector,
         f: F,
-    ) -> Result<Self, Error>
+    ) -> Result<Self, EventLoopError>
     where
         F: FnOnce(Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>) -> Fut,
         Fut: Future<Output = ()> + 'a,
     {
-        let (ctx, root) = storage.claim(selector).ok_or(Error::StorageAlreadyUsed)?;
+        let (ctx, root) = storage.claim(selector).ok_or(EventLoopError::StorageAlreadyUsed)?;
         let event_loop = Self { ctx };
         ctx.storage.tasks.spawn_root(root, ctx.claimed, f(ctx));
         match ctx.storage.tasks.run_ready() {
             Poll::Pending => {}
-            Poll::Ready(()) => return Err(Error::RootFinished),
+            Poll::Ready(()) => return Err(EventLoopError::RootFinished),
         }
         ctx.flush()?;
         Ok(event_loop)
@@ -76,10 +76,10 @@ impl<
     ///
     /// 1. epoll/kqueue returned an error
     /// 2. root future completed
-    pub fn drain_events_without_blocking(&mut self) -> Result<(), Error> {
+    pub fn drain_events_without_blocking(&mut self) -> Result<(), EventLoopError> {
         let ctx = self.ctx;
         if !ctx.storage.tasks.has_root() {
-            return Err(Error::RootFinished);
+            return Err(EventLoopError::RootFinished);
         }
         loop {
             ctx.process_selector_events()?;
@@ -89,7 +89,7 @@ impl<
             if ctx.storage.tasks.run_ready().is_ready() {
                 ctx.storage.tasks.drop_all();
                 ctx.flush()?;
-                return Err(Error::RootFinished);
+                return Err(EventLoopError::RootFinished);
             }
         }
         ctx.flush()?;
