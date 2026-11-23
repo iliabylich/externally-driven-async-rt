@@ -1,4 +1,4 @@
-use crate::{Context, const_unreachable::const_unreachable, io::AsyncRead};
+use crate::{Context, io::AsyncRead};
 
 /// Reads frames of exactly `N` bytes from an [`AsyncRead`].
 ///
@@ -49,7 +49,7 @@ impl<R: AsyncRead, const N: usize> FrameReader<R, N> {
     ) -> Result<Option<[u8; N]>, FrameReaderError<R::Error>> {
         while self.filled < N {
             let Some(rest) = self.buf.get_mut(self.filled..) else {
-                const_unreachable!("filled is below N");
+                unreachable!("filled is below N");
             };
             let len = match self.inner.read(ctx, rest).await {
                 Ok(0) if self.filled == 0 => return Ok(None),
@@ -58,7 +58,7 @@ impl<R: AsyncRead, const N: usize> FrameReader<R, N> {
                 Err(err) => return Err(FrameReaderError::Io(err)),
             };
             let Some(filled) = self.filled.checked_add(len).filter(|&filled| filled <= N) else {
-                const_unreachable!("read() reported more read bytes than the buffer has");
+                unreachable!("read() reported more read bytes than the buffer has");
             };
             self.filled = filled;
         }

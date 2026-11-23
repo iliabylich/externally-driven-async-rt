@@ -5,7 +5,6 @@ use core::{
 };
 
 use crate::{
-    const_unreachable::const_unreachable,
     conversions::u32_to_usize,
     data::queue::{Popped, Queue},
     sys::ThreadId,
@@ -80,7 +79,7 @@ impl<const N: usize> WakeQueue<N> {
     pub(crate) fn waker(&'static self, idx: u32) -> Waker {
         let idx = u32_to_usize(idx);
         if idx >= N {
-            const_unreachable!("slot {} is out of bounds", idx);
+            unreachable!("slot {idx} is out of bounds");
         }
         let ptr = core::ptr::from_ref(self)
             .wrapping_byte_add(offset_of!(Self, idxs))
@@ -100,15 +99,15 @@ impl<const N: usize> WakeQueue<N> {
         unsafe { Waker::from_raw(RawWaker::new(ptr.cast(), vtable::<N>())) }
     }
 
-    pub(crate) const fn push(&self, idx: u32) {
+    pub(crate) fn push(&self, idx: u32) {
         self.queue.push(idx);
     }
 
-    pub(crate) const fn push_root(&self) {
+    pub(crate) fn push_root(&self) {
         self.queue.push_extra();
     }
 
-    pub(crate) const fn pop(&self) -> Option<Woken> {
+    pub(crate) fn pop(&self) -> Option<Woken> {
         match self.queue.pop() {
             None => None,
             Some(Popped::Extra) => Some(Woken::Root),

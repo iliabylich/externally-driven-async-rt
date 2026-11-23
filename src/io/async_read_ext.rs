@@ -1,6 +1,6 @@
 use core::future::Future;
 
-use crate::{Context, const_unreachable::const_unreachable, io::AsyncRead};
+use crate::{Context, io::AsyncRead};
 
 /// Helper methods on top of [`AsyncRead`], implemented for every [`AsyncRead`].
 pub trait AsyncReadExt: AsyncRead {
@@ -38,7 +38,7 @@ pub trait AsyncReadExt: AsyncRead {
                     Err(err) => return Err(ReadExactError::Io(err)),
                 };
                 let Some(rest) = core::mem::take(&mut buf).get_mut(len..) else {
-                    const_unreachable!("read() reported more read bytes than the buffer has");
+                    unreachable!("read() reported more read bytes than the buffer has");
                 };
                 buf = rest;
             }

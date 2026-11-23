@@ -1,6 +1,6 @@
 use core::future::Future;
 
-use crate::{Context, const_unreachable::const_unreachable, io::AsyncWrite};
+use crate::{Context, io::AsyncWrite};
 
 /// Helper methods on top of [`AsyncWrite`], implemented for every [`AsyncWrite`].
 pub trait AsyncWriteExt: AsyncWrite {
@@ -35,11 +35,7 @@ pub trait AsyncWriteExt: AsyncWrite {
                     Err(err) => return Err(WriteAllError::Io(err)),
                 };
                 let Some(rest) = buf.get(len..) else {
-                    const_unreachable!(
-                        "write() reported {} written bytes out of {}",
-                        len,
-                        buf.len()
-                    );
+                    unreachable!("write() reported {len} written bytes out of {}", buf.len());
                 };
                 buf = rest;
             }

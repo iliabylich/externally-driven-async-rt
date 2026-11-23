@@ -1,6 +1,6 @@
 use core::cell::Cell;
 
-use crate::{const_unreachable::const_unreachable, conversions::u32_to_usize, helpers::element};
+use crate::conversions::u32_to_usize;
 
 #[must_use]
 pub(crate) struct Queue<const N: usize> {
@@ -39,54 +39,48 @@ impl<const N: usize> Queue<N> {
         }
     }
 
-    const fn indexed_link(&self, idx: u32) -> &Cell<LinkState> {
-        let Some(link) = element(&self.links, u32_to_usize(idx)) else {
-            const_unreachable!("slot {} is out of bounds", idx);
+    fn indexed_link(&self, idx: u32) -> &Cell<LinkState> {
+        let Some(link) = self.links.get(u32_to_usize(idx)) else {
+            unreachable!("slot {idx} is out of bounds");
         };
         link
     }
 
-    const fn link(&self, idx: u32) -> &Cell<LinkState> {
+    fn link(&self, idx: u32) -> &Cell<LinkState> {
         if idx == Self::EXTRA {
             return &self.extra;
         }
         self.indexed_link(idx)
     }
 
-    const fn enqueue(&self, idx: u32, link: &Cell<LinkState>) {
+    fn enqueue(&self, idx: u32, link: &Cell<LinkState>) {
         if let LinkState::Queued(_) = link.get() {
             return;
         }
-        let _ = link.replace(LinkState::Queued(None));
+        link.set(LinkState::Queued(None));
         match self.tail.get() {
-            Some(tail) => {
-                let _ = self.link(tail).replace(LinkState::Queued(Some(idx)));
-            }
-            None => {
-                let _ = self.head.replace(Some(idx));
-            }
+            Some(tail) => self.link(tail).set(LinkState::Queued(Some(idx))),
+            None => self.head.set(Some(idx)),
         }
-        let _ = self.tail.replace(Some(idx));
+        self.tail.set(Some(idx));
     }
 
-    pub(crate) const fn push(&self, idx: u32) {
+    pub(crate) fn push(&self, idx: u32) {
         self.enqueue(idx, self.indexed_link(idx));
     }
 
-    pub(crate) const fn push_extra(&self) {
+    pub(crate) fn push_extra(&self) {
         self.enqueue(Self::EXTRA, &self.extra);
     }
 
-    pub(crate) const fn pop(&self) -> Option<Popped> {
-        let Some(idx) = self.head.get() else {
-            return None;
-        };
+    pub(crate) fn pop(&self) -> Option<Popped> {
+        let idx = self.head.get()?;
         let LinkState::Queued(next) = self.link(idx).replace(LinkState::Idle) else {
-            const_unreachable!("the head slot {} is not queued", idx);
+            unreachable!("the head slot {idx} is not queued");
         };
-        let _ = self.head.replace(next);
+        self.head.set(next);
         if next.is_none() {
-            let _ = self.tail.replace(None);
+            self.tail.set(None);
         }
         if idx == Self::EXTRA {
             return Some(Popped::Extra);

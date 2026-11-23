@@ -12,12 +12,10 @@
 
 mod claimed;
 mod const_default;
-mod const_unreachable;
 mod context;
 mod conversions;
 mod data;
 mod event_loop;
-mod helpers;
 /// IO traits, implemented by streams from [`net`].
 pub mod io;
 /// A module that implements TCP/UDP/Unix sockets.

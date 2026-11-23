@@ -1,7 +1,5 @@
 use core::cell::Cell;
 
-use crate::{const_unreachable::const_unreachable, helpers::element};
-
 #[must_use]
 pub(crate) struct RingBuffer<T, const N: usize> {
     slots: [Cell<Option<T>>; N],
@@ -21,27 +19,24 @@ impl<T, const N: usize> RingBuffer<T, N> {
         }
     }
 
-    pub(crate) const fn push(&self, value: T) -> Result<(), T> {
+    pub(crate) fn push(&self, value: T) -> Result<(), T> {
         let tail = self.tail.get();
         let slot = self.slot(tail);
-        let previous = slot.replace(None);
+        let previous = slot.take();
         if previous.is_some() {
-            let none = slot.replace(previous);
-            core::mem::forget(none);
+            slot.set(previous);
             return Err(value);
         }
-        core::mem::forget(previous);
-        let none = slot.replace(Some(value));
-        core::mem::forget(none);
-        let _ = self.tail.replace(Self::next(tail));
+        slot.set(Some(value));
+        self.tail.set(Self::next(tail));
         Ok(())
     }
 
-    pub(crate) const fn pop(&self) -> Option<T> {
+    pub(crate) fn pop(&self) -> Option<T> {
         let head = self.head.get();
-        let value = self.slot(head).replace(None);
+        let value = self.slot(head).take();
         if value.is_some() {
-            let _ = self.head.replace(Self::next(head));
+            self.head.set(Self::next(head));
         }
         value
     }
@@ -50,9 +45,9 @@ impl<T, const N: usize> RingBuffer<T, N> {
         while self.pop().is_some() {}
     }
 
-    const fn slot(&self, index: usize) -> &Cell<Option<T>> {
-        let Some(slot) = element(&self.slots, index) else {
-            const_unreachable!("ring buffer indices stay below the capacity");
+    fn slot(&self, index: usize) -> &Cell<Option<T>> {
+        let Some(slot) = self.slots.get(index) else {
+            unreachable!("ring buffer indices stay below the capacity");
         };
         slot
     }

@@ -2,7 +2,7 @@ use core::cell::Cell;
 
 use rustix::fd::RawFd;
 
-use crate::{const_unreachable::const_unreachable, conversions::u32_to_usize, helpers::element};
+use crate::conversions::u32_to_usize;
 
 const MULTIPLIER: u64 = 0x517c_c1b7_2722_0a95;
 
@@ -13,13 +13,11 @@ struct Node {
 }
 
 impl Node {
-    const fn first_assigned_child(&self) -> Option<(&Cell<Option<u32>>, u32)> {
-        let mut children: &[Cell<Option<u32>>] = &self.children;
-        while let [child, rest @ ..] = children {
+    fn first_assigned_child(&self) -> Option<(&Cell<Option<u32>>, u32)> {
+        for child in &self.children {
             if let Some(idx) = child.get() {
                 return Some((child, idx));
             }
-            children = rest;
         }
         None
     }
@@ -57,7 +55,7 @@ impl<const N: usize> FdTree<N> {
         }
     }
 
-    pub(super) const fn entry(&self, key: RawFd) -> Entry<'_, N> {
+    pub(super) fn entry(&self, key: RawFd) -> Entry<'_, N> {
         let link = self.link(key);
         if let Some(idx) = link.get() {
             return Entry::Occupied(idx);
@@ -69,64 +67,57 @@ impl<const N: usize> FdTree<N> {
         })
     }
 
-    pub(super) const fn find(&self, key: RawFd) -> Option<u32> {
+    pub(super) fn find(&self, key: RawFd) -> Option<u32> {
         self.link(key).get()
     }
 
-    pub(super) const fn remove(&self, key: RawFd) -> u32 {
+    pub(super) fn remove(&self, key: RawFd) -> u32 {
         let link = self.link(key);
         let Some(idx) = link.get() else {
-            const_unreachable!("removing a key that is not in the tree")
+            unreachable!("removing a key that is not in the tree")
         };
         let node = self.node(idx);
         let replacement = self.left_most_set_leaf(idx);
-        let _ = node.key.replace(None);
+        node.key.set(None);
         let Some((replacement_parent_slot, replacement_idx)) = replacement else {
-            let _ = link.replace(None);
+            link.set(None);
             return idx;
         };
-        let _ = replacement_parent_slot.replace(None);
-        let mut node_children: &[Cell<Option<u32>>] = &node.children;
-        let mut replacement_children: &[Cell<Option<u32>>] = &self.node(replacement_idx).children;
-        while let ([node_child, node_rest @ ..], [replacement_child, replacement_rest @ ..]) =
-            (node_children, replacement_children)
-        {
-            let _ = replacement_child.replace(node_child.replace(None));
-            node_children = node_rest;
-            replacement_children = replacement_rest;
+        replacement_parent_slot.set(None);
+        let replacement_children = &self.node(replacement_idx).children;
+        for (node_child, replacement_child) in node.children.iter().zip(replacement_children) {
+            replacement_child.set(node_child.take());
         }
-        let _ = link.replace(Some(replacement_idx));
+        link.set(Some(replacement_idx));
         idx
     }
 
-    pub(super) const fn key(&self, idx: u32) -> Option<RawFd> {
+    pub(super) fn key(&self, idx: u32) -> Option<RawFd> {
         self.node(idx).key.get()
     }
 
-    const fn node(&self, idx: u32) -> &Node {
-        let Some(node) = element(&self.nodes, u32_to_usize(idx)) else {
-            const_unreachable!("node {} is out of bounds", idx)
+    fn node(&self, idx: u32) -> &Node {
+        let Some(node) = self.nodes.get(u32_to_usize(idx)) else {
+            unreachable!("node {idx} is out of bounds")
         };
         node
     }
 
-    const fn left_most_set_leaf(&self, idx: u32) -> Option<(&Cell<Option<u32>>, u32)> {
-        let Some(mut cursor) = self.node(idx).first_assigned_child() else {
-            return None;
-        };
+    fn left_most_set_leaf(&self, idx: u32) -> Option<(&Cell<Option<u32>>, u32)> {
+        let mut cursor = self.node(idx).first_assigned_child()?;
         while let Some(next) = self.node(cursor.1).first_assigned_child() {
             cursor = next;
         }
         Some(cursor)
     }
 
-    const fn link(&self, key_to_find: RawFd) -> &Cell<Option<u32>> {
+    fn link(&self, key_to_find: RawFd) -> &Cell<Option<u32>> {
         let mut hash = hash(key_to_find);
         let mut link = &self.root;
         while let Some(idx) = link.get() {
             let node = self.node(idx);
             let Some(key) = node.key.get() else {
-                const_unreachable!("a linked node has no key")
+                unreachable!("a linked node has no key")
             };
             if key == key_to_find {
                 break;
@@ -145,24 +136,20 @@ impl<const N: usize> FdTree<N> {
 }
 
 impl<const N: usize> VacantEntry<'_, N> {
-    pub(super) const fn insert(self, idx: u32) {
+    pub(super) fn insert(self, idx: u32) {
         let node = self.tree.node(idx);
         if node.key.get().is_some() {
-            const_unreachable!("{} is free but still has a key", idx);
+            unreachable!("{idx} is free but still has a key");
         }
-        let _ = node.key.replace(Some(self.key));
-        let _ = self.link.replace(Some(idx));
+        node.key.set(Some(self.key));
+        self.link.set(Some(idx));
     }
 }
 
-const fn hash(key: RawFd) -> u64 {
-    let bytes = key.to_ne_bytes();
-    let mut rest: &[u8] = &bytes;
+fn hash(key: RawFd) -> u64 {
     let mut hash: u64 = 0;
-    while let [byte, tail @ ..] = rest {
-        let byte = u64::from_le_bytes([*byte, 0, 0, 0, 0, 0, 0, 0]);
-        hash = (hash.rotate_left(5) ^ byte).wrapping_mul(MULTIPLIER);
-        rest = tail;
+    for byte in key.to_ne_bytes() {
+        hash = (hash.rotate_left(5) ^ u64::from(byte)).wrapping_mul(MULTIPLIER);
     }
     hash
 }

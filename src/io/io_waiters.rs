@@ -2,7 +2,6 @@ use rustix::fd::RawFd;
 
 use crate::{
     NotEnoughResources,
-    const_unreachable::const_unreachable,
     data::fd_hash_map::FdHashMap,
     io::IoWaiter,
     selector::{Direction, Directions, IoChange},
@@ -32,7 +31,7 @@ impl<const N: usize> IoWaiters<N> {
 
     pub(crate) fn release(&self, fd: RawFd, direction: Direction) -> Option<IoChange> {
         let Some(io) = self.map.get(fd) else {
-            const_unreachable!("releasing fd {} that is not registered", fd);
+            unreachable!("releasing fd {fd} that is not registered");
         };
         let change = io.release(fd, direction);
         if !io.is_registered() {

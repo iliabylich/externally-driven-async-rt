@@ -8,7 +8,6 @@ use rustix::{
 
 use crate::{
     const_default::ConstDefault,
-    const_unreachable::const_unreachable,
     selector::{
         Direction, Directions, EVENTS_PER_CALL, IoChange, KernelTimer, SelectorEvent, TimerChange,
     },
@@ -112,7 +111,7 @@ impl KqueueSelector {
                 return Ok(());
             }
             let Some(filled) = list.get(..len) else {
-                const_unreachable!("at most {} changes are filled", CHANGES_PER_CALL);
+                unreachable!("at most {CHANGES_PER_CALL} changes are filled");
             };
             self.submit_list(filled, &mut receipts)?;
             if len < CHANGES_PER_CALL {
@@ -169,7 +168,7 @@ impl KqueueSelector {
                 SelectorEvent::Timer
             }
             EventFilter::User { .. } => SelectorEvent::Notify,
-            _ => const_unreachable!("only read, write, timer and user filters are registered"),
+            _ => unreachable!("only read, write, timer and user filters are registered"),
         }
     }
 

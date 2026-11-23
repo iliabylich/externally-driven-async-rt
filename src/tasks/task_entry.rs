@@ -7,10 +7,7 @@ use core::{
     task::{Context, Poll, Waker},
 };
 
-use crate::{
-    claimed::Claimed, const_unreachable::const_unreachable, data::pool::VersionedIndex,
-    tasks::TaskSlot, waker_slot::WakerSlot,
-};
+use crate::{claimed::Claimed, data::pool::VersionedIndex, tasks::TaskSlot, waker_slot::WakerSlot};
 
 #[repr(C, align(16))]
 #[must_use]
@@ -44,7 +41,7 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
             );
         }
         if !matches!(self.task.get(), TaskSlot::Empty) {
-            const_unreachable!("the task entry is already occupied");
+            unreachable!("the task entry is already occupied");
         }
         let memory = NonNull::from_ref(&self.bytes).cast::<Fut>();
         let task: NonNull<dyn Future<Output = ()> + 'a> = memory;
@@ -72,8 +69,8 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
     pub(crate) fn poll(&self, cx: &mut Context<'_>) -> Option<Poll<()>> {
         let mut future = match self.task.replace(TaskSlot::Polling) {
             TaskSlot::Idle(future) => future,
-            TaskSlot::Polling => const_unreachable!("a task can't be polled re-entrantly"),
-            TaskSlot::Dropping => const_unreachable!("a task can't be polled while it drops"),
+            TaskSlot::Polling => unreachable!("a task can't be polled re-entrantly"),
+            TaskSlot::Dropping => unreachable!("a task can't be polled while it drops"),
             TaskSlot::Empty => {
                 self.task.set(TaskSlot::Empty);
                 return None;

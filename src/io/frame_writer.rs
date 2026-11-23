@@ -1,4 +1,4 @@
-use crate::{Context, const_unreachable::const_unreachable, io::AsyncWrite};
+use crate::{Context, io::AsyncWrite};
 
 /// Writes frames of exactly `N` bytes to an [`AsyncWrite`].
 ///
@@ -79,7 +79,7 @@ impl<W: AsyncWrite, const N: usize> FrameWriter<W, N> {
     ) -> Result<(), FrameWriterError<W::Error>> {
         while self.written < N {
             let Some(rest) = self.buf.get(self.written..) else {
-                const_unreachable!("written is below N");
+                unreachable!("written is below N");
             };
             let len = match self.inner.write(ctx, rest).await {
                 Ok(0) => return Err(FrameWriterError::WriteZero),
@@ -91,7 +91,7 @@ impl<W: AsyncWrite, const N: usize> FrameWriter<W, N> {
                 .checked_add(len)
                 .filter(|&written| written <= N)
             else {
-                const_unreachable!("write() reported more written bytes than the buffer has");
+                unreachable!("write() reported more written bytes than the buffer has");
             };
             self.written = written;
         }

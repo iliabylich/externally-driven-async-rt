@@ -6,7 +6,6 @@ use core::{
 
 use crate::{
     NotEnoughResources,
-    const_unreachable::const_unreachable,
     data::{
         indexed_min_heap::IndexedMinHeap,
         pool::{ObjectPool, VersionedIndex},
@@ -54,9 +53,9 @@ impl<const N: usize> Timers<N> {
         (self.now)()
     }
 
-    const fn entry(&self, index: TimerIndex) -> &TimerEntry {
+    fn entry(&self, index: TimerIndex) -> &TimerEntry {
         let Some(timer) = self.pool.get_versioned(index) else {
-            const_unreachable!("stale timer {}/{}", index.idx, index.version);
+            unreachable!("stale timer {}/{}", index.idx, index.version);
         };
         timer
     }
@@ -133,7 +132,7 @@ impl<const N: usize> Timers<N> {
         self.armed.remove(idx);
         let (_, timer) = self.pool.get(idx);
         let Some(waker) = timer.waker.take() else {
-            const_unreachable!("armed timer {} has no waker", idx);
+            unreachable!("armed timer {idx} has no waker");
         };
         Some(waker)
     }

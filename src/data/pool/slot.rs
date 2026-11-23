@@ -22,12 +22,11 @@ impl Slot {
         self.version.get()
     }
 
-    const fn reset(&self, used: bool) -> u16 {
-        self.used.replace(used);
-        self.version.replace(self.version.get().wrapping_add(1));
-        self.prev.replace(None);
-        self.next.replace(None);
-        self.version.get()
+    fn reset(&self, used: bool) {
+        self.used.set(used);
+        self.version.set(self.version.get().wrapping_add(1));
+        self.prev.set(None);
+        self.next.set(None);
     }
 
     pub(super) const fn const_list<const N: usize>() -> [Self; N] {
@@ -77,7 +76,7 @@ pub(super) struct FreeSlotView<'a, T> {
 }
 
 impl<'a, T> FreeSlotView<'a, T> {
-    pub(super) const fn occupy(self) -> UsedSlotView<'a, T> {
+    pub(super) fn occupy(self) -> UsedSlotView<'a, T> {
         self.slot.reset(true);
         let Self { idx, slot, value } = self;
         UsedSlotView { idx, value, slot }
@@ -87,12 +86,8 @@ impl<'a, T> FreeSlotView<'a, T> {
         self.slot.next.get()
     }
 
-    pub(super) const fn link(prev: &Self, next: Option<&Self>) {
-        let next_idx = match next {
-            Some(next) => Some(next.idx),
-            None => None,
-        };
-        let _ = prev.slot.next.replace(next_idx);
+    pub(super) fn link(prev: &Self, next: Option<&Self>) {
+        prev.slot.next.set(next.map(|next| next.idx));
     }
 }
 
@@ -103,29 +98,18 @@ pub(super) struct UsedSlotView<'a, T> {
 }
 
 impl<'a, T> UsedSlotView<'a, T> {
-    pub(super) const fn free(self) -> FreeSlotView<'a, T> {
+    pub(super) fn free(self) -> FreeSlotView<'a, T> {
         self.slot.reset(false);
-
-        FreeSlotView {
-            idx: self.idx,
-            value: self.value,
-            slot: self.slot,
-        }
+        let Self { idx, value, slot } = self;
+        FreeSlotView { idx, value, slot }
     }
-    pub(super) const fn link(prev: Option<&Self>, next: Option<&Self>) {
-        let prev_idx = match prev {
-            Some(prev) => Some(prev.idx),
-            None => None,
-        };
-        let next_idx = match next {
-            Some(next) => Some(next.idx),
-            None => None,
-        };
+
+    pub(super) fn link(prev: Option<&Self>, next: Option<&Self>) {
         if let Some(prev) = prev {
-            let _ = prev.slot.next.replace(next_idx);
+            prev.slot.next.set(next.map(|next| next.idx));
         }
         if let Some(next) = next {
-            let _ = next.slot.prev.replace(prev_idx);
+            next.slot.prev.set(prev.map(|prev| prev.idx));
         }
     }
 
