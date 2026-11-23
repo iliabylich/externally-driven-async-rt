@@ -1,10 +1,15 @@
-use rustix::fd::RawFd;
+use core::mem::DropGuard;
+
+use rustix::{
+    fd::{AsRawFd, BorrowedFd, RawFd},
+    io::Errno,
+};
 
 use crate::{
     NotEnoughResources,
     data::fd_hash_map::FdHashMap,
     io::IoWaiter,
-    selector::{Direction, Directions, IoChange},
+    selector::{Direction, Directions, IoChange, Selector},
 };
 
 #[must_use]
@@ -27,6 +32,44 @@ impl<const N: usize> IoWaiters<N> {
         let io = self.map.get_or_insert(fd).ok_or(NotEnoughResources::FDs)?;
         io.register(direction);
         Ok(io)
+    }
+
+    pub(crate) async fn ready(
+        &self,
+        selector: &Selector,
+        fd: BorrowedFd<'_>,
+        direction: Direction,
+    ) -> Result<(), NotEnoughResources> {
+        let fd = fd.as_raw_fd();
+        let io = self.register(fd, direction)?;
+        let _registration = DropGuard::new((), |()| self.release_now(selector, fd, direction));
+        io.wait(direction).await;
+        Ok(())
+    }
+
+    pub(crate) async fn retry<T>(
+        &self,
+        selector: &Selector,
+        fd: BorrowedFd<'_>,
+        direction: Direction,
+        mut op: impl FnMut() -> rustix::io::Result<T>,
+    ) -> Result<rustix::io::Result<T>, NotEnoughResources> {
+        let fd = fd.as_raw_fd();
+        let io = self.register(fd, direction)?;
+        let _registration = DropGuard::new((), |()| self.release_now(selector, fd, direction));
+        loop {
+            match op() {
+                Err(Errno::INTR) => {}
+                Err(Errno::AGAIN) => io.wait(direction).await,
+                result => return Ok(result),
+            }
+        }
+    }
+
+    fn release_now(&self, selector: &Selector, fd: RawFd, direction: Direction) {
+        if let Some(change) = self.release(fd, direction) {
+            let _ = selector.apply_now(change);
+        }
     }
 
     pub(super) fn release(&self, fd: RawFd, direction: Direction) -> Option<IoChange> {

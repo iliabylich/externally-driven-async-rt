@@ -15,7 +15,7 @@ use rustix::{
 
 use crate::{
     NotEnoughResources,
-    io::{IoRegistration, IoWaiters},
+    io::IoWaiters,
     net::NetError,
     selector::{Direction, Selector},
     strace::{syscall, syscall_end, syscall_start},
@@ -133,9 +133,9 @@ impl Socket {
             Err(Errno::INPROGRESS | Errno::INTR) => {}
             Err(errno) => return Err(errno.into()),
         }
-        IoRegistration::new(io_waiters, selector, socket.0.as_fd(), Direction::Write)?
-            .wait()
-            .await;
+        io_waiters
+            .ready(selector, socket.0.as_fd(), Direction::Write)
+            .await?;
         syscall_start!("getsockopt", socket.0, "SOL_SOCKET", "SO_ERROR");
         let result = socket_error(&socket.0);
         syscall_end!(result; result.ok());
@@ -294,9 +294,7 @@ impl Socket {
         selector: &Selector,
         direction: Direction,
     ) -> Result<(), NotEnoughResources> {
-        let registration = IoRegistration::new(io_waiters, selector, self.0.as_fd(), direction)?;
-        registration.wait().await;
-        Ok(())
+        io_waiters.ready(selector, self.0.as_fd(), direction).await
     }
 
     pub(crate) fn try_recv(&self, buf: &mut [u8]) -> rustix::io::Result<usize> {
@@ -335,14 +333,10 @@ impl Socket {
         direction: Direction,
         mut op: F,
     ) -> Result<T, NetError> {
-        let registration = IoRegistration::new(io_waiters, selector, self.0.as_fd(), direction)?;
-        loop {
-            match op(&self.0) {
-                Err(Errno::INTR) => {}
-                Err(Errno::AGAIN) => registration.wait().await,
-                result => return result.map_err(NetError::Os),
-            }
-        }
+        let result = io_waiters
+            .retry(selector, self.0.as_fd(), direction, || op(&self.0))
+            .await?;
+        Ok(result?)
     }
 }
 

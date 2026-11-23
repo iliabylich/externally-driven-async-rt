@@ -4,11 +4,11 @@ mod async_write;
 mod async_write_ext;
 mod frame_reader;
 mod frame_writer;
-mod io_registration;
 mod io_waiter;
 mod io_waiters;
 
 use self::io_waiter::IoWaiter;
+pub(crate) use self::io_waiters::IoWaiters;
 pub use self::{
     async_read::AsyncRead,
     async_read_ext::{AsyncReadExt, ReadExactError},
@@ -17,7 +17,6 @@ pub use self::{
     frame_reader::{FrameReader, FrameReaderError},
     frame_writer::{FrameWriter, FrameWriterError},
 };
-pub(crate) use self::{io_registration::IoRegistration, io_waiters::IoWaiters};
 
 #[cfg(test)]
 mod tests;

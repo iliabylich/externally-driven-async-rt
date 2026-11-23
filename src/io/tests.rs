@@ -4,14 +4,10 @@ use core::{
     task::{Poll, Waker},
 };
 
-use rustix::{
-    fd::{AsFd, OwnedFd},
-    io::Errno,
-};
+use rustix::fd::{AsFd, OwnedFd};
 
 use crate::{
     Context, LoopStorage, Selector,
-    io::IoRegistration,
     selector::Direction,
     testing::{
         EventLoopTestingExt, FdTestingExt, TestContext, TestLoop, TestStorage, assert_yields,
@@ -32,35 +28,23 @@ async fn read_some<
     fd: &OwnedFd,
 ) -> rustix::io::Result<usize> {
     let mut buf = [0; 64];
-    let registration = IoRegistration::new(
-        &ctx.storage.io_waiters,
-        ctx.selector,
-        fd.as_fd(),
-        Direction::Read,
-    )
-    .unwrap();
-    loop {
-        match rustix::io::read(fd, &mut buf) {
-            Err(Errno::AGAIN) => registration.wait().await,
-            result => return result,
-        }
-    }
+    ctx.storage
+        .io_waiters
+        .retry(ctx.selector, fd.as_fd(), Direction::Read, || {
+            rustix::io::read(fd, &mut buf)
+        })
+        .await
+        .unwrap()
 }
 
 async fn write_some(ctx: &TestContext<'_>, fd: &OwnedFd) -> rustix::io::Result<usize> {
-    let registration = IoRegistration::new(
-        &ctx.storage.io_waiters,
-        ctx.selector,
-        fd.as_fd(),
-        Direction::Write,
-    )
-    .unwrap();
-    loop {
-        match rustix::io::write(fd, b"x") {
-            Err(Errno::AGAIN) => registration.wait().await,
-            result => return result,
-        }
-    }
+    ctx.storage
+        .io_waiters
+        .retry(ctx.selector, fd.as_fd(), Direction::Write, || {
+            rustix::io::write(fd, b"x")
+        })
+        .await
+        .unwrap()
 }
 
 #[test]
@@ -180,19 +164,15 @@ fn dropping_a_pending_wait_deregisters() {
     };
     let (rx, tx) = socketpair();
     let mut cx = core::task::Context::from_waker(Waker::noop());
-    let registration = IoRegistration::new(
-        &ctx.storage.io_waiters,
-        ctx.selector,
-        rx.as_fd(),
-        Direction::Read,
-    )
-    .unwrap();
     {
-        let mut wait = pin!(registration.wait());
-        assert_eq!(wait.as_mut().poll(&mut cx), Poll::Pending);
+        let mut ready = pin!(ctx.storage.io_waiters.ready(
+            ctx.selector,
+            rx.as_fd(),
+            Direction::Read
+        ));
+        assert_eq!(ready.as_mut().poll(&mut cx), Poll::Pending);
         ctx.flush().unwrap();
     }
-    drop(registration);
     assert_eq!(ctx.storage.io_waiters.iter().count(), 0);
     rustix::io::write(&tx, b"abc").unwrap();
     assert!(!selector.as_fd().is_readable_now());
@@ -208,21 +188,18 @@ fn wait_survives_a_spurious_poll() {
     };
     let (rx, tx) = socketpair();
     let mut cx = core::task::Context::from_waker(Waker::noop());
-    let registration = IoRegistration::new(
-        &ctx.storage.io_waiters,
-        ctx.selector,
-        rx.as_fd(),
-        Direction::Read,
-    )
-    .unwrap();
-    let mut wait = pin!(registration.wait());
-    assert_eq!(wait.as_mut().poll(&mut cx), Poll::Pending);
-    assert_eq!(wait.as_mut().poll(&mut cx), Poll::Pending);
+    let mut ready = pin!(
+        ctx.storage
+            .io_waiters
+            .ready(ctx.selector, rx.as_fd(), Direction::Read)
+    );
+    assert_eq!(ready.as_mut().poll(&mut cx), Poll::Pending);
+    assert_eq!(ready.as_mut().poll(&mut cx), Poll::Pending);
     ctx.flush().unwrap();
     rustix::io::write(&tx, b"abc").unwrap();
     assert!(selector.as_fd().wait_readable_blocking(1000));
     ctx.process_selector_events().unwrap();
-    assert_eq!(wait.as_mut().poll(&mut cx), Poll::Ready(()));
+    assert_eq!(ready.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
 }
 
 #[test]
@@ -235,36 +212,29 @@ fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
     };
     let mut cx = core::task::Context::from_waker(Waker::noop());
     let (old_rx, _old_tx) = socketpair();
-    let old = IoRegistration::new(
-        &ctx.storage.io_waiters,
-        ctx.selector,
-        old_rx.as_fd(),
-        Direction::Read,
-    )
-    .unwrap();
     {
-        let mut wait = pin!(old.wait());
-        assert_eq!(wait.as_mut().poll(&mut cx), Poll::Pending);
+        let mut old = pin!(ctx.storage.io_waiters.ready(
+            ctx.selector,
+            old_rx.as_fd(),
+            Direction::Read
+        ));
+        assert_eq!(old.as_mut().poll(&mut cx), Poll::Pending);
         ctx.flush().unwrap();
     }
-    drop(old);
     drop(old_rx);
 
     let (rx, tx) = socketpair();
-    let registration = IoRegistration::new(
-        &ctx.storage.io_waiters,
-        ctx.selector,
-        rx.as_fd(),
-        Direction::Read,
-    )
-    .unwrap();
-    let mut wait = pin!(registration.wait());
-    assert_eq!(wait.as_mut().poll(&mut cx), Poll::Pending);
+    let mut ready = pin!(
+        ctx.storage
+            .io_waiters
+            .ready(ctx.selector, rx.as_fd(), Direction::Read)
+    );
+    assert_eq!(ready.as_mut().poll(&mut cx), Poll::Pending);
     ctx.flush().unwrap();
     rustix::io::write(&tx, b"abc").unwrap();
     assert!(selector.as_fd().wait_readable_blocking(1000));
     ctx.process_selector_events().unwrap();
-    assert_eq!(wait.as_mut().poll(&mut cx), Poll::Ready(()));
+    assert_eq!(ready.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
 }
 
 #[test]
@@ -278,20 +248,17 @@ fn sequential_registrations_reuse_the_slot() {
     let (rx, tx) = socketpair();
     let mut cx = core::task::Context::from_waker(Waker::noop());
     for _ in 0..3 {
-        let registration = IoRegistration::new(
-            &ctx.storage.io_waiters,
+        let mut ready = pin!(ctx.storage.io_waiters.ready(
             ctx.selector,
             rx.as_fd(),
-            Direction::Read,
-        )
-        .unwrap();
-        let mut wait = pin!(registration.wait());
-        assert_eq!(wait.as_mut().poll(&mut cx), Poll::Pending);
+            Direction::Read
+        ));
+        assert_eq!(ready.as_mut().poll(&mut cx), Poll::Pending);
         ctx.flush().unwrap();
         rustix::io::write(&tx, b"x").unwrap();
         assert!(selector.as_fd().wait_readable_blocking(1000));
         ctx.process_selector_events().unwrap();
-        assert_eq!(wait.as_mut().poll(&mut cx), Poll::Ready(()));
+        assert_eq!(ready.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
     }
     assert_eq!(ctx.storage.io_waiters.iter().count(), 0);
 }

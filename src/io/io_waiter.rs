@@ -1,4 +1,4 @@
-use core::cell::Cell;
+use core::{cell::Cell, mem::DropGuard, task::Poll};
 
 use rustix::fd::RawFd;
 
@@ -49,6 +49,22 @@ impl IoWaiter {
             Direction::Read => &self.reader,
             Direction::Write => &self.writer,
         }
+    }
+
+    pub(super) async fn wait(&self, direction: Direction) {
+        let waker = self.waker(direction);
+        let guard = DropGuard::new(waker, |waker: &WakerSlot| drop(waker.take()));
+        let mut stored = false;
+        core::future::poll_fn(|cx| {
+            if stored && !waker.is_set() {
+                return Poll::Ready(());
+            }
+            waker.store(cx.waker());
+            stored = true;
+            Poll::Pending
+        })
+        .await;
+        DropGuard::dismiss(guard);
     }
 
     pub(super) fn wake(&self, ready: Directions) {

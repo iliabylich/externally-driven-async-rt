@@ -10,10 +10,7 @@ use rustix::{
     net::{AddressFamily, SocketFlags, SocketType},
 };
 
-use crate::{
-    LoopStorage, Selector, io::IoRegistration, selector::Direction, testing::counting_waker,
-    time::Instant,
-};
+use crate::{LoopStorage, Selector, selector::Direction, testing::counting_waker, time::Instant};
 
 type SmallStorage = LoopStorage<(), 1, 1, 64, 0, 2, 2>;
 
@@ -35,17 +32,14 @@ fn clearing_drops_live_wakers() {
         None,
     )
     .unwrap();
-    let registration = IoRegistration::new(
-        &ctx.storage.io_waiters,
-        ctx.selector,
-        fd.as_fd(),
-        Direction::Read,
-    )
-    .unwrap();
     let io_waker = counting_waker(&drops);
-    let mut wait = pin!(registration.wait());
+    let mut ready = pin!(
+        ctx.storage
+            .io_waiters
+            .ready(ctx.selector, fd.as_fd(), Direction::Read)
+    );
     assert_eq!(
-        wait.as_mut().poll(&mut Context::from_waker(&io_waker)),
+        ready.as_mut().poll(&mut Context::from_waker(&io_waker)),
         Poll::Pending
     );
     drop(io_waker);
