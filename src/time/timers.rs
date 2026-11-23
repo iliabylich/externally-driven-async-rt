@@ -23,13 +23,13 @@ pub(crate) struct Timers<const N: usize> {
 }
 
 #[must_use]
-pub(crate) struct TimerEntry {
+struct TimerEntry {
     deadline: Cell<Instant>,
     seq: Cell<u64>,
     waker: WakerSlot,
 }
 
-pub(crate) type TimerIndex = VersionedIndex<TimerEntry>;
+type TimerIndex = VersionedIndex<TimerEntry>;
 
 impl<const N: usize> Timers<N> {
     pub(crate) const fn new(now: fn() -> Instant) -> Self {
@@ -60,11 +60,7 @@ impl<const N: usize> Timers<N> {
         timer
     }
 
-    pub(crate) fn alloc(
-        &self,
-        deadline: Instant,
-        waker: &Waker,
-    ) -> Result<TimerIndex, NotEnoughResources> {
+    fn alloc(&self, deadline: Instant, waker: &Waker) -> Result<TimerIndex, NotEnoughResources> {
         let (index, timer) = self.pool.alloc().ok_or(NotEnoughResources::Timers)?;
         let seq = self.next_seq.get();
         self.next_seq.set(seq.wrapping_add(1));
@@ -76,25 +72,27 @@ impl<const N: usize> Timers<N> {
     }
 
     pub(crate) async fn sleep_until(&self, deadline: Instant) -> Result<(), NotEnoughResources> {
-        if self.now() >= deadline {
-            return Ok(());
-        }
-        let index =
-            core::future::poll_fn(|cx| Poll::Ready(self.alloc(deadline, cx.waker()))).await?;
-        let guard = DropGuard::new(index, |index| self.release(index));
+        let index = Cell::new(None);
+        let _guard = DropGuard::new(&index, |index: &Cell<Option<TimerIndex>>| {
+            if let Some(index) = index.get() {
+                self.release(index);
+            }
+        });
         core::future::poll_fn(|cx| {
             if self.now() >= deadline {
-                return Poll::Ready(());
+                return Poll::Ready(Ok(()));
             }
-            self.set_waker(index, cx.waker());
+            if let Some(index) = index.get() {
+                self.set_waker(index, cx.waker());
+                return Poll::Pending;
+            }
+            index.set(Some(self.alloc(deadline, cx.waker())?));
             Poll::Pending
         })
-        .await;
-        drop(guard);
-        Ok(())
+        .await
     }
 
-    pub(crate) fn set_waker(&self, index: TimerIndex, waker: &Waker) {
+    fn set_waker(&self, index: TimerIndex, waker: &Waker) {
         let timer = self.entry(index);
         timer.waker.store(waker);
         if !self.armed.contains(index.idx) {
@@ -103,7 +101,7 @@ impl<const N: usize> Timers<N> {
         }
     }
 
-    pub(crate) fn release(&self, index: TimerIndex) {
+    fn release(&self, index: TimerIndex) {
         let timer = self.entry(index);
         timer.waker.take();
         if self.armed.contains(index.idx) {

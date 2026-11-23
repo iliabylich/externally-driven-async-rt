@@ -3,6 +3,7 @@ use core::{
     future::Future,
     pin::pin,
     task::{Context, Poll},
+    time::Duration,
 };
 
 use rustix::{
@@ -23,7 +24,15 @@ fn clearing_drops_live_wakers() {
         STORAGE.claim(&selector).unwrap().0
     };
     let timer_waker = counting_waker(&drops);
-    let _ = ctx.storage.timers.alloc(Instant::now(), &timer_waker);
+    let mut sleep = pin!(
+        ctx.storage
+            .timers
+            .sleep_until(Instant::now().saturating_add(Duration::from_secs(60)))
+    );
+    assert_eq!(
+        sleep.as_mut().poll(&mut Context::from_waker(&timer_waker)),
+        Poll::Pending
+    );
     drop(timer_waker);
     let (fd, _peer) = rustix::net::socketpair(
         AddressFamily::UNIX,
