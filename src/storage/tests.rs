@@ -1,6 +1,19 @@
-use core::cell::Cell;
+use core::{
+    cell::Cell,
+    future::Future,
+    pin::pin,
+    task::{Context, Poll},
+};
 
-use crate::{LoopStorage, Selector, selector::Direction, testing::counting_waker, time::Instant};
+use rustix::{
+    fd::AsFd,
+    net::{AddressFamily, SocketFlags, SocketType},
+};
+
+use crate::{
+    LoopStorage, Selector, io::IoRegistration, selector::Direction, testing::counting_waker,
+    time::Instant,
+};
 
 type SmallStorage = LoopStorage<(), 1, 1, 64, 0, 2, 2>;
 
@@ -15,9 +28,26 @@ fn clearing_drops_live_wakers() {
     let timer_waker = counting_waker(&drops);
     let _ = ctx.storage.timers.alloc(Instant::now(), &timer_waker);
     drop(timer_waker);
-    let io = ctx.storage.io_waiters.register(3, Direction::Read).unwrap();
+    let (fd, _peer) = rustix::net::socketpair(
+        AddressFamily::UNIX,
+        SocketType::STREAM,
+        SocketFlags::empty(),
+        None,
+    )
+    .unwrap();
+    let registration = IoRegistration::new(
+        &ctx.storage.io_waiters,
+        ctx.selector,
+        fd.as_fd(),
+        Direction::Read,
+    )
+    .unwrap();
     let io_waker = counting_waker(&drops);
-    io.waker(Direction::Read).store(&io_waker);
+    let mut wait = pin!(registration.wait());
+    assert_eq!(
+        wait.as_mut().poll(&mut Context::from_waker(&io_waker)),
+        Poll::Pending
+    );
     drop(io_waker);
     assert_eq!(drops.get(), 2);
     ctx.clear();

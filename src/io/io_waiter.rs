@@ -8,7 +8,7 @@ use crate::{
 };
 
 #[must_use]
-pub(crate) struct IoWaiter {
+pub(super) struct IoWaiter {
     registered: Cell<Directions>,
     armed: Cell<Directions>,
     reader: WakerSlot,
@@ -16,7 +16,7 @@ pub(crate) struct IoWaiter {
 }
 
 impl IoWaiter {
-    pub(crate) const fn new() -> Self {
+    pub(super) const fn new() -> Self {
         Self {
             registered: Cell::new(Directions::Empty),
             armed: Cell::new(Directions::Empty),
@@ -25,12 +25,12 @@ impl IoWaiter {
         }
     }
 
-    pub(crate) fn register(&self, direction: Direction) {
+    pub(super) fn register(&self, direction: Direction) {
         self.waker(direction).take();
         self.registered.set(self.registered.get().with(direction));
     }
 
-    pub(crate) fn release(&self, fd: RawFd, direction: Direction) -> Option<IoChange> {
+    pub(super) fn release(&self, fd: RawFd, direction: Direction) -> Option<IoChange> {
         self.waker(direction).take();
         self.registered
             .set(self.registered.get().without(direction));
@@ -40,18 +40,18 @@ impl IoWaiter {
         })
     }
 
-    pub(crate) const fn is_registered(&self) -> bool {
+    pub(super) const fn is_registered(&self) -> bool {
         !matches!(self.registered.get(), Directions::Empty)
     }
 
-    pub(crate) const fn waker(&self, direction: Direction) -> &WakerSlot {
+    pub(super) const fn waker(&self, direction: Direction) -> &WakerSlot {
         match direction {
             Direction::Read => &self.reader,
             Direction::Write => &self.writer,
         }
     }
 
-    pub(crate) fn wake(&self, ready: Directions) {
+    pub(super) fn wake(&self, ready: Directions) {
         self.armed.set(Directions::Empty);
         for direction in [Direction::Read, Direction::Write] {
             if ready.contains(direction)
@@ -62,15 +62,15 @@ impl IoWaiter {
         }
     }
 
-    pub(crate) fn pending_change(&self, fd: RawFd) -> Option<IoChange> {
+    pub(super) fn pending_change(&self, fd: RawFd) -> Option<IoChange> {
         (self.interest() != self.armed.get()).then(|| self.change(fd))
     }
 
-    pub(crate) const fn mark_flushed(&self) {
+    pub(super) const fn mark_flushed(&self) {
         let _ = self.armed.replace(self.interest());
     }
 
-    pub(crate) fn drop_wakers(&self) {
+    pub(super) fn drop_wakers(&self) {
         self.reader.take();
         self.writer.take();
     }

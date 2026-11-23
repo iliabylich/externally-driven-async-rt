@@ -13,8 +13,6 @@ pub(crate) trait EventLoopTestingExt<E> {
     fn peer_read_exact(&mut self, peer: impl AsFd, buf: &mut [u8]);
 
     fn run_until_events<const N: usize>(&mut self) -> [E; N];
-
-    fn registrations(&self) -> usize;
 }
 
 impl<
@@ -87,9 +85,5 @@ impl<
                 assert_eq!(self.drain_events_without_blocking(), Ok(()));
             }
         })
-    }
-
-    fn registrations(&self) -> usize {
-        self.ctx.storage.io_waiters.iter().count()
     }
 }

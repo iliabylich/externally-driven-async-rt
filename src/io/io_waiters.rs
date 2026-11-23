@@ -19,7 +19,7 @@ impl<const N: usize> IoWaiters<N> {
         }
     }
 
-    pub(crate) fn register(
+    pub(super) fn register(
         &self,
         fd: RawFd,
         direction: Direction,
@@ -29,7 +29,7 @@ impl<const N: usize> IoWaiters<N> {
         Ok(io)
     }
 
-    pub(crate) fn release(&self, fd: RawFd, direction: Direction) -> Option<IoChange> {
+    pub(super) fn release(&self, fd: RawFd, direction: Direction) -> Option<IoChange> {
         let Some(io) = self.map.get(fd) else {
             unreachable!("releasing fd {fd} that is not registered");
         };
@@ -62,7 +62,7 @@ impl<const N: usize> IoWaiters<N> {
         }
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (RawFd, &IoWaiter)> {
+    pub(super) fn iter(&self) -> impl Iterator<Item = (RawFd, &IoWaiter)> {
         self.map.iter()
     }
 }

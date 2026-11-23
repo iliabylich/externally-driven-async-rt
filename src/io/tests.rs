@@ -81,14 +81,14 @@ fn read_waits_until_the_peer_writes() {
         },
     )
     .unwrap();
-    assert_eq!(event_loop.registrations(), 1);
+    assert_eq!(event_loop.ctx.storage.io_waiters.iter().count(), 1);
     assert!(!event_loop.is_readable_now());
 
     rustix::io::write(&tx, b"abc").unwrap();
     assert!(event_loop.wait_readable_blocking(1000));
     assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
     assert_yields!(event_loop.events(), [3]);
-    assert_eq!(event_loop.registrations(), 0);
+    assert_eq!(event_loop.ctx.storage.io_waiters.iter().count(), 0);
 }
 
 #[test]
@@ -154,7 +154,7 @@ fn read_and_write_wait_on_one_fd_at_the_same_time() {
         },
     )
     .unwrap();
-    assert_eq!(event_loop.registrations(), 1);
+    assert_eq!(event_loop.ctx.storage.io_waiters.iter().count(), 1);
     assert!(!event_loop.is_readable_now());
 
     rustix::io::write(&b, b"abc").unwrap();
