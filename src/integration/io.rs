@@ -1,4 +1,5 @@
 use core::{
+    cell::Cell,
     future::{Future, pending, poll_fn},
     pin::pin,
     task::{Poll, Waker},
@@ -7,7 +8,7 @@ use core::{
 use rustix::fd::{AsFd, OwnedFd};
 
 use crate::{
-    Context, EventLoop, LoopStorage, Selector,
+    Context, EventLoop, LoopStorage, Selector, select2,
     selector::Direction,
     testing::{FdTestingExt, assert_yields},
 };
@@ -163,31 +164,31 @@ fn dropping_a_pending_wait_deregisters() {
 #[test]
 fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
     static STORAGE: Storage<()> = Storage::new();
-    let selector = Selector::new().unwrap();
-    let ctx = STORAGE.claim(&selector).unwrap().0;
-    let mut cx = core::task::Context::from_waker(Waker::noop());
-    let (old_rx, _old_tx) = socketpair();
-    {
-        let mut old = pin!(ctx.storage.io_waiters.ready(
-            ctx.selector,
-            old_rx.as_fd(),
-            Direction::Read
-        ));
-        assert_eq!(old.as_mut().poll(&mut cx), Poll::Pending);
-        ctx.flush().unwrap();
-    }
-    drop(old_rx);
+    let new_tx = Cell::new(None);
+    let mut selector = Selector::new().unwrap();
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
+        let (old_rx, _old_tx) = socketpair();
+        let old = ctx
+            .storage
+            .io_waiters
+            .ready(ctx.selector, old_rx.as_fd(), Direction::Read);
+        let _ = select2(old, ctx.notified()).await;
+        drop(old_rx);
 
-    let (rx, tx) = socketpair();
-    let mut ready = pin!(
+        let (rx, tx) = socketpair();
+        new_tx.set(Some(tx));
         ctx.storage
             .io_waiters
             .ready(ctx.selector, rx.as_fd(), Direction::Read)
-    );
-    assert_eq!(ready.as_mut().poll(&mut cx), Poll::Pending);
-    ctx.flush().unwrap();
+            .await
+            .unwrap();
+        ctx.dispatch(()).unwrap();
+    })
+    .unwrap();
+    event_loop.notify().unwrap();
+    assert_eq!(event_loop.drain_events_without_blocking(), Ok(()));
+    let tx = new_tx.take().unwrap();
     rustix::io::write(&tx, b"abc").unwrap();
-    assert!(selector.as_fd().wait_readable_blocking(1000));
-    ctx.process_selector_events().unwrap();
-    assert_eq!(ready.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
+    event_loop.run_until_root_finishes();
+    assert_yields!(event_loop.events(), [()]);
 }

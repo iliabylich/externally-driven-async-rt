@@ -194,8 +194,8 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
     }
 
     pub(crate) fn drop_all(&self) {
-        self.root.drop_idle();
-        while let Some((id, entry)) = self.pool.iter().find(|(_, entry)| entry.drop_idle()) {
+        self.root.drop_future();
+        while let Some((id, entry)) = self.pool.iter().find(|(_, entry)| entry.drop_future()) {
             self.free(id, entry);
         }
     }

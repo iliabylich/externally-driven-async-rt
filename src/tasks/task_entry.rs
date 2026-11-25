@@ -1,7 +1,7 @@
 use core::{
     cell::{Cell, UnsafeCell},
     future::Future,
-    mem::MaybeUninit,
+    mem::{DropGuard, MaybeUninit},
     pin::Pin,
     ptr::NonNull,
     task::{Context, Poll, Waker},
@@ -63,26 +63,32 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
     }
 
     pub(super) const fn has_task(&self) -> bool {
-        matches!(self.task.get(), TaskSlot::Idle(_) | TaskSlot::Polling)
+        matches!(
+            self.task.get(),
+            TaskSlot::Idle(_) | TaskSlot::Polling | TaskSlot::Panicked(_)
+        )
     }
 
     pub(super) fn poll(&self, cx: &mut Context<'_>) -> Option<Poll<()>> {
         let mut future = match self.task.replace(TaskSlot::Polling) {
             TaskSlot::Idle(future) => future,
             TaskSlot::Polling => unreachable!("a task can't be polled re-entrantly"),
+            TaskSlot::Panicked(_) => unreachable!("a task can't be polled after it panicked"),
             TaskSlot::Dropping => unreachable!("a task can't be polled while it drops"),
             TaskSlot::Empty => {
                 self.task.set(TaskSlot::Empty);
                 return None;
             }
         };
+        let panicked = DropGuard::new(&self.task, move |task: &Cell<TaskSlot>| {
+            task.set(TaskSlot::Panicked(future));
+        });
         // SAFETY: the future was written by `write` into `bytes` of a `'static` entry, so it never
         // moves and pinning holds. The slot is `Polling` until the future is put back or dropped,
         // so nothing else accesses it.
-        if unsafe { Pin::new_unchecked(future.as_mut()) }
-            .poll(cx)
-            .is_pending()
-        {
+        let poll = unsafe { Pin::new_unchecked(future.as_mut()) }.poll(cx);
+        DropGuard::dismiss(panicked);
+        if poll.is_pending() {
             self.task.set(TaskSlot::Idle(future));
             return Some(Poll::Pending);
         }
@@ -94,14 +100,15 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
         Some(Poll::Ready(()))
     }
 
-    pub(super) fn drop_idle(&self) -> bool {
-        let TaskSlot::Idle(future) = self.task.get() else {
+    pub(super) fn drop_future(&self) -> bool {
+        let (TaskSlot::Idle(future) | TaskSlot::Panicked(future)) = self.task.get() else {
             return false;
         };
         self.task.set(TaskSlot::Dropping);
-        // SAFETY: the future was written by `write` and the slot was `Idle`, so it is alive and
-        // not being polled. The slot is `Dropping` while it drops, so it is dropped exactly once
-        // and nothing reuses `bytes` meanwhile.
+        // SAFETY: the future was written by `write` and the slot was `Idle` or `Panicked`, so it
+        // is alive and not being polled (a future whose poll panicked may still be dropped). The
+        // slot is `Dropping` while it drops, so it is dropped exactly once and nothing reuses
+        // `bytes` meanwhile.
         unsafe { core::ptr::drop_in_place(future.as_ptr()) };
         self.task.set(TaskSlot::Empty);
         true
@@ -137,7 +144,7 @@ mod tests {
         static ENTRY: TaskEntry<64> = TaskEntry::new();
         static DROPPED: AtomicBool = AtomicBool::new(false);
         ENTRY.write(claimed_forever(), FlagOnDrop::new(&DROPPED));
-        assert!(ENTRY.drop_idle());
+        assert!(ENTRY.drop_future());
         assert!(DROPPED.load(Relaxed));
     }
 
@@ -145,8 +152,8 @@ mod tests {
     fn dropping_frees_the_entry_for_the_next_write() {
         static ENTRY: TaskEntry<64> = TaskEntry::new();
         ENTRY.write(claimed_forever(), async {});
-        assert!(ENTRY.drop_idle());
+        assert!(ENTRY.drop_future());
         ENTRY.write(claimed_forever(), async {});
-        assert!(ENTRY.drop_idle());
+        assert!(ENTRY.drop_future());
     }
 }

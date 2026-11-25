@@ -1,7 +1,7 @@
 use core::{future::Future, time::Duration};
 
 use crate::{
-    Either2, NotEnoughResources,
+    Either2, EventLoopError, NotEnoughResources,
     claimed::Claimed,
     select2,
     selector::{EVENTS_PER_CALL, Selector, SelectorEvent},
@@ -175,7 +175,26 @@ impl<
         self.storage.events.clear();
     }
 
-    pub(crate) fn process_selector_events(&self) -> rustix::io::Result<()> {
+    pub(crate) fn drain(&self) -> Result<(), EventLoopError> {
+        if !self.storage.tasks.has_root() {
+            return Err(EventLoopError::RootFinished);
+        }
+        loop {
+            self.process_selector_events()?;
+            if !self.storage.tasks.has_woken() {
+                break;
+            }
+            if self.storage.tasks.run_ready().is_ready() {
+                self.storage.tasks.drop_all();
+                self.flush()?;
+                return Err(EventLoopError::RootFinished);
+            }
+        }
+        self.flush()?;
+        Ok(())
+    }
+
+    fn process_selector_events(&self) -> rustix::io::Result<()> {
         let mut events = [None; EVENTS_PER_CALL];
         loop {
             let full = self.selector.poll_nonblocking(&mut events)?;

@@ -11,6 +11,10 @@ pub enum EventLoopError {
     /// [`EventLoop`](crate::EventLoop). A storage backs at most one event loop for the whole
     /// program, even after that loop has finished.
     StorageAlreadyUsed,
+    /// [`EventLoop::drain_events_without_blocking`](crate::EventLoop::drain_events_without_blocking)
+    /// panicked before, the [`EventLoop`](crate::EventLoop) may be in an inconsistent state, so it
+    /// refuses to run. Its tasks are dropped once it's dropped.
+    Poisoned,
 }
 
 impl core::fmt::Display for EventLoopError {
@@ -21,6 +25,7 @@ impl core::fmt::Display for EventLoopError {
             Self::StorageAlreadyUsed => {
                 f.write_str("the storage has already been used by another event loop")
             }
+            Self::Poisoned => f.write_str("the event loop panicked before and is poisoned"),
         }
     }
 }
@@ -61,6 +66,10 @@ mod tests {
             (
                 EventLoopError::StorageAlreadyUsed,
                 "the storage has already been used by another event loop",
+            ),
+            (
+                EventLoopError::Poisoned,
+                "the event loop panicked before and is poisoned",
             ),
         ] {
             let mut prefix = StartsWith(expected);

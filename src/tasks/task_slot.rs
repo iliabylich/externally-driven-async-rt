@@ -6,5 +6,6 @@ pub(super) enum TaskSlot {
     Empty,
     Idle(NonNull<dyn Future<Output = ()>>),
     Polling,
+    Panicked(NonNull<dyn Future<Output = ()>>),
     Dropping,
 }

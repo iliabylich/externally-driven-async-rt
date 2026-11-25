@@ -1,6 +1,6 @@
 mod error;
 
-use core::task::Poll;
+use core::{mem::DropGuard, task::Poll};
 
 use rustix::fd::{AsFd, BorrowedFd};
 
@@ -21,6 +21,7 @@ pub struct EventLoop<
     const FDS: usize,
 > {
     pub(crate) ctx: Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    poisoned: bool,
 }
 
 impl<
@@ -56,7 +57,10 @@ impl<
         Fut: Future<Output = ()> + 'a,
     {
         let (ctx, root) = storage.claim(selector).ok_or(EventLoopError::StorageAlreadyUsed)?;
-        let event_loop = Self { ctx };
+        let event_loop = Self {
+            ctx,
+            poisoned: false,
+        };
         ctx.storage.tasks.spawn_root(root, ctx.claimed, f(ctx));
         match ctx.storage.tasks.run_ready() {
             Poll::Pending => {}
@@ -79,24 +83,16 @@ impl<
     ///
     /// 1. epoll/kqueue returned an error
     /// 2. root future completed
+    /// 3. a previous call panicked, the event loop is poisoned then
     pub fn drain_events_without_blocking(&mut self) -> Result<(), EventLoopError> {
+        if self.poisoned {
+            return Err(EventLoopError::Poisoned);
+        }
         let ctx = self.ctx;
-        if !ctx.storage.tasks.has_root() {
-            return Err(EventLoopError::RootFinished);
-        }
-        loop {
-            ctx.process_selector_events()?;
-            if !ctx.storage.tasks.has_woken() {
-                break;
-            }
-            if ctx.storage.tasks.run_ready().is_ready() {
-                ctx.storage.tasks.drop_all();
-                ctx.flush()?;
-                return Err(EventLoopError::RootFinished);
-            }
-        }
-        ctx.flush()?;
-        Ok(())
+        let poison = DropGuard::new(&mut self.poisoned, |poisoned: &mut bool| *poisoned = true);
+        let result = ctx.drain();
+        DropGuard::dismiss(poison);
+        result
     }
 
     /// Makes the event loop's file descriptor readable and wakes up a task
