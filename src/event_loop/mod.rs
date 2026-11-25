@@ -70,6 +70,9 @@ impl<
     /// polls woken futures until none is ready,
     /// submits them back to epoll/kqueue.
     ///
+    /// It keeps polling until no future is woken, so a future that wakes itself
+    /// every time it's polled makes this method loop forever.
+    ///
     /// # Errors
     ///
     /// Returns an error if:
