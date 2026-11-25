@@ -34,10 +34,11 @@ impl IoWaiter {
         self.waker(direction).take();
         self.registered
             .set(self.registered.get().without(direction));
-        self.armed.get().contains(direction).then(|| {
-            self.mark_flushed();
-            self.change(fd)
-        })
+        if !self.armed.get().contains(direction) {
+            return None;
+        }
+        self.mark_flushed();
+        Some(self.change(fd))
     }
 
     pub(super) const fn is_registered(&self) -> bool {
@@ -79,7 +80,10 @@ impl IoWaiter {
     }
 
     pub(super) fn pending_change(&self, fd: RawFd) -> Option<IoChange> {
-        (self.interest() != self.armed.get()).then(|| self.change(fd))
+        if self.interest() == self.armed.get() {
+            return None;
+        }
+        Some(self.change(fd))
     }
 
     pub(super) const fn mark_flushed(&self) {

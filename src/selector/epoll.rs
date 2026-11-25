@@ -135,7 +135,10 @@ impl EpollSelector {
                 };
                 let fd = fd.cast_signed();
                 let ready = Self::ready(event.flags);
-                Ok((ready != Directions::Empty).then_some(SelectorEvent::Io { fd, ready }))
+                if ready == Directions::Empty {
+                    return Ok(None);
+                }
+                Ok(Some(SelectorEvent::Io { fd, ready }))
             }
         }
     }
