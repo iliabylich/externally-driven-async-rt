@@ -3,7 +3,6 @@ mod direction;
 mod dummy;
 #[cfg(all(any(target_os = "linux", target_os = "android"), not(miri)))]
 mod epoll;
-mod io_change;
 mod kernel_timer;
 #[cfg(all(target_os = "macos", not(miri)))]
 mod kqueue;
@@ -23,7 +22,6 @@ use self::epoll::EpollSelector as Backend;
 use self::kqueue::KqueueSelector as Backend;
 pub(crate) use self::{
     direction::{Direction, Directions},
-    io_change::IoChange,
     kernel_timer::KernelTimer,
     selector_event::{EVENTS_PER_CALL, SelectorEvent},
     timer_change::TimerChange,
@@ -48,21 +46,20 @@ impl Selector {
         })
     }
 
-    pub(crate) fn apply_now(&self, change: IoChange) -> rustix::io::Result<()> {
-        self.backend.apply_now(change)
+    pub(crate) fn register(&self, fd: BorrowedFd<'_>) -> rustix::io::Result<()> {
+        self.backend.register(fd)
+    }
+
+    pub(crate) fn deregister(&self, fd: BorrowedFd<'_>) -> rustix::io::Result<()> {
+        self.backend.deregister(fd)
     }
 
     pub(crate) fn notify(&self) -> rustix::io::Result<()> {
         self.backend.notify()
     }
 
-    pub(crate) fn flush(
-        &self,
-        io_changes: impl IntoIterator<Item = IoChange>,
-        deadline: Option<Instant>,
-        now: Instant,
-    ) -> rustix::io::Result<()> {
-        self.backend.flush(io_changes, deadline, now)
+    pub(crate) fn flush(&self, deadline: Option<Instant>, now: Instant) -> rustix::io::Result<()> {
+        self.backend.flush(deadline, now)
     }
 
     pub(crate) fn poll_nonblocking(

@@ -1,7 +1,7 @@
 use rustix::fd::RawFd;
 
 use super::{
-    fd_tree::{Entry, FdTree},
+    fd_tree::FdTree,
     pool::{ObjectPool, VersionedIndex},
 };
 
@@ -25,18 +25,10 @@ impl<V, const N: usize> FdHashMap<V, N> {
         Some(value)
     }
 
-    pub(crate) fn get_or_insert(&self, key: RawFd) -> Option<&V> {
-        match self.tree.entry(key) {
-            Entry::Occupied(idx) => {
-                let (_, value) = self.pool.get(idx);
-                Some(value)
-            }
-            Entry::Vacant(vacant) => {
-                let (VersionedIndex { idx, .. }, value) = self.pool.alloc()?;
-                vacant.insert(idx);
-                Some(value)
-            }
-        }
+    pub(crate) fn insert(&self, key: RawFd) -> Option<&V> {
+        let (VersionedIndex { idx, .. }, value) = self.pool.alloc()?;
+        self.tree.insert(key, idx);
+        Some(value)
     }
 
     pub(crate) fn remove(&self, key: RawFd) {

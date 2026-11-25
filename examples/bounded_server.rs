@@ -9,9 +9,9 @@
 use core::{net::SocketAddr, time::Duration};
 
 use externally_driven_async_rt::{
-    Context, EventLoopError, EventLoop, LoopStorage, MaybeTimedOut, Selector,
+    EventLoopError, MaybeTimedOut, Selector,
     io::{AsyncRead, AsyncWriteExt, WriteAllError},
-    net::{NetError, TcpListener, TcpStream},
+    net::{NetError, TcpListener},
 };
 
 use rustix::{
@@ -30,9 +30,36 @@ const ROOT_TASK_SIZE: usize = 1024;
 const TIMERS: usize = MAX_CLIENTS + 2;
 const FDS: usize = MAX_CLIENTS + 1;
 
-type ServerLoop<'a> = EventLoop<'a, Event, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
-type ServerContext<'a> = Context<'a, Event, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
-type ServerStorage = LoopStorage<Event, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
+type EventLoop<'sel> = externally_driven_async_rt::EventLoop<
+    'sel,
+    Event,
+    EVENTS,
+    TASKS,
+    TASK_SIZE,
+    ROOT_TASK_SIZE,
+    TIMERS,
+    FDS,
+>;
+type Context<'sel> = externally_driven_async_rt::Context<
+    'sel,
+    Event,
+    EVENTS,
+    TASKS,
+    TASK_SIZE,
+    ROOT_TASK_SIZE,
+    TIMERS,
+    FDS,
+>;
+type Storage = externally_driven_async_rt::LoopStorage<
+    Event,
+    EVENTS,
+    TASKS,
+    TASK_SIZE,
+    ROOT_TASK_SIZE,
+    TIMERS,
+    FDS,
+>;
+type TcpStream<'sel> = externally_driven_async_rt::net::TcpStream<'sel, FDS>;
 
 #[derive(Default)]
 struct Server {
@@ -106,8 +133,8 @@ enum Exchange {
     Closed,
 }
 
-async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
-    let mut listener = TcpListener::bind(addr).unwrap();
+async fn accept_loop(ctx: &Context<'_>, addr: SocketAddr) {
+    let mut listener = TcpListener::bind(ctx, addr).unwrap();
     ctx.dispatch(Event::Listening(listener.local_addr().unwrap()))
         .unwrap();
     let handle = ctx
@@ -122,7 +149,7 @@ async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
     loop {
         let task = ctx.reserve_task().await.unwrap();
         let (stream, peer) = loop {
-            match listener.accept(ctx).await {
+            match listener.accept().await {
                 Ok(client) => break client,
                 Err(errno) => {
                     ctx.dispatch(Event::AcceptFailed(errno)).unwrap();
@@ -140,11 +167,11 @@ async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
     }
 }
 
-async fn serve(ctx: &ServerContext<'_>, mut stream: TcpStream, peer: SocketAddr) -> Event {
+async fn serve(ctx: &Context<'_>, mut stream: TcpStream<'_>, peer: SocketAddr) -> Event {
     let mut buf = [0; MAX_REQUEST_LEN];
     let mut len = 0;
     loop {
-        let exchange = exchange(ctx, &mut stream, &mut buf, &mut len);
+        let exchange = exchange(&mut stream, &mut buf, &mut len);
         match ctx.timeout(REQUEST_TIMEOUT, exchange).await.unwrap() {
             MaybeTimedOut::Completed(Ok(Exchange::Served(len))) => {
                 ctx.dispatch(Event::Served { peer, len }).unwrap();
@@ -165,8 +192,7 @@ async fn serve(ctx: &ServerContext<'_>, mut stream: TcpStream, peer: SocketAddr)
 }
 
 async fn exchange(
-    ctx: &ServerContext<'_>,
-    stream: &mut TcpStream,
+    stream: &mut TcpStream<'_>,
     buf: &mut [u8; MAX_REQUEST_LEN],
     len: &mut usize,
 ) -> Result<Exchange, NetError> {
@@ -177,13 +203,13 @@ async fn exchange(
         if *len == buf.len() {
             return Ok(Exchange::TooLong);
         }
-        let read = stream.read(ctx, &mut buf[*len..]).await?;
+        let read = stream.read(&mut buf[*len..]).await?;
         if read == 0 {
             return Ok(Exchange::Closed);
         }
         *len += read;
     };
-    match stream.write_all(ctx, &buf[..end]).await {
+    match stream.write_all(&buf[..end]).await {
         Ok(()) => {}
         Err(WriteAllError::Io(errno)) => return Err(errno),
         Err(WriteAllError::WriteZero) => return Ok(Exchange::Closed),
@@ -194,17 +220,17 @@ async fn exchange(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    static STORAGE: ServerStorage = ServerStorage::new();
+    static STORAGE: Storage = Storage::new();
     let addr: SocketAddr = match std::env::args().nth(1) {
         Some(arg) => arg.parse()?,
         None => "127.0.0.1:7879".parse()?,
     };
-    let root = async move |ctx: ServerContext<'_>| {
+    let root = async move |ctx: Context<'_>| {
         accept_loop(&ctx, addr).await;
     };
     let mut selector = Selector::new()?;
     let mut server = Server::default();
-    let mut event_loop = ServerLoop::new(&STORAGE, &mut selector, root)?;
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, root)?;
     loop {
         for event in event_loop.events() {
             server.on_event(event);

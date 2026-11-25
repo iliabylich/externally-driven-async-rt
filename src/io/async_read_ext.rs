@@ -1,7 +1,5 @@
 use core::future::Future;
 
-use crate::Context;
-
 use super::AsyncRead;
 
 /// Helper methods on top of [`AsyncRead`], implemented for every [`AsyncRead`].
@@ -18,23 +16,13 @@ pub trait AsyncReadExt: AsyncRead {
     /// # Cancel safety
     ///
     /// This method is not cancel safe: an unknown number of bytes may already be read into `buf`.
-    fn read_exact<
-        'a,
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
+    fn read_exact<'a>(
         &'a mut self,
-        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         mut buf: &'a mut [u8],
     ) -> impl Future<Output = Result<(), ReadExactError<Self::Error>>> {
         async move {
             while !buf.is_empty() {
-                let len = match self.read(ctx, buf).await {
+                let len = match self.read(buf).await {
                     Ok(0) => return Err(ReadExactError::UnexpectedEof),
                     Ok(len) => len,
                     Err(err) => return Err(ReadExactError::Io(err)),
@@ -83,10 +71,6 @@ mod tests {
 
     use super::{AsyncRead, AsyncReadExt, ReadExactError};
 
-    use crate::{LoopStorage, Selector};
-
-    type Storage = LoopStorage<(), 1, 1, 0, 0, 1, 1>;
-
     struct Scripted {
         data: &'static [u8],
         max_per_call: usize,
@@ -125,18 +109,8 @@ mod tests {
     impl AsyncRead for Scripted {
         type Error = Errno;
 
-        fn read<
-            'a,
-            E: 'static,
-            const EVENTS: usize,
-            const TASKS: usize,
-            const TASK_SIZE: usize,
-            const ROOT_TASK_SIZE: usize,
-            const TIMERS: usize,
-            const FDS: usize,
-        >(
+        fn read<'a>(
             &'a mut self,
-            _ctx: &'a crate::Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
             buf: &'a mut [u8],
         ) -> impl Future<Output = rustix::io::Result<usize>> {
             self.calls += 1;
@@ -153,25 +127,18 @@ mod tests {
     }
 
     fn read_exact(
-        storage: &'static Storage,
         reader: &mut Scripted,
         buf: &mut [u8],
     ) -> Poll<Result<(), ReadExactError<Errno>>> {
-        let selector = Selector::new().unwrap();
-        let ctx = storage.claim(&selector).unwrap().0;
         let mut cx = Context::from_waker(Waker::noop());
-        pin!(reader.read_exact(&ctx, buf)).poll(&mut cx)
+        pin!(reader.read_exact(buf)).poll(&mut cx)
     }
 
     #[test]
     fn read_exact_retries_partial_reads() {
-        static STORAGE: Storage = Storage::new();
         let mut reader = Scripted::new(b"hello world!", 3, None);
         let mut buf = [0; 11];
-        assert_eq!(
-            read_exact(&STORAGE, &mut reader, &mut buf),
-            Poll::Ready(Ok(()))
-        );
+        assert_eq!(read_exact(&mut reader, &mut buf), Poll::Ready(Ok(())));
         assert_eq!(&buf, b"hello world");
         assert_eq!(reader.calls, 4);
         assert_eq!(reader.data, b"!");
@@ -179,22 +146,17 @@ mod tests {
 
     #[test]
     fn read_exact_into_nothing_never_reads() {
-        static STORAGE: Storage = Storage::new();
         let mut reader = Scripted::new(b"hello", 3, None);
-        assert_eq!(
-            read_exact(&STORAGE, &mut reader, &mut []),
-            Poll::Ready(Ok(()))
-        );
+        assert_eq!(read_exact(&mut reader, &mut []), Poll::Ready(Ok(())));
         assert_eq!(reader.calls, 0);
     }
 
     #[test]
     fn read_exact_fails_when_the_stream_ends_early() {
-        static STORAGE: Storage = Storage::new();
         let mut reader = Scripted::new(b"hel", 2, None);
         let mut buf = [0; 5];
         assert_eq!(
-            read_exact(&STORAGE, &mut reader, &mut buf),
+            read_exact(&mut reader, &mut buf),
             Poll::Ready(Err(ReadExactError::UnexpectedEof))
         );
         assert_eq!(&buf[..3], b"hel");
@@ -203,11 +165,10 @@ mod tests {
 
     #[test]
     fn read_exact_returns_syscall_errors() {
-        static STORAGE: Storage = Storage::new();
         let mut reader = Scripted::new(b"hello", 3, Some(Errno::CONNRESET));
         let mut buf = [0; 5];
         assert_eq!(
-            read_exact(&STORAGE, &mut reader, &mut buf),
+            read_exact(&mut reader, &mut buf),
             Poll::Ready(Err(ReadExactError::Io(Errno::CONNRESET)))
         );
         assert_eq!(reader.calls, 1);
@@ -215,14 +176,11 @@ mod tests {
 
     #[test]
     fn read_exact_resumes_after_a_pending_read() {
-        static STORAGE: Storage = Storage::new();
-        let selector = Selector::new().unwrap();
-        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut reader = Scripted::new(b"hello world", 6, None).yielding();
         let mut buf = [0; 11];
         let mut cx = Context::from_waker(Waker::noop());
         {
-            let mut read = pin!(reader.read_exact(&ctx, &mut buf));
+            let mut read = pin!(reader.read_exact(&mut buf));
             assert_eq!(read.as_mut().poll(&mut cx), Poll::Pending);
             assert_eq!(read.as_mut().poll(&mut cx), Poll::Pending);
             assert_eq!(read.as_mut().poll(&mut cx), Poll::Ready(Ok(())));

@@ -6,14 +6,7 @@ use core::{
     time::Duration,
 };
 
-use rustix::fd::AsFd;
-
-use crate::{
-    LoopStorage, Selector,
-    selector::Direction,
-    testing::{counting_waker, plain_socketpair},
-    time::Instant,
-};
+use crate::{LoopStorage, Selector, testing::counting_waker, time::Instant};
 
 type Storage = LoopStorage<(), 1, 1, 0, 0, 1, 1>;
 
@@ -34,21 +27,9 @@ fn clearing_drops_live_wakers() {
         Poll::Pending
     );
     drop(timer_waker);
-    let (fd, _peer) = plain_socketpair();
-    let io_waker = counting_waker(&drops);
-    let mut ready = pin!(
-        ctx.storage
-            .io_waiters
-            .ready(ctx.selector, fd.as_fd(), Direction::Read)
-    );
-    assert_eq!(
-        ready.as_mut().poll(&mut Context::from_waker(&io_waker)),
-        Poll::Pending
-    );
-    drop(io_waker);
-    assert_eq!(drops.get(), 2);
+    assert_eq!(drops.get(), 1);
     ctx.clear();
-    assert_eq!(drops.get(), 4);
+    assert_eq!(drops.get(), 2);
 }
 
 #[test]

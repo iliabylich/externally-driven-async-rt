@@ -72,10 +72,10 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         DropGuard::dismiss(guard);
     }
 
-    pub(crate) async fn reserve<'a>(
+    pub(crate) async fn reserve<'sel>(
         &'static self,
-        claimed: Claimed<'a>,
-    ) -> Result<TaskReservation<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>, SlotWaiterTakenError> {
+        claimed: Claimed<'sel>,
+    ) -> Result<TaskReservation<'sel, TASKS, TASK_SIZE, ROOT_TASK_SIZE>, SlotWaiterTakenError> {
         if let Some((id, entry)) = self.pool.alloc() {
             return Ok(TaskReservation::new(self, claimed, id, entry));
         }
@@ -97,28 +97,28 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         Ok(TaskReservation::new(self, claimed, id, entry))
     }
 
-    pub(crate) fn spawn<'a, Fut>(
+    pub(crate) fn spawn<'sel, Fut>(
         &'static self,
-        claimed: Claimed<'a>,
+        claimed: Claimed<'sel>,
         future: Fut,
     ) -> Result<
         impl Future<Output = ()> + use<TASKS, TASK_SIZE, ROOT_TASK_SIZE, Fut>,
         NotEnoughResources,
     >
     where
-        Fut: Future<Output = ()> + 'a,
+        Fut: Future<Output = ()> + 'sel,
     {
         let id = self.spawn_task(claimed, future)?;
         Ok(self.join(id))
     }
 
-    fn spawn_task<'a, Fut>(
+    fn spawn_task<'sel, Fut>(
         &'static self,
-        claimed: Claimed<'a>,
+        claimed: Claimed<'sel>,
         future: Fut,
     ) -> Result<TaskId<TASK_SIZE>, NotEnoughResources>
     where
-        Fut: Future<Output = ()> + 'a,
+        Fut: Future<Output = ()> + 'sel,
     {
         let (id, entry) = self.pool.alloc().ok_or(NotEnoughResources::Tasks)?;
         entry.write(claimed, future);
@@ -126,22 +126,26 @@ impl<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
         Ok(id)
     }
 
-    pub(crate) fn spawn_root<'a, Fut>(&'static self, _: RootSlot, claimed: Claimed<'a>, future: Fut)
-    where
-        Fut: Future<Output = ()> + 'a,
+    pub(crate) fn spawn_root<'sel, Fut>(
+        &'static self,
+        _: RootSlot,
+        claimed: Claimed<'sel>,
+        future: Fut,
+    ) where
+        Fut: Future<Output = ()> + 'sel,
     {
         self.root.write(claimed, future);
         self.queue.push_root();
     }
 
-    fn spawn_reserved<'a, Fut>(
+    fn spawn_reserved<'sel, Fut>(
         &self,
-        claimed: Claimed<'a>,
+        claimed: Claimed<'sel>,
         id: TaskId<TASK_SIZE>,
         entry: &'static TaskEntry<TASK_SIZE>,
         future: Fut,
     ) where
-        Fut: Future<Output = ()> + 'a,
+        Fut: Future<Output = ()> + 'sel,
     {
         entry.write(claimed, future);
         self.queue.push(id.idx);

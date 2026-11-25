@@ -11,18 +11,33 @@ use super::{NetError, TcpStream, socket::Socket};
 
 /// A TCP listener.
 #[must_use]
-pub struct TcpListener {
-    socket: Socket,
+pub struct TcpListener<'sel, const FDS: usize> {
+    socket: Socket<'sel, FDS>,
 }
 
-impl TcpListener {
+impl<'sel, const FDS: usize> TcpListener<'sel, FDS> {
     /// Binds on a given address with `SO_REUSEADDR` set, starts listening.
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails.
-    pub fn bind(addr: SocketAddr) -> rustix::io::Result<Self> {
-        let socket = Socket::new(addr.as_any().address_family(), SocketType::STREAM)?;
+    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
+    pub fn bind<
+        E: 'static,
+        const EVENTS: usize,
+        const TASKS: usize,
+        const TASK_SIZE: usize,
+        const ROOT_TASK_SIZE: usize,
+        const TIMERS: usize,
+    >(
+        ctx: &Context<'sel, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        addr: SocketAddr,
+    ) -> Result<Self, NetError> {
+        let socket = Socket::new(
+            &ctx.storage.io_waiters,
+            ctx.selector,
+            addr.as_any().address_family(),
+            SocketType::STREAM,
+        )?;
         socket.set_reuseaddr()?;
         socket.bind(&addr)?;
         socket.listen()?;
@@ -38,22 +53,8 @@ impl TcpListener {
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub async fn accept<
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
-        &mut self,
-        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    ) -> Result<(TcpStream, SocketAddr), NetError> {
-        let (socket, addr) = self
-            .socket
-            .accept(&ctx.storage.io_waiters, ctx.selector)
-            .await?;
+    pub async fn accept(&mut self) -> Result<(TcpStream<'sel, FDS>, SocketAddr), NetError> {
+        let (socket, addr) = self.socket.accept().await?;
         Ok((
             TcpStream::new(socket),
             addr.ok_or(Errno::AFNOSUPPORT)?.try_into()?,

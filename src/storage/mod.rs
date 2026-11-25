@@ -72,11 +72,11 @@ impl<
         }
     }
 
-    pub(crate) fn claim<'a>(
+    pub(crate) fn claim<'sel>(
         &'static self,
-        selector: &'a Selector,
+        selector: &'sel Selector,
     ) -> Option<(
-        Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        Context<'sel, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         RootSlot,
     )> {
         let root = self.tasks.claim()?;
@@ -84,8 +84,8 @@ impl<
             storage: self,
             selector,
             // SAFETY: claiming the queue above fails unless this is the storage's first claim, so
-            // these tasks belong to this loop alone. Only the `EventLoop<'a>` that owns this claim
-            // polls and drops them, and it drops them all before `'a` ends or, if leaked, never
+            // these tasks belong to this loop alone. Only the `EventLoop<'sel>` that owns this claim
+            // polls and drops them, and it drops them all before `'sel` ends or, if leaked, never
             // touches them again.
             claimed: unsafe { Claimed::new() },
         };

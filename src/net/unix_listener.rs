@@ -6,18 +6,33 @@ use super::{NetError, UnixStream, socket::Socket};
 
 /// A Unix stream listener.
 #[must_use]
-pub struct UnixListener {
-    socket: Socket,
+pub struct UnixListener<'sel, const FDS: usize> {
+    socket: Socket<'sel, FDS>,
 }
 
-impl UnixListener {
+impl<'sel, const FDS: usize> UnixListener<'sel, FDS> {
     /// Binds on a given address, starts listening.
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails.
-    pub fn bind(addr: &SocketAddrUnix) -> rustix::io::Result<Self> {
-        let socket = Socket::new(AddressFamily::UNIX, SocketType::STREAM)?;
+    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
+    pub fn bind<
+        E: 'static,
+        const EVENTS: usize,
+        const TASKS: usize,
+        const TASK_SIZE: usize,
+        const ROOT_TASK_SIZE: usize,
+        const TIMERS: usize,
+    >(
+        ctx: &Context<'sel, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        addr: &SocketAddrUnix,
+    ) -> Result<Self, NetError> {
+        let socket = Socket::new(
+            &ctx.storage.io_waiters,
+            ctx.selector,
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+        )?;
         socket.bind(addr)?;
         socket.listen()?;
         Ok(Self { socket })
@@ -32,22 +47,8 @@ impl UnixListener {
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub async fn accept<
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
-        &mut self,
-        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    ) -> Result<(UnixStream, SocketAddrUnix), NetError> {
-        let (socket, addr) = self
-            .socket
-            .accept(&ctx.storage.io_waiters, ctx.selector)
-            .await?;
+    pub async fn accept(&mut self) -> Result<(UnixStream<'sel, FDS>, SocketAddrUnix), NetError> {
+        let (socket, addr) = self.socket.accept().await?;
         let addr = match addr {
             Some(addr) => addr.try_into()?,
             None => SocketAddrUnix::new("")?,

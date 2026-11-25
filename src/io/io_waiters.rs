@@ -1,16 +1,12 @@
-use core::mem::DropGuard;
-
-use rustix::{
-    fd::{AsRawFd, BorrowedFd, RawFd},
-    io::Errno,
-};
+use rustix::fd::{AsRawFd, BorrowedFd, RawFd};
 
 use super::IoWaiter;
 
 use crate::{
     NotEnoughResources,
     data::fd_hash_map::FdHashMap,
-    selector::{Direction, Directions, IoChange, Selector},
+    net::NetError,
+    selector::{Directions, Selector},
 };
 
 #[must_use]
@@ -25,63 +21,27 @@ impl<const N: usize> IoWaiters<N> {
         }
     }
 
-    pub(super) fn register(
+    pub(crate) fn register(
         &self,
-        fd: RawFd,
-        direction: Direction,
-    ) -> Result<&IoWaiter, NotEnoughResources> {
-        let io = self.map.get_or_insert(fd).ok_or(NotEnoughResources::FDs)?;
-        io.register(direction);
+        selector: &Selector,
+        fd: BorrowedFd<'_>,
+    ) -> Result<&IoWaiter, NetError> {
+        let raw_fd = fd.as_raw_fd();
+        let io = self.map.insert(raw_fd).ok_or(NotEnoughResources::FDs)?;
+        if let Err(errno) = selector.register(fd) {
+            self.map.remove(raw_fd);
+            return Err(errno.into());
+        }
+        io.reset();
         Ok(io)
     }
 
-    pub(crate) async fn ready(
-        &self,
-        selector: &Selector,
-        fd: BorrowedFd<'_>,
-        direction: Direction,
-    ) -> Result<(), NotEnoughResources> {
-        let fd = fd.as_raw_fd();
-        let io = self.register(fd, direction)?;
-        let _registration = DropGuard::new((), |()| self.release_now(selector, fd, direction));
-        io.wait(direction).await;
-        Ok(())
-    }
-
-    pub(crate) async fn retry<T>(
-        &self,
-        selector: &Selector,
-        fd: BorrowedFd<'_>,
-        direction: Direction,
-        mut op: impl FnMut() -> rustix::io::Result<T>,
-    ) -> Result<rustix::io::Result<T>, NotEnoughResources> {
-        let fd = fd.as_raw_fd();
-        let io = self.register(fd, direction)?;
-        let _registration = DropGuard::new((), |()| self.release_now(selector, fd, direction));
-        loop {
-            match op() {
-                Err(Errno::INTR) => {}
-                Err(Errno::AGAIN) => io.wait(direction).await,
-                result => return Ok(result),
-            }
+    pub(crate) fn deregister(&self, selector: &Selector, fd: BorrowedFd<'_>) {
+        let raw_fd = fd.as_raw_fd();
+        if let Err(errno) = selector.deregister(fd) {
+            unreachable!("deregistering fd {raw_fd} failed: {errno}");
         }
-    }
-
-    fn release_now(&self, selector: &Selector, fd: RawFd, direction: Direction) {
-        if let Some(change) = self.release(fd, direction) {
-            let _ = selector.apply_now(change);
-        }
-    }
-
-    pub(super) fn release(&self, fd: RawFd, direction: Direction) -> Option<IoChange> {
-        let Some(io) = self.map.get(fd) else {
-            unreachable!("releasing fd {fd} that is not registered");
-        };
-        let change = io.release(fd, direction);
-        if !io.is_registered() {
-            self.map.remove(fd);
-        }
-        change
+        self.map.remove(raw_fd);
     }
 
     pub(crate) fn wake_ready(&self, fd: RawFd, ready: Directions) {
@@ -90,239 +50,9 @@ impl<const N: usize> IoWaiters<N> {
         }
     }
 
-    pub(crate) fn pending_changes(&self) -> impl Iterator<Item = IoChange> + '_ {
-        self.iter().filter_map(|(fd, io)| io.pending_change(fd))
-    }
-
-    pub(crate) fn mark_flushed(&self) {
-        for (_, io) in self.iter() {
-            io.mark_flushed();
-        }
-    }
-
     pub(crate) fn drop_wakers(&self) {
-        for (_, io) in self.iter() {
+        for (_, io) in self.map.iter() {
             io.drop_wakers();
         }
-    }
-
-    pub(super) fn iter(&self) -> impl Iterator<Item = (RawFd, &IoWaiter)> {
-        self.map.iter()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use core::{
-        cell::Cell,
-        future::Future,
-        pin::pin,
-        task::{Context, Poll, Waker},
-    };
-
-    use rustix::{
-        fd::{AsFd, AsRawFd},
-        io::Errno,
-    };
-
-    use super::{Direction, Directions, IoChange, IoWaiters};
-
-    use crate::{
-        NotEnoughResources, Selector,
-        testing::{assert_yields, plain_socketpair},
-    };
-
-    fn change(fd: i32, interest: Directions) -> IoChange {
-        IoChange { fd, interest }
-    }
-
-    #[test]
-    fn register_wait_release() {
-        let io_waiters = IoWaiters::<1>::new();
-        let io = io_waiters.register(3, Direction::Write).unwrap();
-        assert!(!io.waker(Direction::Write).is_set());
-        io.waker(Direction::Write).store(Waker::noop());
-        assert!(io.waker(Direction::Write).is_set());
-        assert_eq!(io_waiters.release(3, Direction::Write), None);
-        assert!(!io.waker(Direction::Write).is_set());
-        assert_eq!(io_waiters.iter().count(), 0);
-        io_waiters.register(3, Direction::Read).unwrap();
-        assert_eq!(io_waiters.iter().count(), 1);
-    }
-
-    #[test]
-    fn registering_a_registered_direction_takes_it_over() {
-        let io_waiters = IoWaiters::<1>::new();
-        let io = io_waiters.register(3, Direction::Read).unwrap();
-        io.waker(Direction::Read).store(Waker::noop());
-        let io = io_waiters.register(3, Direction::Read).unwrap();
-        assert!(!io.waker(Direction::Read).is_set());
-        assert_eq!(io_waiters.release(3, Direction::Read), None);
-        assert_eq!(io_waiters.iter().count(), 0);
-    }
-
-    #[test]
-    fn changes_follow_the_stored_wakers() {
-        let io_waiters = IoWaiters::<1>::new();
-        let io = io_waiters.register(3, Direction::Read).unwrap();
-        assert_yields!(io_waiters.pending_changes(), []);
-
-        io.waker(Direction::Read).store(Waker::noop());
-        assert_yields!(io_waiters.pending_changes(), [change(3, Directions::Read)]);
-        io_waiters.mark_flushed();
-        assert_yields!(io_waiters.pending_changes(), []);
-
-        io.waker(Direction::Read).take();
-        assert_yields!(io_waiters.pending_changes(), [change(3, Directions::Empty)]);
-    }
-
-    #[test]
-    fn one_change_per_fd_with_the_combined_interest() {
-        let io_waiters = IoWaiters::<1>::new();
-        let io = io_waiters.register(3, Direction::Read).unwrap();
-        io_waiters.register(3, Direction::Write).unwrap();
-        io.waker(Direction::Read).store(Waker::noop());
-        io.waker(Direction::Write).store(Waker::noop());
-        assert_yields!(io_waiters.pending_changes(), [change(3, Directions::Both)]);
-    }
-
-    #[test]
-    fn releasing_an_armed_direction_returns_the_remaining_interest() {
-        let io_waiters = IoWaiters::<1>::new();
-        let io = io_waiters.register(3, Direction::Read).unwrap();
-        io_waiters.register(3, Direction::Write).unwrap();
-        io.waker(Direction::Read).store(Waker::noop());
-        io.waker(Direction::Write).store(Waker::noop());
-        io_waiters.mark_flushed();
-
-        assert_eq!(
-            io_waiters.release(3, Direction::Read),
-            Some(change(3, Directions::Write))
-        );
-        assert_eq!(io_waiters.release(3, Direction::Read), None);
-        assert_eq!(io_waiters.iter().count(), 1);
-        assert_eq!(
-            io_waiters.release(3, Direction::Write),
-            Some(change(3, Directions::Empty))
-        );
-        assert_eq!(io_waiters.iter().count(), 0);
-    }
-
-    #[test]
-    fn an_event_wakes_only_the_ready_direction_and_rearms_the_other() {
-        let io_waiters = IoWaiters::<1>::new();
-        let io = io_waiters.register(3, Direction::Read).unwrap();
-        io_waiters.register(3, Direction::Write).unwrap();
-        io.waker(Direction::Read).store(Waker::noop());
-        io.waker(Direction::Write).store(Waker::noop());
-        io_waiters.mark_flushed();
-
-        io_waiters.wake_ready(3, Directions::Read);
-        assert!(!io.waker(Direction::Read).is_set());
-        assert!(io.waker(Direction::Write).is_set());
-        assert_yields!(io_waiters.pending_changes(), [change(3, Directions::Write)]);
-    }
-
-    #[test]
-    fn an_event_for_an_unregistered_fd_is_ignored() {
-        let io_waiters = IoWaiters::<1>::new();
-        let io = io_waiters.register(3, Direction::Read).unwrap();
-        io.waker(Direction::Read).store(Waker::noop());
-        io_waiters.mark_flushed();
-
-        io_waiters.wake_ready(4, Directions::Both);
-        assert!(io.waker(Direction::Read).is_set());
-        assert_yields!(io_waiters.pending_changes(), []);
-    }
-
-    #[test]
-    fn capacity_is_bounded() {
-        let io_waiters = IoWaiters::<1>::new();
-        io_waiters.register(3, Direction::Read).unwrap();
-        assert_eq!(
-            io_waiters.register(4, Direction::Read).err(),
-            Some(NotEnoughResources::FDs)
-        );
-    }
-
-    #[test]
-    fn releasing_after_dropping_wakers_removes_the_fd() {
-        let io_waiters = IoWaiters::<1>::new();
-        let io = io_waiters.register(3, Direction::Read).unwrap();
-        io_waiters.register(3, Direction::Write).unwrap();
-        io.waker(Direction::Read).store(Waker::noop());
-        io.waker(Direction::Write).store(Waker::noop());
-        io_waiters.drop_wakers();
-        assert!(!io.waker(Direction::Read).is_set());
-        assert!(!io.waker(Direction::Write).is_set());
-        assert_eq!(io_waiters.release(3, Direction::Read), None);
-        assert_eq!(io_waiters.release(3, Direction::Write), None);
-        assert_eq!(io_waiters.iter().count(), 0);
-    }
-
-    #[test]
-    fn ready_survives_a_spurious_poll() {
-        let selector = Selector::new().unwrap();
-        let io_waiters = IoWaiters::<1>::new();
-        let (fd, _peer) = plain_socketpair();
-        let mut cx = Context::from_waker(Waker::noop());
-        let mut ready = pin!(io_waiters.ready(&selector, fd.as_fd(), Direction::Read));
-        assert_eq!(ready.as_mut().poll(&mut cx), Poll::Pending);
-        assert_eq!(ready.as_mut().poll(&mut cx), Poll::Pending);
-        io_waiters.wake_ready(fd.as_raw_fd(), Directions::Read);
-        assert_eq!(ready.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
-    }
-
-    #[test]
-    fn dropping_a_pending_ready_releases_the_fd() {
-        let selector = Selector::new().unwrap();
-        let io_waiters = IoWaiters::<1>::new();
-        let (fd, _peer) = plain_socketpair();
-        let mut cx = Context::from_waker(Waker::noop());
-        {
-            let mut ready = pin!(io_waiters.ready(&selector, fd.as_fd(), Direction::Read));
-            assert_eq!(ready.as_mut().poll(&mut cx), Poll::Pending);
-            assert_eq!(io_waiters.iter().count(), 1);
-        }
-        assert_eq!(io_waiters.iter().count(), 0);
-    }
-
-    #[test]
-    fn sequential_readies_reuse_the_slot() {
-        let selector = Selector::new().unwrap();
-        let io_waiters = IoWaiters::<1>::new();
-        let (fd, _peer) = plain_socketpair();
-        let mut cx = Context::from_waker(Waker::noop());
-        for _ in 0..3 {
-            let mut ready = pin!(io_waiters.ready(&selector, fd.as_fd(), Direction::Read));
-            assert_eq!(ready.as_mut().poll(&mut cx), Poll::Pending);
-            io_waiters.wake_ready(fd.as_raw_fd(), Directions::Read);
-            assert_eq!(ready.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
-        }
-        assert_eq!(io_waiters.iter().count(), 0);
-    }
-
-    #[test]
-    fn retry_waits_on_again_and_returns_the_result() {
-        let selector = Selector::new().unwrap();
-        let io_waiters = IoWaiters::<1>::new();
-        let (fd, _peer) = plain_socketpair();
-        let attempts = Cell::new(0);
-        let mut cx = Context::from_waker(Waker::noop());
-        let mut retry = pin!(
-            io_waiters.retry(&selector, fd.as_fd(), Direction::Read, || {
-                attempts.set(attempts.get() + 1);
-                if attempts.get() == 1 {
-                    return Err(Errno::AGAIN);
-                }
-                Ok(5)
-            })
-        );
-        assert_eq!(retry.as_mut().poll(&mut cx), Poll::Pending);
-        assert_eq!(attempts.get(), 1);
-        io_waiters.wake_ready(fd.as_raw_fd(), Directions::Read);
-        assert_eq!(retry.as_mut().poll(&mut cx), Poll::Ready(Ok(Ok(5))));
-        assert_eq!(attempts.get(), 2);
-        assert_eq!(io_waiters.iter().count(), 0);
     }
 }

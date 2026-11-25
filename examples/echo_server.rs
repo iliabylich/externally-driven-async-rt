@@ -10,9 +10,9 @@ use core::{net::SocketAddr, time::Duration};
 use std::os::fd::AsFd;
 
 use externally_driven_async_rt::{
-    Context, EventLoopError, EventLoop, LoopStorage, Selector,
+    EventLoopError, Selector,
     io::{AsyncRead, AsyncWriteExt, WriteAllError},
-    net::{NetError, TcpListener, TcpStream},
+    net::{NetError, TcpListener},
 };
 
 use rustix::{
@@ -28,10 +28,38 @@ const ROOT_TASK_SIZE: usize = 4096;
 const TIMERS: usize = 4;
 const FDS: usize = 5;
 
-type ServerLoop<'a> = EventLoop<'a, Event, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
-type ServerContext<'a> = Context<'a, Event, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
+type EventLoop<'sel> = externally_driven_async_rt::EventLoop<
+    'sel,
+    Event,
+    EVENTS,
+    TASKS,
+    TASK_SIZE,
+    ROOT_TASK_SIZE,
+    TIMERS,
+    FDS,
+>;
+type Context<'sel> = externally_driven_async_rt::Context<
+    'sel,
+    Event,
+    EVENTS,
+    TASKS,
+    TASK_SIZE,
+    ROOT_TASK_SIZE,
+    TIMERS,
+    FDS,
+>;
 
-type ServerStorage = LoopStorage<Event, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>;
+type Storage = externally_driven_async_rt::LoopStorage<
+    Event,
+    EVENTS,
+    TASKS,
+    TASK_SIZE,
+    ROOT_TASK_SIZE,
+    TIMERS,
+    FDS,
+>;
+
+type TcpStream<'sel> = externally_driven_async_rt::net::TcpStream<'sel, FDS>;
 
 #[derive(Default)]
 struct Server {
@@ -89,8 +117,8 @@ impl Server {
     }
 }
 
-async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
-    let mut listener = TcpListener::bind(addr).unwrap();
+async fn accept_loop(ctx: &Context<'_>, addr: SocketAddr) {
+    let mut listener = TcpListener::bind(ctx, addr).unwrap();
     ctx.dispatch(Event::Listening(listener.local_addr().unwrap()))
         .unwrap();
     let handle = ctx
@@ -103,7 +131,7 @@ async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
         .unwrap();
     drop(handle);
     loop {
-        match listener.accept(ctx).await {
+        match listener.accept().await {
             Ok((stream, peer)) => {
                 ctx.dispatch(Event::Connected(peer)).unwrap();
                 let handle = ctx
@@ -123,17 +151,17 @@ async fn accept_loop(ctx: &ServerContext<'_>, addr: SocketAddr) {
 }
 
 async fn echo(
-    ctx: &ServerContext<'_>,
-    mut stream: TcpStream,
+    ctx: &Context<'_>,
+    mut stream: TcpStream<'_>,
     peer: SocketAddr,
 ) -> Result<(), NetError> {
     let mut buf = [0; 512];
     loop {
-        let len = stream.read(ctx, &mut buf).await?;
+        let len = stream.read(&mut buf).await?;
         if len == 0 {
             return Ok(());
         }
-        match stream.write_all(ctx, &buf[..len]).await {
+        match stream.write_all(&buf[..len]).await {
             Ok(()) => {}
             Err(WriteAllError::Io(errno)) => return Err(errno),
             Err(WriteAllError::WriteZero) => return Ok(()),
@@ -172,17 +200,17 @@ fn read_commands(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    static STORAGE: ServerStorage = ServerStorage::new();
+    static STORAGE: Storage = Storage::new();
     let addr: SocketAddr = match std::env::args().nth(1) {
         Some(arg) => arg.parse()?,
         None => "127.0.0.1:7878".parse()?,
     };
-    let root = async move |ctx: ServerContext<'_>| {
+    let root = async move |ctx: Context<'_>| {
         accept_loop(&ctx, addr).await;
     };
     let mut selector = Selector::new()?;
     let mut server = Server::default();
-    let mut event_loop = ServerLoop::new(&STORAGE, &mut selector, root)?;
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, root)?;
     for event in event_loop.events() {
         server.on_event(event);
     }

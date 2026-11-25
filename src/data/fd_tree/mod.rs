@@ -29,19 +29,6 @@ pub(super) struct FdTree<const N: usize> {
     nodes: [Node; N],
 }
 
-#[must_use]
-pub(super) enum Entry<'t, const N: usize> {
-    Occupied(u32),
-    Vacant(VacantEntry<'t, N>),
-}
-
-#[must_use]
-pub(super) struct VacantEntry<'t, const N: usize> {
-    tree: &'t FdTree<N>,
-    link: &'t Cell<Option<u32>>,
-    key: RawFd,
-}
-
 impl<const N: usize> FdTree<N> {
     pub(super) const fn new() -> Self {
         Self {
@@ -55,16 +42,17 @@ impl<const N: usize> FdTree<N> {
         }
     }
 
-    pub(super) fn entry(&self, key: RawFd) -> Entry<'_, N> {
+    pub(super) fn insert(&self, key: RawFd, idx: u32) {
         let link = self.link(key);
-        if let Some(idx) = link.get() {
-            return Entry::Occupied(idx);
+        if link.get().is_some() {
+            unreachable!("key {key} is already in the tree");
         }
-        Entry::Vacant(VacantEntry {
-            tree: self,
-            link,
-            key,
-        })
+        let node = self.node(idx);
+        if node.key.get().is_some() {
+            unreachable!("{idx} is free but still has a key");
+        }
+        node.key.set(Some(key));
+        link.set(Some(idx));
     }
 
     pub(super) fn find(&self, key: RawFd) -> Option<u32> {
@@ -132,17 +120,6 @@ impl<const N: usize> FdTree<N> {
             hash <<= 2;
         }
         link
-    }
-}
-
-impl<const N: usize> VacantEntry<'_, N> {
-    pub(super) fn insert(self, idx: u32) {
-        let node = self.tree.node(idx);
-        if node.key.get().is_some() {
-            unreachable!("{idx} is free but still has a key");
-        }
-        node.key.set(Some(self.key));
-        self.link.set(Some(idx));
     }
 }
 

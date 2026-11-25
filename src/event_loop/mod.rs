@@ -11,7 +11,7 @@ use crate::{context::Context, selector::Selector, storage::LoopStorage};
 /// The main type, an event loop.
 #[must_use]
 pub struct EventLoop<
-    'a,
+    'sel,
     E: 'static,
     const EVENTS: usize,
     const TASKS: usize,
@@ -20,12 +20,12 @@ pub struct EventLoop<
     const TIMERS: usize,
     const FDS: usize,
 > {
-    pub(crate) ctx: Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    pub(crate) ctx: Context<'sel, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     poisoned: bool,
 }
 
 impl<
-    'a,
+    'sel,
     E: 'static,
     const EVENTS: usize,
     const TASKS: usize,
@@ -33,7 +33,7 @@ impl<
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
-> EventLoop<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+> EventLoop<'sel, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     /// Creates an event loop and polls given future once.
     ///
@@ -49,12 +49,12 @@ impl<
     /// 3. given future completed during initial poll.
     pub fn new<F, Fut>(
         storage: &'static LoopStorage<E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-        selector: &'a mut Selector,
+        selector: &'sel mut Selector,
         f: F,
     ) -> Result<Self, EventLoopError>
     where
-        F: FnOnce(Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>) -> Fut,
-        Fut: Future<Output = ()> + 'a,
+        F: FnOnce(Context<'sel, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>) -> Fut,
+        Fut: Future<Output = ()> + 'sel,
     {
         let (ctx, root) = storage.claim(selector).ok_or(EventLoopError::StorageAlreadyUsed)?;
         let event_loop = Self {

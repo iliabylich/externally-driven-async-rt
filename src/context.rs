@@ -19,7 +19,7 @@ use crate::{
 /// [`EventLoop`](crate::EventLoop), otherwise waking panics.
 #[must_use]
 pub struct Context<
-    'a,
+    'sel,
     E: 'static,
     const EVENTS: usize,
     const TASKS: usize,
@@ -30,12 +30,12 @@ pub struct Context<
 > {
     pub(crate) storage:
         &'static LoopStorage<E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    pub(crate) selector: &'a Selector,
-    pub(crate) claimed: Claimed<'a>,
+    pub(crate) selector: &'sel Selector,
+    pub(crate) claimed: Claimed<'sel>,
 }
 
 impl<
-    'a,
+    'sel,
     E: 'static,
     const EVENTS: usize,
     const TASKS: usize,
@@ -43,7 +43,7 @@ impl<
     const ROOT_TASK_SIZE: usize,
     const TIMERS: usize,
     const FDS: usize,
-> Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+> Context<'sel, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     /// Pushes given `event` into the queue that [`EventLoop::events`](crate::EventLoop::events)
     /// pops from.
@@ -77,7 +77,7 @@ impl<
     >
     where
         F: FnOnce(Self) -> Fut,
-        Fut: Future<Output = ()> + 'a,
+        Fut: Future<Output = ()> + 'sel,
     {
         self.storage.tasks.spawn(self.claimed, f(*self))
     }
@@ -101,10 +101,10 @@ impl<
         &self,
     ) -> impl Future<
         Output = Result<
-            TaskReservation<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
+            TaskReservation<'sel, TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
             SlotWaiterTakenError,
         >,
-    > + use<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
+    > + use<'sel, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
         self.storage.tasks.reserve(self.claimed)
     }
 
@@ -121,7 +121,7 @@ impl<
         &self,
         duration: Duration,
     ) -> impl Future<Output = Result<(), NotEnoughResources>>
-    + use<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
+    + use<'sel, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS> {
         let timers = &self.storage.timers;
         timers.sleep_until(timers.now().saturating_add(duration))
     }
@@ -162,7 +162,7 @@ impl<
     /// This method is cancel safe.
     pub fn notified(
         &self,
-    ) -> impl Future<Output = ()> + use<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
+    ) -> impl Future<Output = ()> + use<'sel, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
     {
         self.storage.notification.notified()
     }
@@ -220,12 +220,9 @@ impl<
 
     pub(crate) fn flush(&self) -> rustix::io::Result<()> {
         self.selector.flush(
-            self.storage.io_waiters.pending_changes(),
             self.storage.timers.next_deadline(),
             self.storage.timers.now(),
-        )?;
-        self.storage.io_waiters.mark_flushed();
-        Ok(())
+        )
     }
 }
 

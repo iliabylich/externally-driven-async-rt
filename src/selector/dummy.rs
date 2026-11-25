@@ -3,7 +3,7 @@ use core::cell::Cell;
 use rustix::fd::{AsFd, BorrowedFd};
 
 use crate::{
-    selector::{EVENTS_PER_CALL, IoChange, SelectorEvent},
+    selector::{EVENTS_PER_CALL, SelectorEvent},
     time::Instant,
 };
 
@@ -24,20 +24,16 @@ impl DummySelector {
         Ok(())
     }
 
-    pub(crate) fn apply_now(&self, _: IoChange) -> rustix::io::Result<()> {
+    pub(crate) fn register(&self, _: BorrowedFd<'_>) -> rustix::io::Result<()> {
         unreachable!("no selector under Miri")
     }
 
-    pub(crate) fn flush(
-        &self,
-        io_changes: impl IntoIterator<Item = IoChange>,
-        deadline: Option<Instant>,
-        _: Instant,
-    ) -> rustix::io::Result<()> {
-        assert!(
-            io_changes.into_iter().next().is_none() && deadline.is_none(),
-            "no selector under Miri"
-        );
+    pub(crate) fn deregister(&self, _: BorrowedFd<'_>) -> rustix::io::Result<()> {
+        unreachable!("no selector under Miri")
+    }
+
+    pub(crate) fn flush(&self, deadline: Option<Instant>, _: Instant) -> rustix::io::Result<()> {
+        assert!(deadline.is_none(), "no selector under Miri");
         Ok(())
     }
 

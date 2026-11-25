@@ -1,7 +1,5 @@
 use core::future::Future;
 
-use crate::Context;
-
 use super::AsyncWrite;
 
 /// Helper methods on top of [`AsyncWrite`], implemented for every [`AsyncWrite`].
@@ -15,23 +13,13 @@ pub trait AsyncWriteExt: AsyncWrite {
     /// # Cancel safety
     ///
     /// This method is not cancel safe: an unknown number of bytes from `buf` may already be written.
-    fn write_all<
-        'a,
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
+    fn write_all<'a>(
         &'a mut self,
-        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         mut buf: &'a [u8],
     ) -> impl Future<Output = Result<(), WriteAllError<Self::Error>>> {
         async move {
             while !buf.is_empty() {
-                let len = match self.write(ctx, buf).await {
+                let len = match self.write(buf).await {
                     Ok(0) => return Err(WriteAllError::WriteZero),
                     Ok(len) => len,
                     Err(err) => return Err(WriteAllError::Io(err)),
@@ -80,10 +68,6 @@ mod tests {
 
     use super::{AsyncWrite, AsyncWriteExt, WriteAllError};
 
-    use crate::{LoopStorage, Selector};
-
-    type Storage = LoopStorage<(), 1, 1, 0, 0, 1, 1>;
-
     struct Scripted {
         max_per_call: usize,
         error: Option<Errno>,
@@ -128,18 +112,8 @@ mod tests {
     impl AsyncWrite for Scripted {
         type Error = Errno;
 
-        fn write<
-            'a,
-            E: 'static,
-            const EVENTS: usize,
-            const TASKS: usize,
-            const TASK_SIZE: usize,
-            const ROOT_TASK_SIZE: usize,
-            const TIMERS: usize,
-            const FDS: usize,
-        >(
+        fn write<'a>(
             &'a mut self,
-            _ctx: &'a crate::Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
             buf: &'a [u8],
         ) -> impl Future<Output = rustix::io::Result<usize>> {
             self.calls += 1;
@@ -154,60 +128,36 @@ mod tests {
             })
         }
 
-        fn flush<
-            'a,
-            E: 'static,
-            const EVENTS: usize,
-            const TASKS: usize,
-            const TASK_SIZE: usize,
-            const ROOT_TASK_SIZE: usize,
-            const TIMERS: usize,
-            const FDS: usize,
-        >(
-            &'a mut self,
-            _ctx: &'a crate::Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-        ) -> impl Future<Output = rustix::io::Result<()>> {
+        fn flush(&mut self) -> impl Future<Output = rustix::io::Result<()>> {
             ready(Ok(()))
         }
     }
 
-    fn write_all(
-        storage: &'static Storage,
-        writer: &mut Scripted,
-        buf: &[u8],
-    ) -> Poll<Result<(), WriteAllError<Errno>>> {
-        let selector = Selector::new().unwrap();
-        let ctx = storage.claim(&selector).unwrap().0;
+    fn write_all(writer: &mut Scripted, buf: &[u8]) -> Poll<Result<(), WriteAllError<Errno>>> {
         let mut cx = Context::from_waker(Waker::noop());
-        pin!(writer.write_all(&ctx, buf)).poll(&mut cx)
+        pin!(writer.write_all(buf)).poll(&mut cx)
     }
 
     #[test]
     fn write_all_retries_partial_writes() {
-        static STORAGE: Storage = Storage::new();
         let mut writer = Scripted::new(3, None);
-        assert_eq!(
-            write_all(&STORAGE, &mut writer, b"hello world"),
-            Poll::Ready(Ok(()))
-        );
+        assert_eq!(write_all(&mut writer, b"hello world"), Poll::Ready(Ok(())));
         assert_eq!(writer.written(), b"hello world");
         assert_eq!(writer.calls, 4);
     }
 
     #[test]
     fn write_all_of_nothing_never_writes() {
-        static STORAGE: Storage = Storage::new();
         let mut writer = Scripted::new(3, None);
-        assert_eq!(write_all(&STORAGE, &mut writer, b""), Poll::Ready(Ok(())));
+        assert_eq!(write_all(&mut writer, b""), Poll::Ready(Ok(())));
         assert_eq!(writer.calls, 0);
     }
 
     #[test]
     fn write_all_fails_when_zero_bytes_are_accepted() {
-        static STORAGE: Storage = Storage::new();
         let mut writer = Scripted::new(0, None);
         assert_eq!(
-            write_all(&STORAGE, &mut writer, b"hello"),
+            write_all(&mut writer, b"hello"),
             Poll::Ready(Err(WriteAllError::WriteZero))
         );
         assert_eq!(writer.calls, 1);
@@ -215,10 +165,9 @@ mod tests {
 
     #[test]
     fn write_all_returns_syscall_errors() {
-        static STORAGE: Storage = Storage::new();
         let mut writer = Scripted::new(3, Some(Errno::PIPE));
         assert_eq!(
-            write_all(&STORAGE, &mut writer, b"hello"),
+            write_all(&mut writer, b"hello"),
             Poll::Ready(Err(WriteAllError::Io(Errno::PIPE)))
         );
         assert_eq!(writer.calls, 1);
@@ -226,13 +175,10 @@ mod tests {
 
     #[test]
     fn write_all_resumes_after_a_pending_write() {
-        static STORAGE: Storage = Storage::new();
-        let selector = Selector::new().unwrap();
-        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut writer = Scripted::new(6, None).yielding();
         let mut cx = Context::from_waker(Waker::noop());
         {
-            let mut write = pin!(writer.write_all(&ctx, b"hello world"));
+            let mut write = pin!(writer.write_all(b"hello world"));
             assert_eq!(write.as_mut().poll(&mut cx), Poll::Pending);
             assert_eq!(write.as_mut().poll(&mut cx), Poll::Pending);
             assert_eq!(write.as_mut().poll(&mut cx), Poll::Ready(Ok(())));

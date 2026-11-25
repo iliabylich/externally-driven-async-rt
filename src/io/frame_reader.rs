@@ -1,5 +1,3 @@
-use crate::Context;
-
 use super::AsyncRead;
 
 /// Reads frames of exactly `N` bytes from an [`AsyncRead`].
@@ -37,23 +35,12 @@ impl<R: AsyncRead, const N: usize> FrameReader<R, N> {
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub async fn read_exact<
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
-        &mut self,
-        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    ) -> Result<Option<[u8; N]>, FrameReaderError<R::Error>> {
+    pub async fn read_exact(&mut self) -> Result<Option<[u8; N]>, FrameReaderError<R::Error>> {
         while self.filled < N {
             let Some(rest) = self.buf.get_mut(self.filled..) else {
                 unreachable!("filled is below N");
             };
-            let len = match self.inner.read(ctx, rest).await {
+            let len = match self.inner.read(rest).await {
                 Ok(0) if self.filled == 0 => return Ok(None),
                 Ok(0) => return Err(FrameReaderError::UnexpectedEof),
                 Ok(len) => len,
@@ -108,10 +95,6 @@ mod tests {
 
     use super::{AsyncRead, FrameReader, FrameReaderError};
 
-    use crate::{LoopStorage, Selector};
-
-    type Storage = LoopStorage<(), 1, 1, 0, 0, 1, 1>;
-
     struct Chunks {
         chunks: &'static [&'static [u8]],
         end: Option<rustix::io::Result<usize>>,
@@ -120,18 +103,8 @@ mod tests {
     impl AsyncRead for Chunks {
         type Error = Errno;
 
-        fn read<
-            'a,
-            E: 'static,
-            const EVENTS: usize,
-            const TASKS: usize,
-            const TASK_SIZE: usize,
-            const ROOT_TASK_SIZE: usize,
-            const TIMERS: usize,
-            const FDS: usize,
-        >(
+        fn read<'a>(
             &'a mut self,
-            _ctx: &'a crate::Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
             buf: &'a mut [u8],
         ) -> impl Future<Output = rustix::io::Result<usize>> {
             poll_fn(move |_| {
@@ -152,88 +125,73 @@ mod tests {
 
     #[test]
     fn reads_consecutive_frames_from_partial_reads() {
-        static STORAGE: Storage = Storage::new();
-        let selector = Selector::new().unwrap();
-        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut reader = FrameReader::<_, 5>::new(Chunks {
             chunks: &[b"hel", b"lo", b"wor", b"ld"],
             end: None,
         });
 
         assert_eq!(
-            poll_once(reader.read_exact(&ctx)),
+            poll_once(reader.read_exact()),
             Poll::Ready(Ok(Some(*b"hello")))
         );
         assert_eq!(
-            poll_once(reader.read_exact(&ctx)),
+            poll_once(reader.read_exact()),
             Poll::Ready(Ok(Some(*b"world")))
         );
     }
 
     #[test]
     fn resumes_a_cancelled_read() {
-        static STORAGE: Storage = Storage::new();
-        let selector = Selector::new().unwrap();
-        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut reader = FrameReader::<_, 5>::new(Chunks {
             chunks: &[b"he", b"l"],
             end: None,
         });
 
-        assert_eq!(poll_once(reader.read_exact(&ctx)), Poll::Pending);
+        assert_eq!(poll_once(reader.read_exact()), Poll::Pending);
 
         reader.inner.chunks = &[b"lo"];
         assert_eq!(
-            poll_once(reader.read_exact(&ctx)),
+            poll_once(reader.read_exact()),
             Poll::Ready(Ok(Some(*b"hello")))
         );
     }
 
     #[test]
     fn returns_none_when_the_stream_ends_between_frames() {
-        static STORAGE: Storage = Storage::new();
-        let selector = Selector::new().unwrap();
-        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut reader = FrameReader::<_, 5>::new(Chunks {
             chunks: &[b"hello"],
             end: Some(Ok(0)),
         });
 
         assert_eq!(
-            poll_once(reader.read_exact(&ctx)),
+            poll_once(reader.read_exact()),
             Poll::Ready(Ok(Some(*b"hello")))
         );
-        assert_eq!(poll_once(reader.read_exact(&ctx)), Poll::Ready(Ok(None)));
+        assert_eq!(poll_once(reader.read_exact()), Poll::Ready(Ok(None)));
     }
 
     #[test]
     fn fails_when_the_stream_ends_in_the_middle_of_a_frame() {
-        static STORAGE: Storage = Storage::new();
-        let selector = Selector::new().unwrap();
-        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut reader = FrameReader::<_, 5>::new(Chunks {
             chunks: &[b"hel"],
             end: Some(Ok(0)),
         });
 
         assert_eq!(
-            poll_once(reader.read_exact(&ctx)),
+            poll_once(reader.read_exact()),
             Poll::Ready(Err(FrameReaderError::UnexpectedEof))
         );
     }
 
     #[test]
     fn returns_syscall_errors() {
-        static STORAGE: Storage = Storage::new();
-        let selector = Selector::new().unwrap();
-        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut reader = FrameReader::<_, 5>::new(Chunks {
             chunks: &[],
             end: Some(Err(Errno::CONNRESET)),
         });
 
         assert_eq!(
-            poll_once(reader.read_exact(&ctx)),
+            poll_once(reader.read_exact()),
             Poll::Ready(Err(FrameReaderError::Io(Errno::CONNRESET)))
         );
     }

@@ -213,8 +213,8 @@ fn spawning_and_dispatching_from_drop_during_teardown() {
 
 #[test]
 fn undrained_events_are_dropped_with_the_loop() {
-    struct DispatchFlagOnDrop<'c, 'a>(
-        &'c Context<'a, FlagOnDrop<'static>, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, 1, 1>,
+    struct DispatchFlagOnDrop<'c, 'sel>(
+        &'c Context<'sel, FlagOnDrop<'static>, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, 1, 1>,
         &'static AtomicBool,
     );
 

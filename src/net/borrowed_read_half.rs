@@ -1,15 +1,15 @@
-use crate::{NotEnoughResources, context::Context, io::AsyncRead, selector::Direction};
+use crate::{io::AsyncRead, selector::Direction};
 
 use super::{NetError, socket::Socket};
 
 /// Read half of a TCP/Unix stream.
 #[must_use]
-pub struct BorrowedReadHalf<'s> {
-    socket: &'s Socket,
+pub struct BorrowedReadHalf<'s, 'sel, const FDS: usize> {
+    socket: &'s Socket<'sel, FDS>,
 }
 
-impl<'s> BorrowedReadHalf<'s> {
-    pub(super) const fn new(socket: &'s Socket) -> Self {
+impl<'s, 'sel, const FDS: usize> BorrowedReadHalf<'s, 'sel, FDS> {
+    pub(super) const fn new(socket: &'s Socket<'sel, FDS>) -> Self {
         Self { socket }
     }
 
@@ -18,28 +18,11 @@ impl<'s> BorrowedReadHalf<'s> {
     /// The stream may still turn out to be not readable, so [`try_read`](Self::try_read)
     /// can return [`Errno::AGAIN`](rustix::io::Errno::AGAIN) after it.
     ///
-    /// # Errors
-    ///
-    /// Returns an error if all `FDS` fd slots are taken.
-    ///
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub async fn readable<
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
-        &mut self,
-        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    ) -> Result<(), NotEnoughResources> {
-        self.socket
-            .ready(&ctx.storage.io_waiters, ctx.selector, Direction::Read)
-            .await
+    pub async fn readable(&mut self) {
+        self.socket.ready(Direction::Read).await;
     }
 
     /// Reads into a given buffer without waiting, returns the number of read bytes.
@@ -55,23 +38,10 @@ impl<'s> BorrowedReadHalf<'s> {
     }
 }
 
-impl AsyncRead for BorrowedReadHalf<'_> {
+impl<const FDS: usize> AsyncRead for BorrowedReadHalf<'_, '_, FDS> {
     type Error = NetError;
 
-    fn read<
-        'a,
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
-        &'a mut self,
-        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-        buf: &'a mut [u8],
-    ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket.recv(&ctx.storage.io_waiters, ctx.selector, buf)
+    fn read<'a>(&'a mut self, buf: &'a mut [u8]) -> impl Future<Output = Result<usize, NetError>> {
+        self.socket.recv(buf)
     }
 }

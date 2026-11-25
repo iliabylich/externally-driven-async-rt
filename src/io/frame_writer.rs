@@ -1,5 +1,3 @@
-use crate::Context;
-
 use super::AsyncWrite;
 
 /// Writes frames of exactly `N` bytes to an [`AsyncWrite`].
@@ -39,20 +37,8 @@ impl<W: AsyncWrite, const N: usize> FrameWriter<W, N> {
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub async fn write_all<
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
-        &mut self,
-        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-        frame: &[u8; N],
-    ) -> Result<(), FrameWriterError<W::Error>> {
-        self.flush(ctx).await?;
+    pub async fn write_all(&mut self, frame: &[u8; N]) -> Result<(), FrameWriterError<W::Error>> {
+        self.flush().await?;
         self.buf = *frame;
         self.written = 0;
         Ok(())
@@ -67,23 +53,12 @@ impl<W: AsyncWrite, const N: usize> FrameWriter<W, N> {
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub async fn flush<
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
-        &mut self,
-        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    ) -> Result<(), FrameWriterError<W::Error>> {
+    pub async fn flush(&mut self) -> Result<(), FrameWriterError<W::Error>> {
         while self.written < N {
             let Some(rest) = self.buf.get(self.written..) else {
                 unreachable!("written is below N");
             };
-            let len = match self.inner.write(ctx, rest).await {
+            let len = match self.inner.write(rest).await {
                 Ok(0) => return Err(FrameWriterError::WriteZero),
                 Ok(len) => len,
                 Err(err) => return Err(FrameWriterError::Io(err)),
@@ -97,7 +72,7 @@ impl<W: AsyncWrite, const N: usize> FrameWriter<W, N> {
             };
             self.written = written;
         }
-        self.inner.flush(ctx).await.map_err(FrameWriterError::Io)
+        self.inner.flush().await.map_err(FrameWriterError::Io)
     }
 }
 
@@ -133,10 +108,6 @@ mod tests {
 
     use super::{AsyncWrite, FrameWriter, FrameWriterError};
 
-    use crate::{LoopStorage, Selector};
-
-    type Storage = LoopStorage<(), 1, 1, 0, 0, 1, 1>;
-
     struct Sink {
         max_per_call: usize,
         room: usize,
@@ -166,18 +137,8 @@ mod tests {
     impl AsyncWrite for Sink {
         type Error = Errno;
 
-        fn write<
-            'a,
-            E: 'static,
-            const EVENTS: usize,
-            const TASKS: usize,
-            const TASK_SIZE: usize,
-            const ROOT_TASK_SIZE: usize,
-            const TIMERS: usize,
-            const FDS: usize,
-        >(
+        fn write<'a>(
             &'a mut self,
-            _ctx: &'a crate::Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
             buf: &'a [u8],
         ) -> impl Future<Output = rustix::io::Result<usize>> {
             poll_fn(move |_| {
@@ -195,19 +156,7 @@ mod tests {
             })
         }
 
-        fn flush<
-            'a,
-            E: 'static,
-            const EVENTS: usize,
-            const TASKS: usize,
-            const TASK_SIZE: usize,
-            const ROOT_TASK_SIZE: usize,
-            const TIMERS: usize,
-            const FDS: usize,
-        >(
-            &'a mut self,
-            _ctx: &'a crate::Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-        ) -> impl Future<Output = rustix::io::Result<()>> {
+        fn flush(&mut self) -> impl Future<Output = rustix::io::Result<()>> {
             self.flushed = self.len;
             core::future::ready(Ok(()))
         }
@@ -219,82 +168,52 @@ mod tests {
 
     #[test]
     fn writes_frames_on_the_next_write_and_flush() {
-        static STORAGE: Storage = Storage::new();
-        let selector = Selector::new().unwrap();
-        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut writer = FrameWriter::<_, 5>::new(Sink::new(2, 16, None));
 
-        assert_eq!(
-            poll_once(writer.write_all(&ctx, b"hello")),
-            Poll::Ready(Ok(()))
-        );
+        assert_eq!(poll_once(writer.write_all(b"hello")), Poll::Ready(Ok(())));
         assert_eq!(writer.inner.written(), b"");
-        assert_eq!(
-            poll_once(writer.write_all(&ctx, b"world")),
-            Poll::Ready(Ok(()))
-        );
+        assert_eq!(poll_once(writer.write_all(b"world")), Poll::Ready(Ok(())));
         assert_eq!(writer.inner.written(), b"hello");
         assert_eq!(writer.inner.flushed, 5);
-        assert_eq!(poll_once(writer.flush(&ctx)), Poll::Ready(Ok(())));
+        assert_eq!(poll_once(writer.flush()), Poll::Ready(Ok(())));
         assert_eq!(writer.inner.written(), b"helloworld");
         assert_eq!(writer.inner.flushed, 10);
     }
 
     #[test]
     fn resumes_a_cancelled_write() {
-        static STORAGE: Storage = Storage::new();
-        let selector = Selector::new().unwrap();
-        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut writer = FrameWriter::<_, 5>::new(Sink::new(2, 3, None));
 
-        assert_eq!(
-            poll_once(writer.write_all(&ctx, b"hello")),
-            Poll::Ready(Ok(()))
-        );
-        assert_eq!(poll_once(writer.write_all(&ctx, b"world")), Poll::Pending);
+        assert_eq!(poll_once(writer.write_all(b"hello")), Poll::Ready(Ok(())));
+        assert_eq!(poll_once(writer.write_all(b"world")), Poll::Pending);
         assert_eq!(writer.inner.written(), b"hel");
 
         writer.inner.room = 16;
-        assert_eq!(poll_once(writer.flush(&ctx)), Poll::Ready(Ok(())));
+        assert_eq!(poll_once(writer.flush()), Poll::Ready(Ok(())));
         assert_eq!(writer.inner.written(), b"hello");
-        assert_eq!(
-            poll_once(writer.write_all(&ctx, b"world")),
-            Poll::Ready(Ok(()))
-        );
-        assert_eq!(poll_once(writer.flush(&ctx)), Poll::Ready(Ok(())));
+        assert_eq!(poll_once(writer.write_all(b"world")), Poll::Ready(Ok(())));
+        assert_eq!(poll_once(writer.flush()), Poll::Ready(Ok(())));
         assert_eq!(writer.inner.written(), b"helloworld");
     }
 
     #[test]
     fn fails_when_zero_bytes_are_accepted() {
-        static STORAGE: Storage = Storage::new();
-        let selector = Selector::new().unwrap();
-        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut writer = FrameWriter::<_, 5>::new(Sink::new(0, 16, None));
 
+        assert_eq!(poll_once(writer.write_all(b"hello")), Poll::Ready(Ok(())));
         assert_eq!(
-            poll_once(writer.write_all(&ctx, b"hello")),
-            Poll::Ready(Ok(()))
-        );
-        assert_eq!(
-            poll_once(writer.flush(&ctx)),
+            poll_once(writer.flush()),
             Poll::Ready(Err(FrameWriterError::WriteZero))
         );
     }
 
     #[test]
     fn returns_syscall_errors() {
-        static STORAGE: Storage = Storage::new();
-        let selector = Selector::new().unwrap();
-        let ctx = STORAGE.claim(&selector).unwrap().0;
         let mut writer = FrameWriter::<_, 5>::new(Sink::new(2, 16, Some(Errno::PIPE)));
 
+        assert_eq!(poll_once(writer.write_all(b"hello")), Poll::Ready(Ok(())));
         assert_eq!(
-            poll_once(writer.write_all(&ctx, b"hello")),
-            Poll::Ready(Ok(()))
-        );
-        assert_eq!(
-            poll_once(writer.flush(&ctx)),
+            poll_once(writer.flush()),
             Poll::Ready(Err(FrameWriterError::Io(Errno::PIPE)))
         );
     }

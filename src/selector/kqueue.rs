@@ -2,14 +2,12 @@ use core::{cell::Cell, mem::MaybeUninit, time::Duration};
 
 use rustix::{
     event::kqueue::{Event, EventFilter, EventFlags, UserDefinedFlags, UserFlags, kevent, kqueue},
-    fd::{AsFd, BorrowedFd, OwnedFd},
+    fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd},
     io::{Errno, FdFlags, fcntl_setfd},
 };
 
 use crate::{
-    selector::{
-        Direction, Directions, EVENTS_PER_CALL, IoChange, KernelTimer, SelectorEvent, TimerChange,
-    },
+    selector::{Directions, EVENTS_PER_CALL, KernelTimer, SelectorEvent, TimerChange},
     strace::{syscall, syscall_end, syscall_start},
     time::Instant,
 };
@@ -49,23 +47,18 @@ impl KqueueSelector {
         self.submit([Self::notify_kevent(UserFlags::TRIGGER, EventFlags::empty())])
     }
 
-    pub(crate) fn apply_now(&self, change: IoChange) -> rustix::io::Result<()> {
-        self.submit(Self::io_kevents(change))
+    pub(crate) fn register(&self, fd: BorrowedFd<'_>) -> rustix::io::Result<()> {
+        self.submit(Self::io_kevents(fd, EventFlags::ADD | EventFlags::CLEAR))
     }
 
-    pub(crate) fn flush(
-        &self,
-        io_changes: impl IntoIterator<Item = IoChange>,
-        deadline: Option<Instant>,
-        now: Instant,
-    ) -> rustix::io::Result<()> {
+    pub(crate) fn deregister(&self, fd: BorrowedFd<'_>) -> rustix::io::Result<()> {
+        self.submit(Self::io_kevents(fd, EventFlags::DELETE))
+    }
+
+    pub(crate) fn flush(&self, deadline: Option<Instant>, now: Instant) -> rustix::io::Result<()> {
         let (timer, timer_change) = self.timer.get().flush(deadline, now);
         self.timer.set(timer);
-        let changes = io_changes
-            .into_iter()
-            .flat_map(Self::io_kevents)
-            .chain(timer_change.map(Self::timer_kevent));
-        self.submit(changes)
+        self.submit(timer_change.map(Self::timer_kevent))
     }
 
     pub(crate) fn poll_nonblocking(
@@ -124,9 +117,8 @@ impl KqueueSelector {
         changes: &[Event],
         receipts: &mut [MaybeUninit<Event>; CHANGES_PER_CALL],
     ) -> rustix::io::Result<()> {
-        // SAFETY: the callers (`flush`, `apply_now`) only pass open fds, and a filter is deleted
-        // (`apply_now`) before its registration ends and the fd can be closed, so the kqueue
-        // never refers to an invalid fd.
+        // SAFETY: the callers (`register`, `deregister`) only pass open fds, and every registered
+        // fd is deregistered before it's closed, so the kqueue never refers to an invalid fd.
         syscall_start!("kevent", self.kq, changes);
         let result = unsafe { kevent(&self.kq, changes, receipts, Some(Duration::ZERO)) };
         syscall_end!(
@@ -201,26 +193,10 @@ impl KqueueSelector {
         )
     }
 
-    fn io_kevents(change: IoChange) -> [Event; 2] {
-        [
-            Self::io_kevent(
-                EventFilter::Read(change.fd),
-                change.interest.contains(Direction::Read),
-            ),
-            Self::io_kevent(
-                EventFilter::Write(change.fd),
-                change.interest.contains(Direction::Write),
-            ),
-        ]
-    }
-
-    fn io_kevent(filter: EventFilter, armed: bool) -> Event {
-        let flags = if armed {
-            EventFlags::ADD | EventFlags::ONESHOT
-        } else {
-            EventFlags::DELETE
-        };
-        Event::new(filter, flags | EventFlags::RECEIPT, core::ptr::null_mut())
+    fn io_kevents(fd: BorrowedFd<'_>, flags: EventFlags) -> [Event; 2] {
+        let fd = fd.as_raw_fd();
+        [EventFilter::Read(fd), EventFilter::Write(fd)]
+            .map(|filter| Event::new(filter, flags | EventFlags::RECEIPT, core::ptr::null_mut()))
     }
 }
 

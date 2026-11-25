@@ -7,8 +7,6 @@ mod frame_writer;
 mod io_waiter;
 mod io_waiters;
 
-use self::io_waiter::IoWaiter;
-pub(crate) use self::io_waiters::IoWaiters;
 pub use self::{
     async_read::AsyncRead,
     async_read_ext::{AsyncReadExt, ReadExactError},
@@ -17,3 +15,4 @@ pub use self::{
     frame_reader::{FrameReader, FrameReaderError},
     frame_writer::{FrameWriter, FrameWriterError},
 };
+pub(crate) use self::{io_waiter::IoWaiter, io_waiters::IoWaiters};

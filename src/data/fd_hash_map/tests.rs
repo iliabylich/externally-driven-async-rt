@@ -2,7 +2,7 @@ use super::FdHashMap;
 use core::cell::Cell;
 
 fn insert<const N: usize>(map: &FdHashMap<Cell<i32>, N>, key: i32, value: i32) -> Option<()> {
-    map.get_or_insert(key)?.set(value);
+    map.insert(key)?.set(value);
     Some(())
 }
 
@@ -21,20 +21,12 @@ fn distinct_keys_get_distinct_values() {
 }
 
 #[test]
-fn get_or_insert_returns_the_existing_value() {
-    let map = &FdHashMap::<Cell<i32>, 2>::new([const { Cell::new(0) }; 2]);
-    insert(map, 1, 10).unwrap();
-    assert_eq!(map.get_or_insert(1).map(Cell::get), Some(10));
-    assert_eq!(map.iter().count(), 1);
-}
-
-#[test]
 fn a_full_map_rejects_new_keys_but_finds_existing_ones() {
     let map = &FdHashMap::<Cell<i32>, 2>::new([const { Cell::new(0) }; 2]);
     insert(map, 1, 10).unwrap();
     insert(map, 2, 20).unwrap();
-    assert!(map.get_or_insert(3).is_none());
-    assert_eq!(map.get_or_insert(1).map(Cell::get), Some(10));
+    assert!(map.insert(3).is_none());
+    assert_eq!(value(map, 1), Some(10));
 }
 
 #[test]

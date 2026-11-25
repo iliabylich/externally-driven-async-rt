@@ -6,23 +6,23 @@ use crate::{
 /// A task reservation that can be used to spawn a task without waiting for a free slot.
 #[must_use = "a reservation holds a task slot until it is spawned into or dropped"]
 pub struct TaskReservation<
-    'a,
+    'sel,
     const TASKS: usize,
     const TASK_SIZE: usize,
     const ROOT_TASK_SIZE: usize,
 > {
     tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
-    claimed: Claimed<'a>,
+    claimed: Claimed<'sel>,
     id: TaskId<TASK_SIZE>,
     entry: &'static TaskEntry<TASK_SIZE>,
 }
 
-impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
-    TaskReservation<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
+impl<'sel, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
+    TaskReservation<'sel, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
     pub(super) const fn new(
         tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
-        claimed: Claimed<'a>,
+        claimed: Claimed<'sel>,
         id: TaskId<TASK_SIZE>,
         entry: &'static TaskEntry<TASK_SIZE>,
     ) -> Self {
@@ -46,7 +46,7 @@ impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
         future: Fut,
     ) -> impl Future<Output = ()> + use<TASKS, TASK_SIZE, ROOT_TASK_SIZE, Fut>
     where
-        Fut: Future<Output = ()> + 'a,
+        Fut: Future<Output = ()> + 'sel,
     {
         let Self {
             tasks,

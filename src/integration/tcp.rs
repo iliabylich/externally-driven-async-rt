@@ -1,4 +1,5 @@
 use core::{
+    cell::Cell,
     future::{pending, poll_fn},
     net::SocketAddr,
     pin::pin,
@@ -13,10 +14,10 @@ use rustix::{
 };
 
 use crate::{
-    EventLoop, LoopStorage, Selector,
+    EventLoop, LoopStorage, NotEnoughResources, Selector,
     io::{AsyncRead, AsyncWrite},
     net::{NetError, TcpListener, TcpStream},
-    testing::EventLoopTestingExt,
+    testing::{EventLoopTestingExt, assert_yields},
 };
 
 use super::{EventLoopExt, FdExt, raw_accept, raw_socket};
@@ -43,15 +44,15 @@ fn echo_with_a_raw_peer() {
         let mut stream = TcpStream::connect(&ctx, addr).await.unwrap();
         assert_eq!(stream.peer_addr().unwrap(), addr);
         assert!(stream.local_addr().unwrap().ip().is_loopback());
-        assert_eq!(stream.write(&ctx, b"hello").await.unwrap(), 5);
+        assert_eq!(stream.write(b"hello").await.unwrap(), 5);
         let mut buf = [0; 5];
         let mut len = 0;
         while len < 5 {
-            len += stream.read(&ctx, &mut buf[len..]).await.unwrap();
+            len += stream.read(&mut buf[len..]).await.unwrap();
         }
         assert_eq!(&buf, b"hello");
         stream.shutdown(Shutdown::Write).unwrap();
-        assert_eq!(stream.read(&ctx, &mut buf).await.unwrap(), 0);
+        assert_eq!(stream.read(&mut buf).await.unwrap(), 0);
         ctx.dispatch(1).unwrap();
         pending::<()>().await;
     })
@@ -70,23 +71,25 @@ fn echo_with_a_raw_peer() {
 #[test]
 fn listener_accepts_a_raw_client() {
     static STORAGE: Storage = Storage::new();
-    let mut listener = TcpListener::bind(LOCALHOST).unwrap();
-    let addr = listener.local_addr().unwrap();
+    let listening = Cell::new(None);
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
-        let (mut stream, peer) = listener.accept(&ctx).await.unwrap();
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
+        let mut listener = TcpListener::bind(&ctx, LOCALHOST).unwrap();
+        listening.set(Some(listener.local_addr().unwrap()));
+        let (mut stream, peer) = listener.accept().await.unwrap();
         assert_eq!(stream.peer_addr().unwrap(), peer);
         let mut buf = [0; 4];
         let mut len = 0;
         while len < 4 {
-            len += stream.read(&ctx, &mut buf[len..]).await.unwrap();
+            len += stream.read(&mut buf[len..]).await.unwrap();
         }
         assert_eq!(&buf, b"ping");
-        stream.write(&ctx, b"pong").await.unwrap();
+        stream.write(b"pong").await.unwrap();
         ctx.dispatch(1).unwrap();
         pending::<()>().await;
     })
     .unwrap();
+    let addr = listening.take().unwrap();
     let client = raw_socket(AddressFamily::INET, SocketType::STREAM);
     match rustix::net::connect(&client, &addr) {
         Ok(()) | Err(Errno::INPROGRESS) => {}
@@ -103,9 +106,12 @@ fn listener_accepts_a_raw_client() {
 #[test]
 fn connect_to_a_closed_port_fails() {
     static STORAGE: Storage<NetError> = Storage::new();
-    let addr = TcpListener::bind(LOCALHOST).unwrap().local_addr().unwrap();
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
+        let addr = TcpListener::bind(&ctx, LOCALHOST)
+            .unwrap()
+            .local_addr()
+            .unwrap();
         let err = TcpStream::connect(&ctx, addr).await.err().unwrap();
         ctx.dispatch(err).unwrap();
         pending::<()>().await;
@@ -122,22 +128,22 @@ fn borrowed_halves_read_and_write_concurrently_in_one_task() {
     static STORAGE: Storage = Storage::new();
     const LEN: usize = 1 << 20;
     const CHUNK: usize = 512;
-    let mut listener = TcpListener::bind(LOCALHOST).unwrap();
-    let addr = listener.local_addr().unwrap();
     let mut selector = Selector::new().unwrap();
-    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
+        let mut listener = TcpListener::bind(&ctx, LOCALHOST).unwrap();
+        let addr = listener.local_addr().unwrap();
         let handle = ctx
-            .spawn(async move |ctx| {
-                let (mut stream, _) = listener.accept(&ctx).await.unwrap();
+            .spawn(async move |_| {
+                let (mut stream, _) = listener.accept().await.unwrap();
                 let mut buf = [0; CHUNK];
                 loop {
-                    let len = stream.read(&ctx, &mut buf).await.unwrap();
+                    let len = stream.read(&mut buf).await.unwrap();
                     if len == 0 {
                         return;
                     }
                     let mut sent = 0;
                     while sent < len {
-                        sent += stream.write(&ctx, &buf[sent..len]).await.unwrap();
+                        sent += stream.write(&buf[sent..len]).await.unwrap();
                     }
                 }
             })
@@ -149,7 +155,7 @@ fn borrowed_halves_read_and_write_concurrently_in_one_task() {
             let mut buf = [0; CHUNK];
             let mut received = 0;
             while received < LEN {
-                let len = read.read(&ctx, &mut buf).await.unwrap();
+                let len = read.read(&mut buf).await.unwrap();
                 assert_ne!(len, 0);
                 for (i, byte) in buf[..len].iter().enumerate() {
                     assert_eq!(*byte, u8::try_from((received + i) % 256).unwrap());
@@ -164,7 +170,7 @@ fn borrowed_halves_read_and_write_concurrently_in_one_task() {
                 let chunk: [u8; CHUNK] =
                     core::array::from_fn(|i| u8::try_from((sent + i) % 256).unwrap());
                 let len = CHUNK.min(LEN - sent);
-                sent += write.write(&ctx, &chunk[..len]).await.unwrap();
+                sent += write.write(&chunk[..len]).await.unwrap();
             }
         });
         let (mut received, mut written) = (None, false);
@@ -194,9 +200,37 @@ fn borrowed_halves_read_and_write_concurrently_in_one_task() {
 
 #[test]
 fn listener_binds_to_ipv6() {
+    static STORAGE: Storage = Storage::new();
     let localhost = SocketAddr::new(core::net::IpAddr::V6(core::net::Ipv6Addr::LOCALHOST), 0);
-    let listener = TcpListener::bind(localhost).unwrap();
-    assert!(listener.local_addr().unwrap().is_ipv6());
+    let mut selector = Selector::new().unwrap();
+    let event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
+        let listener = TcpListener::bind(&ctx, localhost).unwrap();
+        assert!(listener.local_addr().unwrap().is_ipv6());
+        ctx.dispatch(1).unwrap();
+        pending::<()>().await;
+    })
+    .unwrap();
+    assert_yields!(event_loop.events(), [1]);
+}
+
+#[test]
+fn one_fd_slot_holds_one_socket_at_a_time() {
+    static STORAGE: LoopStorage<u32, 1, 1, 0, 1024, 1, 1> = LoopStorage::new();
+    let mut selector = Selector::new().unwrap();
+    let event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
+        for _ in 0..3 {
+            drop(TcpListener::bind(&ctx, LOCALHOST).unwrap());
+        }
+        let _first = TcpListener::bind(&ctx, LOCALHOST).unwrap();
+        assert_eq!(
+            TcpListener::bind(&ctx, LOCALHOST).err(),
+            Some(NetError::NotEnoughResources(NotEnoughResources::FDs))
+        );
+        ctx.dispatch(1).unwrap();
+        pending::<()>().await;
+    })
+    .unwrap();
+    assert_yields!(event_loop.events(), [1]);
 }
 
 #[test]
@@ -210,10 +244,10 @@ fn split_halves_wait_for_readiness_and_try_io() {
         let mut buf = [0; 5];
         assert_eq!(rx.try_read(&mut buf), Err(Errno::AGAIN));
 
-        tx.writable(&ctx).await.unwrap();
+        tx.writable().await;
         assert_eq!(tx.try_write(b"hello").unwrap(), 5);
 
-        rx.readable(&ctx).await.unwrap();
+        rx.readable().await;
         assert_eq!(rx.try_read(&mut buf).unwrap(), 5);
         assert_eq!(&buf, b"world");
         ctx.dispatch(1).unwrap();

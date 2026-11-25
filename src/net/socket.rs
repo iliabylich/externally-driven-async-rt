@@ -14,8 +14,7 @@ use rustix::{
 };
 
 use crate::{
-    NotEnoughResources,
-    io::IoWaiters,
+    io::{IoWaiter, IoWaiters},
     selector::{Direction, Selector},
     strace::{syscall, syscall_end, syscall_start},
 };
@@ -29,35 +28,59 @@ const SEND_FLAGS: SendFlags = SendFlags::empty();
 const SEND_FLAGS: SendFlags = SendFlags::NOSIGNAL;
 
 #[must_use]
-pub(super) struct Socket(OwnedFd);
+pub(super) struct Socket<'sel, const FDS: usize> {
+    fd: OwnedFd,
+    io: &'static IoWaiter,
+    io_waiters: &'static IoWaiters<FDS>,
+    selector: &'sel Selector,
+}
 
-impl Socket {
-    pub(super) fn new(family: AddressFamily, ty: SocketType) -> rustix::io::Result<Self> {
+impl<'sel, const FDS: usize> Socket<'sel, FDS> {
+    pub(super) fn new(
+        io_waiters: &'static IoWaiters<FDS>,
+        selector: &'sel Selector,
+        family: AddressFamily,
+        ty: SocketType,
+    ) -> Result<Self, NetError> {
         syscall_start!("socket", family, ty, 0);
         let fd = rustix::net::socket(family, ty, None);
         syscall_end!(fd);
-        let socket = Self(fd?);
-        socket.configure(ty)?;
-        Ok(socket)
+        Self::register(io_waiters, selector, fd?, ty)
+    }
+
+    fn register(
+        io_waiters: &'static IoWaiters<FDS>,
+        selector: &'sel Selector,
+        fd: OwnedFd,
+        ty: SocketType,
+    ) -> Result<Self, NetError> {
+        Self::configure(&fd, ty)?;
+        let io = io_waiters.register(selector, fd.as_fd())?;
+        Ok(Self {
+            fd,
+            io,
+            io_waiters,
+            selector,
+        })
     }
 
     pub(super) fn bind<A: SocketAddrArg>(&self, addr: &A) -> rustix::io::Result<()> {
-        syscall_start!("bind", self.0, addr.as_any());
-        let result = rustix::net::bind(&self.0, addr);
+        syscall_start!("bind", self.fd, addr.as_any());
+        let result = rustix::net::bind(&self.fd, addr);
         syscall_end!(result);
         result
     }
 
     pub(super) fn listen(&self) -> rustix::io::Result<()> {
-        syscall_start!("listen", self.0, LISTEN_BACKLOG);
-        let result = rustix::net::listen(&self.0, LISTEN_BACKLOG);
+        syscall_start!("listen", self.fd, LISTEN_BACKLOG);
+        let result = rustix::net::listen(&self.fd, LISTEN_BACKLOG);
         syscall_end!(result);
         result
     }
 
     pub(super) fn set_reuseaddr(&self) -> rustix::io::Result<()> {
-        syscall_start!("setsockopt", self.0, "SOL_SOCKET", "SO_REUSEADDR", true);
-        let result = set_socket_reuseaddr(&self.0, true);
+        syscall_start!("setsockopt", self.fd, "SOL_SOCKET", "SO_REUSEADDR", true);
+        let result = set_socket_reuseaddr(&self.fd, true);
         syscall_end!(result);
         result
     }
@@ -68,29 +91,29 @@ impl Socket {
         interval: Duration,
         count: u32,
     ) -> rustix::io::Result<()> {
-        syscall_start!("setsockopt", self.0, "SOL_SOCKET", "SO_KEEPALIVE", true);
-        let result = set_socket_keepalive(&self.0, true);
+        syscall_start!("setsockopt", self.fd, "SOL_SOCKET", "SO_KEEPALIVE", true);
+        let result = set_socket_keepalive(&self.fd, true);
         syscall_end!(result);
         result?;
 
-        syscall_start!("setsockopt", self.0, "IPPROTO_TCP", "TCP_KEEPIDLE", idle);
-        let result = set_tcp_keepidle(&self.0, idle);
+        syscall_start!("setsockopt", self.fd, "IPPROTO_TCP", "TCP_KEEPIDLE", idle);
+        let result = set_tcp_keepidle(&self.fd, idle);
         syscall_end!(result);
         result?;
 
         syscall_start!(
             "setsockopt",
-            self.0,
+            self.fd,
             "IPPROTO_TCP",
             "TCP_KEEPINTVL",
             interval
         );
-        let result = set_tcp_keepintvl(&self.0, interval);
+        let result = set_tcp_keepintvl(&self.fd, interval);
         syscall_end!(result);
         result?;
 
-        syscall_start!("setsockopt", self.0, "IPPROTO_TCP", "TCP_KEEPCNT", count);
-        let result = set_tcp_keepcnt(&self.0, count);
+        syscall_start!("setsockopt", self.fd, "IPPROTO_TCP", "TCP_KEEPCNT", count);
+        let result = set_tcp_keepcnt(&self.fd, count);
         syscall_end!(result);
         result?;
 
@@ -103,12 +126,12 @@ impl Socket {
             let timeout = u32::try_from(timeout.as_millis()).map_err(|_| Errno::INVAL)?;
             syscall_start!(
                 "setsockopt",
-                self.0,
+                self.fd,
                 "IPPROTO_TCP",
                 "TCP_USER_TIMEOUT",
                 timeout
             );
-            let result = rustix::net::sockopt::set_tcp_user_timeout(&self.0, timeout);
+            let result = rustix::net::sockopt::set_tcp_user_timeout(&self.fd, timeout);
             syscall_end!(result);
             result?;
         }
@@ -117,58 +140,55 @@ impl Socket {
     }
 
     pub(super) fn connect<A: SocketAddrArg>(&self, addr: &A) -> rustix::io::Result<()> {
-        syscall_start!("connect", self.0, addr.as_any());
-        let result = rustix::net::connect(&self.0, addr);
+        syscall_start!("connect", self.fd, addr.as_any());
+        let result = rustix::net::connect(&self.fd, addr);
         syscall_end!(result);
         result
     }
 
-    pub(super) async fn connect_stream<const FDS: usize, A: SocketAddrArg>(
-        io_waiters: &IoWaiters<FDS>,
-        selector: &Selector,
+    pub(super) async fn connect_stream<A: SocketAddrArg>(
+        io_waiters: &'static IoWaiters<FDS>,
+        selector: &'sel Selector,
         addr: &A,
     ) -> Result<Self, NetError> {
-        let socket = Self::new(addr.as_any().address_family(), SocketType::STREAM)?;
+        let socket = Self::new(
+            io_waiters,
+            selector,
+            addr.as_any().address_family(),
+            SocketType::STREAM,
+        )?;
         match socket.connect(addr) {
             Ok(()) => return Ok(socket),
             Err(Errno::INPROGRESS | Errno::INTR) => {}
             Err(errno) => return Err(errno.into()),
         }
-        io_waiters
-            .ready(selector, socket.0.as_fd(), Direction::Write)
-            .await?;
-        syscall_start!("getsockopt", socket.0, "SOL_SOCKET", "SO_ERROR");
-        let result = socket_error(&socket.0);
+        socket.io.clear(Direction::Write);
+        socket.io.ready(Direction::Write).await;
+        syscall_start!("getsockopt", socket.fd, "SOL_SOCKET", "SO_ERROR");
+        let result = socket_error(&socket.fd);
         syscall_end!(result; result.ok());
         result??;
         Ok(socket)
     }
 
-    pub(super) async fn accept<const FDS: usize>(
-        &self,
-        io_waiters: &IoWaiters<FDS>,
-        selector: &Selector,
-    ) -> Result<(Self, Option<SocketAddrAny>), NetError> {
+    pub(super) async fn accept(&self) -> Result<(Self, Option<SocketAddrAny>), NetError> {
         let (fd, addr) = self
-            .retry(io_waiters, selector, Direction::Read, |fd| {
+            .retry(Direction::Read, |fd| {
                 syscall_start!("accept", fd);
                 let result = rustix::net::acceptfrom(fd);
                 syscall_end!(result; result.as_ref().ok().and_then(|(_, addr)| addr.as_ref()));
                 result
             })
             .await?;
-        let socket = Self(fd);
-        socket.configure(SocketType::STREAM)?;
+        let socket = Self::register(self.io_waiters, self.selector, fd, SocketType::STREAM)?;
         Ok((socket, addr))
     }
 
-    pub(super) fn send<'a, const FDS: usize>(
+    pub(super) fn send<'a>(
         &'a self,
-        io_waiters: &'a IoWaiters<FDS>,
-        selector: &'a Selector,
         buf: &'a [u8],
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.retry(io_waiters, selector, Direction::Write, move |fd| {
+        self.retry(Direction::Write, move |fd| {
             syscall_start!("send", fd, buf, buf.len(), SEND_FLAGS);
             let result = rustix::net::send(fd, buf, SEND_FLAGS);
             syscall_end!(result);
@@ -176,13 +196,11 @@ impl Socket {
         })
     }
 
-    pub(super) fn recv<'a, const FDS: usize>(
+    pub(super) fn recv<'a>(
         &'a self,
-        io_waiters: &'a IoWaiters<FDS>,
-        selector: &'a Selector,
         buf: &'a mut [u8],
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.retry(io_waiters, selector, Direction::Read, move |fd| {
+        self.retry(Direction::Read, move |fd| {
             syscall_start!("recv", fd);
             let result = rustix::net::recv(fd, &mut *buf, RecvFlags::empty());
             syscall_end!(
@@ -195,14 +213,12 @@ impl Socket {
         })
     }
 
-    pub(super) fn send_to<'a, const FDS: usize, A: SocketAddrArg>(
+    pub(super) fn send_to<'a, A: SocketAddrArg>(
         &'a self,
-        io_waiters: &'a IoWaiters<FDS>,
-        selector: &'a Selector,
         buf: &'a [u8],
         addr: &'a A,
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.retry(io_waiters, selector, Direction::Write, move |fd| {
+        self.retry(Direction::Write, move |fd| {
             syscall_start!(
                 "sendto",
                 fd,
@@ -217,14 +233,12 @@ impl Socket {
         })
     }
 
-    pub(super) async fn recv_from<const FDS: usize>(
+    pub(super) async fn recv_from(
         &self,
-        io_waiters: &IoWaiters<FDS>,
-        selector: &Selector,
         buf: &mut [u8],
     ) -> Result<(usize, Option<SocketAddrAny>), NetError> {
         let (len, _, addr) = self
-            .retry(io_waiters, selector, Direction::Read, |fd| {
+            .retry(Direction::Read, |fd| {
                 syscall_start!("recvfrom", fd);
                 let result = rustix::net::recvfrom(fd, &mut *buf, RecvFlags::empty());
                 syscall_end!(
@@ -243,65 +257,60 @@ impl Socket {
     pub(super) fn local_addr<A: TryFrom<SocketAddrAny, Error = Errno>>(
         &self,
     ) -> rustix::io::Result<A> {
-        syscall_start!("getsockname", self.0);
-        let addr = rustix::net::getsockname(&self.0);
+        syscall_start!("getsockname", self.fd);
+        let addr = rustix::net::getsockname(&self.fd);
         syscall_end!(addr; addr.as_ref().ok());
         addr?.try_into()
     }
 
     pub(super) fn peer_addr(&self) -> rustix::io::Result<Option<SocketAddrAny>> {
-        syscall_start!("getpeername", self.0);
-        let addr = rustix::net::getpeername(&self.0);
+        syscall_start!("getpeername", self.fd);
+        let addr = rustix::net::getpeername(&self.fd);
         syscall_end!(addr; addr.as_ref().ok().and_then(Option::as_ref));
         addr
     }
 
     pub(super) fn shutdown(&self, how: Shutdown) -> rustix::io::Result<()> {
-        syscall_start!("shutdown", self.0, how);
-        let result = rustix::net::shutdown(&self.0, how);
+        syscall_start!("shutdown", self.fd, how);
+        let result = rustix::net::shutdown(&self.fd, how);
         syscall_end!(result);
         result
     }
 
     fn configure(
-        &self,
+        fd: &OwnedFd,
         #[cfg_attr(
             any(target_os = "linux", target_os = "android"),
             expect(unused_variables)
         )]
         ty: SocketType,
     ) -> rustix::io::Result<()> {
-        syscall_start!("fcntl", self.0, "F_SETFD", FdFlags::CLOEXEC);
-        let result = fcntl_setfd(&self.0, FdFlags::CLOEXEC);
+        syscall_start!("fcntl", fd, "F_SETFD", FdFlags::CLOEXEC);
+        let result = fcntl_setfd(fd, FdFlags::CLOEXEC);
         syscall_end!(result);
         result?;
-        syscall_start!("ioctl", self.0, "FIONBIO", true);
-        let result = ioctl_fionbio(&self.0, true);
+        syscall_start!("ioctl", fd, "FIONBIO", true);
+        let result = ioctl_fionbio(fd, true);
         syscall_end!(result);
         result?;
         #[cfg(target_os = "macos")]
         if ty == SocketType::STREAM {
-            syscall_start!("setsockopt", self.0, "SOL_SOCKET", "SO_NOSIGPIPE", true);
-            let result = rustix::net::sockopt::set_socket_nosigpipe(&self.0, true);
+            syscall_start!("setsockopt", fd, "SOL_SOCKET", "SO_NOSIGPIPE", true);
+            let result = rustix::net::sockopt::set_socket_nosigpipe(fd, true);
             syscall_end!(result);
             result?;
         }
         Ok(())
     }
 
-    pub(super) async fn ready<const FDS: usize>(
-        &self,
-        io_waiters: &IoWaiters<FDS>,
-        selector: &Selector,
-        direction: Direction,
-    ) -> Result<(), NotEnoughResources> {
-        io_waiters.ready(selector, self.0.as_fd(), direction).await
+    pub(super) async fn ready(&self, direction: Direction) {
+        self.io.ready(direction).await;
     }
 
     pub(super) fn try_recv(&self, buf: &mut [u8]) -> rustix::io::Result<usize> {
         loop {
-            syscall_start!("recv", self.0);
-            let result = rustix::net::recv(&self.0, &mut *buf, RecvFlags::empty());
+            syscall_start!("recv", self.fd);
+            let result = rustix::net::recv(&self.fd, &mut *buf, RecvFlags::empty());
             syscall_end!(
                 result;
                 &buf[..result.map_or(0, |(len, _)| len)],
@@ -311,6 +320,10 @@ impl Socket {
             match result {
                 Ok((len, _)) => return Ok(len),
                 Err(Errno::INTR) => {}
+                Err(Errno::AGAIN) => {
+                    self.io.clear(Direction::Read);
+                    return Err(Errno::AGAIN);
+                }
                 Err(errno) => return Err(errno),
             }
         }
@@ -318,31 +331,32 @@ impl Socket {
 
     pub(super) fn try_send(&self, buf: &[u8]) -> rustix::io::Result<usize> {
         loop {
-            syscall_start!("send", self.0, buf, buf.len(), SEND_FLAGS);
-            let result = rustix::net::send(&self.0, buf, SEND_FLAGS);
+            syscall_start!("send", self.fd, buf, buf.len(), SEND_FLAGS);
+            let result = rustix::net::send(&self.fd, buf, SEND_FLAGS);
             syscall_end!(result);
-            if result != Err(Errno::INTR) {
-                return result;
+            match result {
+                Err(Errno::INTR) => {}
+                Err(Errno::AGAIN) => {
+                    self.io.clear(Direction::Write);
+                    return Err(Errno::AGAIN);
+                }
+                result => return result,
             }
         }
     }
 
-    async fn retry<const FDS: usize, T, F: FnMut(&OwnedFd) -> rustix::io::Result<T>>(
+    async fn retry<T, F: FnMut(&OwnedFd) -> rustix::io::Result<T>>(
         &self,
-        io_waiters: &IoWaiters<FDS>,
-        selector: &Selector,
         direction: Direction,
         mut op: F,
     ) -> Result<T, NetError> {
-        let result = io_waiters
-            .retry(selector, self.0.as_fd(), direction, || op(&self.0))
-            .await?;
-        Ok(result?)
+        Ok(self.io.retry(direction, || op(&self.fd)).await?)
     }
 }
 
-impl Drop for Socket {
+impl<const FDS: usize> Drop for Socket<'_, FDS> {
     fn drop(&mut self) {
-        syscall!("close", self.0);
+        self.io_waiters.deregister(self.selector, self.fd.as_fd());
+        syscall!("close", self.fd);
     }
 }

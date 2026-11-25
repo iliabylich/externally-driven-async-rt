@@ -6,7 +6,7 @@ use rustix::{
         epoll::{self, CreateFlags, Event, EventData, EventFlags},
         eventfd,
     },
-    fd::{AsFd, BorrowedFd, OwnedFd},
+    fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd},
     io::Errno,
     time::{
         Itimerspec, TimerfdClockId, TimerfdFlags, TimerfdTimerFlags, timerfd_create,
@@ -15,7 +15,7 @@ use rustix::{
 };
 
 use crate::{
-    selector::{Directions, EVENTS_PER_CALL, IoChange, KernelTimer, SelectorEvent, TimerChange},
+    selector::{Directions, EVENTS_PER_CALL, KernelTimer, SelectorEvent, TimerChange},
     strace::{syscall, syscall_end, syscall_start},
     time::Instant,
 };
@@ -80,19 +80,29 @@ impl EpollSelector {
         }
     }
 
-    pub(crate) fn apply_now(&self, change: IoChange) -> rustix::io::Result<()> {
-        self.apply_io(change)
+    pub(crate) fn register(&self, fd: BorrowedFd<'_>) -> rustix::io::Result<()> {
+        let data = EventData::new_u64(u64::from(fd.as_raw_fd().cast_unsigned()));
+        let flags = EventFlags::IN | EventFlags::OUT | EventFlags::RDHUP | EventFlags::ET;
+        syscall_start!(
+            "epoll_ctl",
+            self.epoll,
+            "EPOLL_CTL_ADD",
+            fd,
+            Event { flags, data }
+        );
+        let added = epoll::add(&self.epoll, fd, data, flags);
+        syscall_end!(added);
+        added
     }
 
-    pub(crate) fn flush(
-        &self,
-        io_changes: impl IntoIterator<Item = IoChange>,
-        deadline: Option<Instant>,
-        now: Instant,
-    ) -> rustix::io::Result<()> {
-        for change in io_changes {
-            self.apply_io(change)?;
-        }
+    pub(crate) fn deregister(&self, fd: BorrowedFd<'_>) -> rustix::io::Result<()> {
+        syscall_start!("epoll_ctl", self.epoll, "EPOLL_CTL_DEL", fd);
+        let deleted = epoll::delete(&self.epoll, fd);
+        syscall_end!(deleted);
+        deleted
+    }
+
+    pub(crate) fn flush(&self, deadline: Option<Instant>, now: Instant) -> rustix::io::Result<()> {
         let (timer, timer_change) = self.timer.get().flush(deadline, now);
         self.timer.set(timer);
         let Some(change) = timer_change else {
@@ -180,50 +190,6 @@ impl EpollSelector {
             Err(Errno::AGAIN) => Ok(None),
             Err(errno) => Err(errno),
         }
-    }
-
-    fn apply_io(&self, change: IoChange) -> rustix::io::Result<()> {
-        // SAFETY: the callers (`flush`, `apply_now`) only pass fds that stay open for the
-        // duration of this call.
-        let fd = unsafe { BorrowedFd::borrow_raw(change.fd) };
-        let interest = match change.interest {
-            Directions::Empty => {
-                syscall_start!("epoll_ctl", self.epoll, "EPOLL_CTL_DEL", fd);
-                let deleted = epoll::delete(&self.epoll, fd);
-                syscall_end!(deleted);
-                return match deleted {
-                    Err(Errno::NOENT) => Ok(()),
-                    result => result,
-                };
-            }
-            Directions::Read => EventFlags::IN,
-            Directions::Write => EventFlags::OUT,
-            Directions::Both => EventFlags::IN | EventFlags::OUT,
-        };
-        let data = EventData::new_u64(u64::from(change.fd.cast_unsigned()));
-        let flags = interest | EventFlags::ONESHOT;
-        syscall_start!(
-            "epoll_ctl",
-            self.epoll,
-            "EPOLL_CTL_MOD",
-            fd,
-            Event { flags, data }
-        );
-        let modified = epoll::modify(&self.epoll, fd, data, flags);
-        syscall_end!(modified);
-        if modified != Err(Errno::NOENT) {
-            return modified;
-        }
-        syscall_start!(
-            "epoll_ctl",
-            self.epoll,
-            "EPOLL_CTL_ADD",
-            fd,
-            Event { flags, data }
-        );
-        let added = epoll::add(&self.epoll, fd, data, flags);
-        syscall_end!(added);
-        added
     }
 
     fn apply_timer(&self, change: TimerChange) -> rustix::io::Result<()> {

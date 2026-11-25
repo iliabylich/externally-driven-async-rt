@@ -26,9 +26,9 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
         }
     }
 
-    pub(super) fn write<'a, Fut>(&'static self, _: Claimed<'a>, future: Fut)
+    pub(super) fn write<'sel, Fut>(&'static self, _: Claimed<'sel>, future: Fut)
     where
-        Fut: Future<Output = ()> + 'a,
+        Fut: Future<Output = ()> + 'sel,
     {
         const {
             assert!(
@@ -44,17 +44,17 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
             unreachable!("the task entry is already occupied");
         }
         let memory = NonNull::from_ref(&self.bytes).cast::<Fut>();
-        let task: NonNull<dyn Future<Output = ()> + 'a> = memory;
+        let task: NonNull<dyn Future<Output = ()> + 'sel> = memory;
         // SAFETY: `Fut` fits `bytes`, which come first in an entry aligned to 16 (both asserted
         // above). The entry is `'static`, so `bytes` stay valid and never move, and the slot is
         // `Empty` (checked above), so nothing else uses them. Erasing the trait object's lifetime
         // (the two pointer types differ only in it, so have the same layout) is fine because the
-        // future is only polled and dropped by this entry, and `Fut: 'a` with the `Claimed<'a>`
-        // guarantees that happens before `'a` ends.
+        // future is only polled and dropped by this entry, and `Fut: 'sel` with the `Claimed<'sel>`
+        // guarantees that happens before `'sel` ends.
         let future = unsafe {
             memory.write(future);
             core::mem::transmute::<
-                NonNull<dyn Future<Output = ()> + 'a>,
+                NonNull<dyn Future<Output = ()> + 'sel>,
                 NonNull<dyn Future<Output = ()>>,
             >(task)
         };

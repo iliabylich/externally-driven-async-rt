@@ -4,7 +4,7 @@ use crate::Context;
 
 pub(crate) struct DispatchOnDrop<
     'c,
-    'a,
+    'sel,
     E: Copy + Debug + 'static,
     const EVENTS: usize,
     const TASKS: usize,
@@ -13,7 +13,7 @@ pub(crate) struct DispatchOnDrop<
     const TIMERS: usize,
     const FDS: usize,
 >(
-    pub(crate) &'c Context<'a, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    pub(crate) &'c Context<'sel, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
     pub(crate) E,
 );
 

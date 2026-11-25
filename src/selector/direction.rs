@@ -39,12 +39,3 @@ impl Directions {
         )
     }
 }
-
-impl From<Direction> for Directions {
-    fn from(direction: Direction) -> Self {
-        match direction {
-            Direction::Read => Self::Read,
-            Direction::Write => Self::Write,
-        }
-    }
-}

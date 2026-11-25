@@ -10,9 +10,8 @@ use rustix::{
 };
 
 use crate::{
-    Either2, EventLoop, LoopStorage, NotEnoughResources, Selector,
+    EventLoop, LoopStorage, NotEnoughResources, Selector,
     net::{NetError, UdpSocket},
-    select2,
     testing::{EventLoopTestingExt, assert_yields},
 };
 
@@ -35,17 +34,17 @@ fn round_trip_with_a_raw_peer() {
     let (peer, peer_addr) = raw_peer();
     let mut selector = Selector::new().unwrap();
     let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
-        let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
+        let mut socket = UdpSocket::bind(&ctx, LOCALHOST).unwrap();
         assert!(socket.local_addr().unwrap().port() != 0);
         let mut buf = [0; 64];
 
-        assert_eq!(socket.send_to(&ctx, b"ping", peer_addr).await.unwrap(), 4);
-        let (len, from) = socket.recv_from(&ctx, &mut buf).await.unwrap();
+        assert_eq!(socket.send_to(b"ping", peer_addr).await.unwrap(), 4);
+        let (len, from) = socket.recv_from(&mut buf).await.unwrap();
         assert_eq!((&buf[..len], from), (&b"ping"[..], peer_addr));
 
         socket.connect(peer_addr).unwrap();
-        assert_eq!(socket.send(&ctx, b"hello").await.unwrap(), 5);
-        let len = socket.recv(&ctx, &mut buf).await.unwrap();
+        assert_eq!(socket.send(b"hello").await.unwrap(), 5);
+        let len = socket.recv(&mut buf).await.unwrap();
         assert_eq!(&buf[..len], b"hello");
 
         ctx.dispatch(1).unwrap();
@@ -73,16 +72,17 @@ fn connected_socket_reports_a_refused_peer() {
     let mut selector = Selector::new().unwrap();
     let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
         let mut buf = [0; 8];
-        let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
+        let mut socket = UdpSocket::bind(&ctx, LOCALHOST).unwrap();
         socket.connect(closed).unwrap();
-        socket.send(&ctx, b"x").await.unwrap();
-        let err = socket.recv(&ctx, &mut buf).await.err().unwrap();
+        socket.send(b"x").await.unwrap();
+        let err = socket.recv(&mut buf).await.err().unwrap();
         ctx.dispatch(err).unwrap();
+        drop(socket);
 
-        let mut socket = UdpSocket::bind(LOCALHOST).unwrap();
+        let mut socket = UdpSocket::bind(&ctx, LOCALHOST).unwrap();
         socket.connect(closed).unwrap();
-        socket.send(&ctx, b"x").await.unwrap();
-        let err = socket.recv_from(&ctx, &mut buf).await.err().unwrap();
+        socket.send(b"x").await.unwrap();
+        let err = socket.recv_from(&mut buf).await.err().unwrap();
         ctx.dispatch(err).unwrap();
         pending::<()>().await;
     })
@@ -92,22 +92,13 @@ fn connected_socket_reports_a_refused_peer() {
 }
 
 #[test]
-fn waiting_on_more_sockets_than_fds_fails() {
+fn binding_more_sockets_than_fds_fails() {
     static STORAGE: Storage<NetError> = Storage::new();
     let mut selector = Selector::new().unwrap();
     let event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
-        let mut first = UdpSocket::bind(LOCALHOST).unwrap();
-        let mut second = UdpSocket::bind(LOCALHOST).unwrap();
-        let (mut first_buf, mut second_buf) = ([0; 1], [0; 1]);
-        let Either2::Right(result) = select2(
-            first.recv(&ctx, &mut first_buf),
-            second.recv(&ctx, &mut second_buf),
-        )
-        .await
-        else {
-            panic!("nothing is sent to the first socket");
-        };
-        ctx.dispatch(result.unwrap_err()).unwrap();
+        let _first = UdpSocket::bind(&ctx, LOCALHOST).unwrap();
+        let err = UdpSocket::bind(&ctx, LOCALHOST).err().unwrap();
+        ctx.dispatch(err).unwrap();
         pending::<()>().await;
     })
     .unwrap();

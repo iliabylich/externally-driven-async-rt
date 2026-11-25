@@ -11,18 +11,33 @@ use super::{NetError, socket::Socket};
 
 /// A UDP socket.
 #[must_use]
-pub struct UdpSocket {
-    socket: Socket,
+pub struct UdpSocket<'sel, const FDS: usize> {
+    socket: Socket<'sel, FDS>,
 }
 
-impl UdpSocket {
+impl<'sel, const FDS: usize> UdpSocket<'sel, FDS> {
     /// Binds on a given address.
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails.
-    pub fn bind(addr: SocketAddr) -> rustix::io::Result<Self> {
-        let socket = Socket::new(addr.as_any().address_family(), SocketType::DGRAM)?;
+    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
+    pub fn bind<
+        E: 'static,
+        const EVENTS: usize,
+        const TASKS: usize,
+        const TASK_SIZE: usize,
+        const ROOT_TASK_SIZE: usize,
+        const TIMERS: usize,
+    >(
+        ctx: &Context<'sel, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        addr: SocketAddr,
+    ) -> Result<Self, NetError> {
+        let socket = Socket::new(
+            &ctx.storage.io_waiters,
+            ctx.selector,
+            addr.as_any().address_family(),
+            SocketType::DGRAM,
+        )?;
         socket.bind(&addr)?;
         Ok(Self { socket })
     }
@@ -31,56 +46,29 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
+    /// Returns an error if a syscall fails.
     ///
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub async fn send_to<
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
-        &mut self,
-        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-        buf: &[u8],
-        addr: SocketAddr,
-    ) -> Result<usize, NetError> {
-        self.socket
-            .send_to(&ctx.storage.io_waiters, ctx.selector, buf, &addr)
-            .await
+    pub async fn send_to(&mut self, buf: &[u8], addr: SocketAddr) -> Result<usize, NetError> {
+        self.socket.send_to(buf, &addr).await
     }
 
     /// Receives a datagram from any sender into a given buffer, returns its size and the sender address.
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
+    /// Returns an error if a syscall fails.
     ///
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub fn recv_from<
-        'a,
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
+    pub fn recv_from<'a>(
         &'a mut self,
-        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = Result<(usize, SocketAddr), NetError>> {
-        let recv = self
-            .socket
-            .recv_from(&ctx.storage.io_waiters, ctx.selector, buf);
+        let recv = self.socket.recv_from(buf);
         async move {
             let (len, addr) = recv.await?;
             Ok((len, addr.ok_or(Errno::AFNOSUPPORT)?.try_into()?))
@@ -100,52 +88,29 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
+    /// Returns an error if a syscall fails.
     ///
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub fn send<
-        'a,
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
-        &'a mut self,
-        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-        buf: &'a [u8],
-    ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket.send(&ctx.storage.io_waiters, ctx.selector, buf)
+    pub fn send<'a>(&'a mut self, buf: &'a [u8]) -> impl Future<Output = Result<usize, NetError>> {
+        self.socket.send(buf)
     }
 
     /// Receives a datagram from the connected peer into a given buffer, see [`connect`](Self::connect).
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
+    /// Returns an error if a syscall fails.
     ///
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub fn recv<
-        'a,
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
+    pub fn recv<'a>(
         &'a mut self,
-        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket.recv(&ctx.storage.io_waiters, ctx.selector, buf)
+        self.socket.recv(buf)
     }
 
     /// Returns local address.

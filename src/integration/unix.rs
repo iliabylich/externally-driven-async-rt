@@ -14,7 +14,7 @@ use crate::{
 
 use super::{EventLoopExt, raw_accept, raw_socket};
 
-type Storage<E = u32> = LoopStorage<E, 1, 1, 0, 2048, 1, 1>;
+type Storage<E = u32> = LoopStorage<E, 1, 1, 0, 2048, 1, 2>;
 
 struct TempPath {
     bytes: [u8; 104],
@@ -79,15 +79,15 @@ fn stream_echo_with_a_raw_peer() {
     let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
         let mut stream = UnixStream::connect(&ctx, &server_addr).await.unwrap();
         assert_eq!(path_of(&stream.peer_addr().unwrap()), path_of(&server_addr));
-        stream.write(&ctx, b"hello").await.unwrap();
+        stream.write(b"hello").await.unwrap();
         let mut buf = [0; 5];
         let mut len = 0;
         while len < 5 {
-            len += stream.read(&ctx, &mut buf[len..]).await.unwrap();
+            len += stream.read(&mut buf[len..]).await.unwrap();
         }
         assert_eq!(&buf, b"hello");
         stream.shutdown(Shutdown::Write).unwrap();
-        assert_eq!(stream.read(&ctx, &mut buf).await.unwrap(), 0);
+        assert_eq!(stream.read(&mut buf).await.unwrap(), 0);
         ctx.dispatch(1).unwrap();
         pending::<()>().await;
     })
@@ -108,22 +108,22 @@ fn listener_accepts_a_raw_client() {
     static STORAGE: Storage = Storage::new();
     let path = TempPath::new("listener");
     let listener_addr = path.addr();
-    let mut listener = UnixListener::bind(&listener_addr).unwrap();
-    assert_eq!(
-        path_of(&listener.local_addr().unwrap()),
-        path_of(&listener_addr)
-    );
     let mut selector = Selector::new().unwrap();
     let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
-        let (mut stream, peer) = listener.accept(&ctx).await.unwrap();
+        let mut listener = UnixListener::bind(&ctx, &listener_addr).unwrap();
+        assert_eq!(
+            path_of(&listener.local_addr().unwrap()),
+            path_of(&listener_addr)
+        );
+        let (mut stream, peer) = listener.accept().await.unwrap();
         assert_eq!(path_of(&peer), []);
         let mut buf = [0; 4];
         let mut len = 0;
         while len < 4 {
-            len += stream.read(&ctx, &mut buf[len..]).await.unwrap();
+            len += stream.read(&mut buf[len..]).await.unwrap();
         }
         assert_eq!(&buf, b"ping");
-        stream.write(&ctx, b"pong").await.unwrap();
+        stream.write(b"pong").await.unwrap();
         ctx.dispatch(1).unwrap();
         pending::<()>().await;
     })
@@ -147,18 +147,18 @@ fn datagram_round_trip_with_a_raw_peer() {
     rustix::net::bind(&peer, &theirs_addr).unwrap();
     let mut selector = Selector::new().unwrap();
     let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
-        let mut socket = UnixDatagram::bind(&ours_addr).unwrap();
+        let mut socket = UnixDatagram::bind(&ctx, &ours_addr).unwrap();
         assert_eq!(path_of(&socket.local_addr().unwrap()), path_of(&ours_addr));
         let mut buf = [0; 64];
 
-        socket.send_to(&ctx, b"ping", &theirs_addr).await.unwrap();
-        let (len, from) = socket.recv_from(&ctx, &mut buf).await.unwrap();
+        socket.send_to(b"ping", &theirs_addr).await.unwrap();
+        let (len, from) = socket.recv_from(&mut buf).await.unwrap();
         assert_eq!(&buf[..len], b"ping");
         assert_eq!(path_of(&from), path_of(&theirs_addr));
 
         socket.connect(&theirs_addr).unwrap();
-        socket.send(&ctx, b"hello").await.unwrap();
-        let len = socket.recv(&ctx, &mut buf).await.unwrap();
+        socket.send(b"hello").await.unwrap();
+        let len = socket.recv(&mut buf).await.unwrap();
         assert_eq!(&buf[..len], b"hello");
 
         ctx.dispatch(1).unwrap();
@@ -185,11 +185,11 @@ fn unbound_datagram_sender_has_an_unnamed_address() {
     let bound_addr = path.addr();
     let mut selector = Selector::new().unwrap();
     let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
-        let mut bound = UnixDatagram::bind(&bound_addr).unwrap();
-        let mut unbound = UnixDatagram::unbound().unwrap();
-        unbound.send_to(&ctx, b"hi", &bound_addr).await.unwrap();
+        let mut bound = UnixDatagram::bind(&ctx, &bound_addr).unwrap();
+        let mut unbound = UnixDatagram::unbound(&ctx).unwrap();
+        unbound.send_to(b"hi", &bound_addr).await.unwrap();
         let mut buf = [0; 8];
-        let (len, from) = bound.recv_from(&ctx, &mut buf).await.unwrap();
+        let (len, from) = bound.recv_from(&mut buf).await.unwrap();
         assert_eq!(&buf[..len], b"hi");
         assert_eq!(path_of(&from), []);
         ctx.dispatch(1).unwrap();
@@ -226,11 +226,11 @@ fn stream_halves_echo_with_a_raw_peer() {
     let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async move |ctx| {
         let mut stream = UnixStream::connect(&ctx, &server_addr).await.unwrap();
         let (mut read, mut write) = stream.split();
-        write.write(&ctx, b"ping").await.unwrap();
+        write.write(b"ping").await.unwrap();
         let mut buf = [0; 4];
         let mut len = 0;
         while len < 4 {
-            len += read.read(&ctx, &mut buf[len..]).await.unwrap();
+            len += read.read(&mut buf[len..]).await.unwrap();
         }
         assert_eq!(&buf, b"ping");
         ctx.dispatch(1).unwrap();

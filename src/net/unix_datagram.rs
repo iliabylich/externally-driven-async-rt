@@ -6,18 +6,33 @@ use super::{NetError, socket::Socket};
 
 /// A Unix datagram socket.
 #[must_use]
-pub struct UnixDatagram {
-    socket: Socket,
+pub struct UnixDatagram<'sel, const FDS: usize> {
+    socket: Socket<'sel, FDS>,
 }
 
-impl UnixDatagram {
+impl<'sel, const FDS: usize> UnixDatagram<'sel, FDS> {
     /// Binds on a given address.
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails.
-    pub fn bind(addr: &SocketAddrUnix) -> rustix::io::Result<Self> {
-        let socket = Socket::new(AddressFamily::UNIX, SocketType::DGRAM)?;
+    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
+    pub fn bind<
+        E: 'static,
+        const EVENTS: usize,
+        const TASKS: usize,
+        const TASK_SIZE: usize,
+        const ROOT_TASK_SIZE: usize,
+        const TIMERS: usize,
+    >(
+        ctx: &Context<'sel, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        addr: &SocketAddrUnix,
+    ) -> Result<Self, NetError> {
+        let socket = Socket::new(
+            &ctx.storage.io_waiters,
+            ctx.selector,
+            AddressFamily::UNIX,
+            SocketType::DGRAM,
+        )?;
         socket.bind(addr)?;
         Ok(Self { socket })
     }
@@ -26,9 +41,23 @@ impl UnixDatagram {
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails.
-    pub fn unbound() -> rustix::io::Result<Self> {
-        let socket = Socket::new(AddressFamily::UNIX, SocketType::DGRAM)?;
+    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
+    pub fn unbound<
+        E: 'static,
+        const EVENTS: usize,
+        const TASKS: usize,
+        const TASK_SIZE: usize,
+        const ROOT_TASK_SIZE: usize,
+        const TIMERS: usize,
+    >(
+        ctx: &Context<'sel, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+    ) -> Result<Self, NetError> {
+        let socket = Socket::new(
+            &ctx.storage.io_waiters,
+            ctx.selector,
+            AddressFamily::UNIX,
+            SocketType::DGRAM,
+        )?;
         Ok(Self { socket })
     }
 
@@ -36,28 +65,17 @@ impl UnixDatagram {
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
+    /// Returns an error if a syscall fails.
     ///
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub fn send_to<
-        'a,
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
+    pub fn send_to<'a>(
         &'a mut self,
-        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a [u8],
         addr: &'a SocketAddrUnix,
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket
-            .send_to(&ctx.storage.io_waiters, ctx.selector, buf, addr)
+        self.socket.send_to(buf, addr)
     }
 
     /// Receives a datagram from any sender into a given buffer,
@@ -65,28 +83,16 @@ impl UnixDatagram {
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
+    /// Returns an error if a syscall fails.
     ///
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub fn recv_from<
-        'a,
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
+    pub fn recv_from<'a>(
         &'a mut self,
-        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = Result<(usize, SocketAddrUnix), NetError>> {
-        let recv = self
-            .socket
-            .recv_from(&ctx.storage.io_waiters, ctx.selector, buf);
+        let recv = self.socket.recv_from(buf);
         async move {
             let (len, addr) = recv.await?;
             let addr = match addr {
@@ -110,52 +116,29 @@ impl UnixDatagram {
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
+    /// Returns an error if a syscall fails.
     ///
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub fn send<
-        'a,
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
-        &'a mut self,
-        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-        buf: &'a [u8],
-    ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket.send(&ctx.storage.io_waiters, ctx.selector, buf)
+    pub fn send<'a>(&'a mut self, buf: &'a [u8]) -> impl Future<Output = Result<usize, NetError>> {
+        self.socket.send(buf)
     }
 
     /// Receives a datagram from the connected peer into a given buffer, see [`connect`](Self::connect).
     ///
     /// # Errors
     ///
-    /// Returns an error if a syscall fails or if all `FDS` fd slots are taken.
+    /// Returns an error if a syscall fails.
     ///
     /// # Cancel safety
     ///
     /// This method is cancel safe.
-    pub fn recv<
-        'a,
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
+    pub fn recv<'a>(
         &'a mut self,
-        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         buf: &'a mut [u8],
     ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket.recv(&ctx.storage.io_waiters, ctx.selector, buf)
+        self.socket.recv(buf)
     }
 
     /// Returns local address.

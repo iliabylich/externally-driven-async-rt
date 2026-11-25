@@ -11,12 +11,12 @@ use super::{BorrowedReadHalf, BorrowedWriteHalf, NetError, socket::Socket};
 
 /// A TCP stream.
 #[must_use]
-pub struct TcpStream {
-    socket: Socket,
+pub struct TcpStream<'sel, const FDS: usize> {
+    socket: Socket<'sel, FDS>,
 }
 
-impl TcpStream {
-    pub(super) const fn new(socket: Socket) -> Self {
+impl<'sel, const FDS: usize> TcpStream<'sel, FDS> {
+    pub(super) const fn new(socket: Socket<'sel, FDS>) -> Self {
         Self { socket }
     }
 
@@ -36,9 +36,8 @@ impl TcpStream {
         const TASK_SIZE: usize,
         const ROOT_TASK_SIZE: usize,
         const TIMERS: usize,
-        const FDS: usize,
     >(
-        ctx: &Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
+        ctx: &Context<'sel, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
         addr: SocketAddr,
     ) -> Result<Self, NetError> {
         let socket = Socket::connect_stream(&ctx.storage.io_waiters, ctx.selector, &addr).await?;
@@ -97,7 +96,12 @@ impl TcpStream {
     }
 
     /// Splits the [`TcpStream`] into two halves: reader and writer.
-    pub const fn split(&mut self) -> (BorrowedReadHalf<'_>, BorrowedWriteHalf<'_>) {
+    pub const fn split(
+        &mut self,
+    ) -> (
+        BorrowedReadHalf<'_, 'sel, FDS>,
+        BorrowedWriteHalf<'_, 'sel, FDS>,
+    ) {
         (
             BorrowedReadHalf::new(&self.socket),
             BorrowedWriteHalf::new(&self.socket),
@@ -105,60 +109,22 @@ impl TcpStream {
     }
 }
 
-impl AsyncRead for TcpStream {
+impl<const FDS: usize> AsyncRead for TcpStream<'_, FDS> {
     type Error = NetError;
 
-    fn read<
-        'a,
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
-        &'a mut self,
-        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-        buf: &'a mut [u8],
-    ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket.recv(&ctx.storage.io_waiters, ctx.selector, buf)
+    fn read<'a>(&'a mut self, buf: &'a mut [u8]) -> impl Future<Output = Result<usize, NetError>> {
+        self.socket.recv(buf)
     }
 }
 
-impl AsyncWrite for TcpStream {
+impl<const FDS: usize> AsyncWrite for TcpStream<'_, FDS> {
     type Error = NetError;
 
-    fn write<
-        'a,
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
-        &'a mut self,
-        ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-        buf: &'a [u8],
-    ) -> impl Future<Output = Result<usize, NetError>> {
-        self.socket.send(&ctx.storage.io_waiters, ctx.selector, buf)
+    fn write<'a>(&'a mut self, buf: &'a [u8]) -> impl Future<Output = Result<usize, NetError>> {
+        self.socket.send(buf)
     }
 
-    fn flush<
-        'a,
-        E: 'static,
-        const EVENTS: usize,
-        const TASKS: usize,
-        const TASK_SIZE: usize,
-        const ROOT_TASK_SIZE: usize,
-        const TIMERS: usize,
-        const FDS: usize,
-    >(
-        &'a mut self,
-        _ctx: &'a Context<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>,
-    ) -> impl Future<Output = Result<(), NetError>> {
+    fn flush(&mut self) -> impl Future<Output = Result<(), NetError>> {
         core::future::ready(Ok(()))
     }
 }

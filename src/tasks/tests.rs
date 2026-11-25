@@ -39,25 +39,25 @@ fn waker<const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize
     tasks.queue.waker(id.idx)
 }
 
-struct Scope<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> {
+struct Scope<'sel, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize> {
     tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>,
-    claimed: Claimed<'a>,
+    claimed: Claimed<'sel>,
 }
 
-impl<'a, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
-    Scope<'a, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
+impl<'sel, const TASKS: usize, const TASK_SIZE: usize, const ROOT_TASK_SIZE: usize>
+    Scope<'sel, TASKS, TASK_SIZE, ROOT_TASK_SIZE>
 {
     fn new(tasks: &'static Tasks<TASKS, TASK_SIZE, ROOT_TASK_SIZE>) -> Self {
         Self {
             tasks,
             // SAFETY: `drop` drops every task of `tasks`, and the `Drop` impl makes the borrow
-            // checker require `'a` to outlive the scope, so every task spawned with this
-            // `Claimed` is dropped before `'a` ends. Tests never leak a scope.
+            // checker require `'sel` to outlive the scope, so every task spawned with this
+            // `Claimed` is dropped before `'sel` ends. Tests never leak a scope.
             claimed: unsafe { Claimed::new() },
         }
     }
 
-    const fn claimed(&self) -> Claimed<'a> {
+    const fn claimed(&self) -> Claimed<'sel> {
         self.claimed
     }
 }
