@@ -31,10 +31,14 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
         Fut: Future<Output = ()> + 'sel,
     {
         const {
-            assert!(
-                size_of::<Fut>() <= SIZE,
-                "a task future doesn't fit TASK_SIZE or ROOT_TASK_SIZE"
-            );
+            let (message, len) = too_big_message(size_of::<Fut>(), SIZE);
+            let Some((message, _)) = message.split_at_checked(len) else {
+                unreachable!()
+            };
+            let Ok(message) = core::str::from_utf8(message) else {
+                unreachable!()
+            };
+            assert!(size_of::<Fut>() <= SIZE, "{}", message);
             assert!(
                 align_of::<Fut>() <= 16,
                 "a task future is aligned to more than 16 bytes"
@@ -121,6 +125,51 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
     pub(super) const fn take_join_waiter(&self) -> Option<Waker> {
         self.join_waiter.take()
     }
+}
+
+const fn too_big_message(size: usize, limit: usize) -> ([u8; 128], usize) {
+    let mut message = [0; 128];
+    let mut len = push_bytes(&mut message, 0, b"a task future of ");
+    len = push_usize(&mut message, len, size);
+    len = push_bytes(&mut message, len, b" bytes doesn't fit ");
+    len = push_usize(&mut message, len, limit);
+    len = push_bytes(&mut message, len, b" bytes (TASK_SIZE or ROOT_TASK_SIZE)");
+    (message, len)
+}
+
+const fn push_usize(message: &mut [u8; 128], len: usize, mut n: usize) -> usize {
+    let mut digits = [0; 20];
+    let mut start = digits.len();
+    loop {
+        start = start.wrapping_sub(1);
+        let Some((_, [digit, ..])) = digits.split_at_mut_checked(start) else {
+            unreachable!()
+        };
+        let Some((_, [ascii, ..])) = b"0123456789".split_at_checked(n % 10) else {
+            unreachable!()
+        };
+        *digit = *ascii;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    let Some((_, digits)) = digits.split_at_checked(start) else {
+        unreachable!()
+    };
+    push_bytes(message, len, digits)
+}
+
+const fn push_bytes(message: &mut [u8; 128], mut len: usize, mut bytes: &[u8]) -> usize {
+    while let [byte, rest @ ..] = bytes {
+        let Some((_, [slot, ..])) = message.split_at_mut_checked(len) else {
+            unreachable!()
+        };
+        *slot = *byte;
+        len = len.wrapping_add(1);
+        bytes = rest;
+    }
+    len
 }
 
 // SAFETY: a `TaskEntry` never leaves the crate. In the event loop every entry lives in a
