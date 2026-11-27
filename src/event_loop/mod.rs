@@ -35,7 +35,8 @@ impl<
     const FDS: usize,
 > EventLoop<'sel, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
-    /// Creates an event loop and polls given future once.
+    /// Creates an event loop and polls given future, along with every task it wakes, until no
+    /// task is woken.
     ///
     /// The future must fit `ROOT_TASK_SIZE` bytes and be aligned to at most 16 bytes, otherwise
     /// the program doesn't compile.
@@ -71,8 +72,8 @@ impl<
     }
 
     /// Drains all events from the underlying `epollfd` or `kqueuefd`,
-    /// polls woken futures until none is ready,
-    /// submits them back to epoll/kqueue.
+    /// polls woken futures until none is woken,
+    /// re-arms the epoll/kqueue timer for the next deadline.
     ///
     /// It keeps polling until no future is woken, so a future that wakes itself
     /// every time it's polled makes this method loop forever.

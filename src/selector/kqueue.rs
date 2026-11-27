@@ -117,7 +117,7 @@ impl KqueueSelector {
         changes: &[Event],
         receipts: &mut [MaybeUninit<Event>; CHANGES_PER_CALL],
     ) -> rustix::io::Result<()> {
-        // SAFETY: the callers (`register`, `deregister`) only pass open fds, and every registered
+        // SAFETY: only `register` and `deregister` pass fds, and only open ones, and every registered
         // fd is deregistered before it's closed, so the kqueue never refers to an invalid fd.
         syscall_start!("kevent", self.kq, changes);
         let result = unsafe { kevent(&self.kq, changes, receipts, Some(Duration::ZERO)) };
