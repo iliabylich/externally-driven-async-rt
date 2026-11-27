@@ -49,10 +49,4 @@ impl<const N: usize> IoWaiters<N> {
             io.wake(ready);
         }
     }
-
-    pub(crate) fn drop_wakers(&self) {
-        for (_, io) in self.map.iter() {
-            io.drop_wakers();
-        }
-    }
 }

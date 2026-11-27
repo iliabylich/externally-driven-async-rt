@@ -131,13 +131,6 @@ impl<K: Ord + Copy, const N: usize> IndexedMinHeap<K, N> {
         }
         Some((self.idx_at(0), self.key_at(0)))
     }
-
-    pub(crate) fn clear(&self) {
-        for pos in 0..self.len.get() {
-            self.key(self.idx_at(pos)).set(None);
-        }
-        self.len.set(0);
-    }
 }
 
 #[cfg(test)]

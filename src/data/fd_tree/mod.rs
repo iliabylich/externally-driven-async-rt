@@ -80,10 +80,6 @@ impl<const N: usize> FdTree<N> {
         idx
     }
 
-    pub(super) fn key(&self, idx: u32) -> Option<RawFd> {
-        self.node(idx).key.get()
-    }
-
     fn node(&self, idx: u32) -> &Node {
         let Some(node) = self.nodes.get(u32_to_usize(idx)) else {
             unreachable!("node {idx} is out of bounds")

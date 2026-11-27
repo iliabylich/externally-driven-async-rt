@@ -61,19 +61,6 @@ fn a_removed_slot_can_be_inserted_with_another_key() {
 }
 
 #[test]
-fn clear_removes_every_slot() {
-    let heap = IndexedMinHeap::<u32, 3>::new();
-    heap.insert(0, 1);
-    heap.insert(2, 2);
-    heap.clear();
-    assert_eq!(heap.peek(), None);
-    assert!(!heap.contains(0));
-    assert!(!heap.contains(2));
-    heap.insert(2, 7);
-    assert_eq!(heap.peek(), Some((2, 7)));
-}
-
-#[test]
 fn interleaved_inserts_and_removals_drain_in_key_order() {
     let heap = IndexedMinHeap::<u32, 16>::new();
     let keys: [u32; 16] = core::array::from_fn(|i| u32::try_from(i * 7 % 16).unwrap() * 3);

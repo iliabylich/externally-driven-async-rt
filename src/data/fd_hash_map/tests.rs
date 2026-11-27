@@ -38,17 +38,3 @@ fn removing_a_key_frees_its_slot() {
     insert(map, 2, 20).unwrap();
     assert_eq!(value(map, 2), Some(20));
 }
-
-#[test]
-fn iter_yields_every_key_with_its_value() {
-    let map = &FdHashMap::<Cell<i32>, 4>::new([const { Cell::new(0) }; 4]);
-    insert(map, 1, 10).unwrap();
-    insert(map, 2, 20).unwrap();
-    insert(map, 3, 30).unwrap();
-    map.remove(2);
-    let mut seen = [None; 4];
-    for (slot, (key, value)) in seen.iter_mut().zip(map.iter()) {
-        *slot = Some((key, value.get()));
-    }
-    assert_eq!(seen, [Some((3, 30)), Some((1, 10)), None, None]);
-}

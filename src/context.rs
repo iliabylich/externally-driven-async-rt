@@ -169,9 +169,6 @@ impl<
 
     pub(crate) fn clear(&self) {
         self.storage.tasks.drop_all();
-        self.storage.timers.drop_wakers();
-        self.storage.io_waiters.drop_wakers();
-        self.storage.notification.clear();
         self.storage.events.clear();
     }
 

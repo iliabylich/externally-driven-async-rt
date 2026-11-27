@@ -2,7 +2,7 @@ use core::{
     cell::Cell,
     future::{Future, pending, poll_fn},
     pin::pin,
-    task::{Context, Poll},
+    task::Poll,
 };
 
 use rustix::fd::{AsFd, OwnedFd};
@@ -12,7 +12,7 @@ use crate::{
     io::IoWaiter,
     net::NetError,
     selector::Direction,
-    testing::{EventLoopTestingExt, assert_yields, counting_waker},
+    testing::{EventLoopTestingExt, assert_yields},
 };
 
 use super::{EventLoopExt, FdExt, socketpair};
@@ -177,30 +177,4 @@ fn closed_and_reused_fd_number_does_not_affect_the_new_socket() {
     rustix::io::write(&tx, b"abc").unwrap();
     event_loop.run_until_root_finishes();
     assert_yields!(event_loop.events(), [()]);
-}
-
-#[test]
-fn clearing_drops_io_wakers() {
-    static STORAGE: Storage<()> = Storage::new();
-    let drops = Cell::new(0);
-    let selector = Selector::new().unwrap();
-    let ctx = STORAGE.claim(&selector).unwrap().0;
-    let (fd, _peer) = socketpair();
-    let io = ctx
-        .storage
-        .io_waiters
-        .register(ctx.selector, fd.as_fd())
-        .unwrap();
-    io.clear(Direction::Read);
-    let waker = counting_waker(&drops);
-    let mut ready = pin!(io.ready(Direction::Read));
-    assert_eq!(
-        ready.as_mut().poll(&mut Context::from_waker(&waker)),
-        Poll::Pending
-    );
-    drop(waker);
-    assert_eq!(drops.get(), 1);
-    ctx.clear();
-    assert_eq!(drops.get(), 2);
-    ctx.storage.io_waiters.deregister(ctx.selector, fd.as_fd());
 }

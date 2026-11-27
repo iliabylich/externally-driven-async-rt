@@ -33,15 +33,6 @@ fn dropping_a_pending_notified_forgets_its_waker() {
 }
 
 #[test]
-fn clear_drops_a_pending_notification() {
-    let notification = Notification::new();
-    notification.fire();
-    notification.clear();
-    let mut cx = Context::from_waker(Waker::noop());
-    assert_eq!(pin!(notification.notified()).poll(&mut cx), Poll::Pending);
-}
-
-#[test]
 fn fire_wakes_a_pending_waiter() {
     let woken = Cell::new(false);
     let notification = Notification::new();

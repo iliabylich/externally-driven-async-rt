@@ -44,11 +44,6 @@ impl Notification {
     fn forget_waker(&self) {
         drop(self.waker.take());
     }
-
-    pub(crate) fn clear(&self) {
-        self.pending.set(false);
-        self.forget_waker();
-    }
 }
 
 #[cfg(test)]

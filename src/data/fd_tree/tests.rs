@@ -5,19 +5,16 @@ use rustix::fd::RawFd;
 fn an_empty_tree_has_no_keys() {
     let tree = &FdTree::<2>::new();
     assert_eq!(tree.find(0), None);
-    assert_eq!(tree.key(0), None);
 }
 
 #[test]
-fn an_inserted_key_is_found_by_key_and_by_index() {
+fn an_inserted_key_is_found() {
     let tree = &FdTree::<2>::new();
     tree.insert(3, 1);
     tree.insert(-1, 0);
     assert_eq!(tree.find(3), Some(1));
     assert_eq!(tree.find(-1), Some(0));
     assert_eq!(tree.find(4), None);
-    assert_eq!(tree.key(1), Some(3));
-    assert_eq!(tree.key(0), Some(-1));
 }
 
 #[test]
@@ -26,7 +23,6 @@ fn removing_returns_the_index_and_forgets_the_key() {
     tree.insert(7, 1);
     assert_eq!(tree.remove(7), 1);
     assert_eq!(tree.find(7), None);
-    assert_eq!(tree.key(1), None);
 }
 
 #[test]
@@ -49,7 +45,6 @@ fn a_removed_index_can_hold_another_key() {
     tree.insert(5, 0);
     assert_eq!(tree.find(1), None);
     assert_eq!(tree.find(5), Some(0));
-    assert_eq!(tree.key(0), Some(5));
     assert_eq!(tree.find(2), Some(1));
 }
 
@@ -62,7 +57,6 @@ fn extreme_keys_are_distinct() {
     }
     for (idx, key) in (0..).zip(keys) {
         assert_eq!(tree.find(key), Some(idx));
-        assert_eq!(tree.key(idx), Some(key));
     }
 }
 

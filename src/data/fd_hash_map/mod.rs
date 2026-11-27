@@ -36,15 +36,6 @@ impl<V, const N: usize> FdHashMap<V, N> {
         let (index, _) = self.pool.get(idx);
         self.pool.free(index);
     }
-
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (RawFd, &V)> {
-        self.pool.iter().map(|(VersionedIndex { idx, .. }, value)| {
-            let Some(key) = self.tree.key(idx) else {
-                unreachable!("{idx} is allocated but has no key")
-            };
-            (key, value)
-        })
-    }
 }
 
 #[cfg(test)]

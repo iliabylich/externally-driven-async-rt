@@ -71,11 +71,6 @@ impl IoWaiter {
         }
     }
 
-    pub(super) fn drop_wakers(&self) {
-        self.reader.take();
-        self.writer.take();
-    }
-
     const fn waker(&self, direction: Direction) -> &WakerSlot {
         match direction {
             Direction::Read => &self.reader,
