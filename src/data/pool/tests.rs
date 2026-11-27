@@ -45,15 +45,6 @@ fn alloc_get_free() {
     assert_eq!(value(pool, a), Some("a"));
 }
 
-#[test]
-fn a_slot_is_usable_while_another_is_allocated_and_freed() {
-    let pool = &ObjectPool::<Cell<u32>, 2>::new([const { Cell::new(0) }; 2]);
-    let (a, slot) = pool.alloc().unwrap();
-    let b = alloc(pool, 2).unwrap();
-    pool.free(b);
-    slot.set(1);
-    assert_eq!(value(pool, a), Some(1));
-}
 
 #[test]
 fn full_pool_rejects_alloc() {

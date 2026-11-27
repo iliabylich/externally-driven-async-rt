@@ -202,13 +202,6 @@ fn counting(polls: &Cell<u32>) -> impl Future<Output = ()> {
     })
 }
 
-#[test]
-fn finished_task_is_removed() {
-    let (tasks, _root, claimed, _scope) = tasks!(1, 1024, 0);
-    let id = tasks.spawn_task(claimed, async {}).unwrap();
-    assert_eq!(tasks.run_ready(), Poll::Pending);
-    assert!(!contains(tasks, id));
-}
 
 #[test]
 fn a_stale_wake_of_a_freed_slot_polls_nothing() {

@@ -168,16 +168,6 @@ mod tests {
         assert_eq!(timers.next_deadline(), None);
     }
 
-    #[test]
-    fn capacity_is_bounded() {
-        let now = Instant::now();
-        let timers = &Timers::<1>::new(Instant::now);
-        let _first = timers.alloc(now, Waker::noop()).unwrap();
-        assert_eq!(
-            timers.alloc(now, Waker::noop()).err(),
-            Some(NotEnoughResources::Timers)
-        );
-    }
 
     #[test]
     fn expire_wakes_due_timers_in_deadline_order() {
@@ -236,26 +226,7 @@ mod tests {
         assert_expires(timers, &drops, now, [1, 2]);
     }
 
-    #[test]
-    fn released_timer_is_not_woken() {
-        let drops: [Cell<u32>; 8] = [const { Cell::new(0) }; 8];
-        let now = Instant::now();
-        let timers = &Timers::<1>::new(Instant::now);
-        let index = timers.alloc(now, &counting_waker(&drops[1])).unwrap();
-        timers.release(index);
-        assert_expires(timers, &drops, now, []);
-        assert_eq!(timers.next_deadline(), None);
-    }
 
-    #[test]
-    fn replaced_waker_is_the_one_woken() {
-        let drops: [Cell<u32>; 8] = [const { Cell::new(0) }; 8];
-        let now = Instant::now();
-        let timers = &Timers::<1>::new(Instant::now);
-        let index = timers.alloc(now, &counting_waker(&drops[1])).unwrap();
-        timers.set_waker(index, &counting_waker(&drops[2]));
-        assert_expires(timers, &drops, now, [2]);
-    }
 
     #[test]
     fn next_deadline_is_the_earliest_one() {

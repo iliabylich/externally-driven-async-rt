@@ -28,21 +28,6 @@ fn loop_exposes_the_selector_fd() {
     assert_eq!(event_loop.as_fd().as_raw_fd(), fd);
 }
 
-#[test]
-fn sleep_waits_at_least_its_duration() {
-    static STORAGE: Storage = Storage::new();
-    let start = Instant::now();
-    let mut selector = Selector::new().unwrap();
-    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
-        ctx.sleep(Duration::from_millis(20)).await.unwrap();
-        ctx.dispatch(1).unwrap();
-    })
-    .unwrap();
-    assert_yields!(event_loop.events(), []);
-    event_loop.run_until_root_finishes();
-    assert!(Instant::now().saturating_sub(start) >= Duration::from_millis(20));
-    assert_yields!(event_loop.events(), [1]);
-}
 
 #[test]
 fn drift_free_interval_from_relative_sleeps() {

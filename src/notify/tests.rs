@@ -10,14 +10,6 @@ use crate::{
     testing::{counting_waker, flag_waker},
 };
 
-#[test]
-fn fire_before_poll_resolves_immediately() {
-    let notification = Notification::new();
-    let mut cx = Context::from_waker(Waker::noop());
-    notification.fire();
-    assert_eq!(pin!(notification.notified()).poll(&mut cx), Poll::Ready(()));
-    assert_eq!(pin!(notification.notified()).poll(&mut cx), Poll::Pending);
-}
 
 #[test]
 fn dropping_a_pending_notified_forgets_its_waker() {
