@@ -175,12 +175,13 @@ impl<
         self.storage.events.clear();
     }
 
-    pub(crate) fn drain(&self) -> Result<(), EventLoopError> {
+    pub(crate) fn drain(&self, mut timeout: Option<Duration>) -> Result<(), EventLoopError> {
         if !self.storage.tasks.has_root() {
             return Err(EventLoopError::RootFinished);
         }
         loop {
-            self.process_selector_events()?;
+            self.process_selector_events(timeout)?;
+            timeout = Some(Duration::ZERO);
             if !self.storage.tasks.has_woken() {
                 break;
             }
@@ -194,10 +195,11 @@ impl<
         Ok(())
     }
 
-    fn process_selector_events(&self) -> rustix::io::Result<()> {
+    fn process_selector_events(&self, mut timeout: Option<Duration>) -> rustix::io::Result<()> {
         let mut events = [None; EVENTS_PER_CALL];
         loop {
-            let full = self.selector.poll_nonblocking(&mut events)?;
+            let full = self.selector.poll(&mut events, timeout)?;
+            timeout = Some(Duration::ZERO);
             for event in events.iter().map_while(|event| *event) {
                 match event {
                     SelectorEvent::Io { fd, ready } => {

@@ -65,3 +65,30 @@ fn drift_free_interval_from_relative_sleeps() {
     assert_yields!(event_loop.events(), [0, 1, 2, 3, 4]);
     assert!(Instant::now().saturating_sub(start) >= period * 5);
 }
+
+#[test]
+fn spin_blocks_until_a_sleep_finishes() {
+    static STORAGE: Storage = Storage::new();
+    let start = Instant::now();
+    let mut selector = Selector::new().unwrap();
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
+        ctx.sleep(Duration::from_millis(20)).await.unwrap();
+    })
+    .unwrap();
+    assert_eq!(event_loop.spin(), Ok(()));
+    assert!(Instant::now().saturating_sub(start) >= Duration::from_millis(20));
+}
+
+#[test]
+fn spin_drops_events_after_every_drain() {
+    static STORAGE: Storage = Storage::new();
+    let mut selector = Selector::new().unwrap();
+    let mut event_loop = EventLoop::new(&STORAGE, &mut selector, async |ctx| {
+        for i in 0..10 {
+            ctx.sleep(Duration::from_millis(1)).await.unwrap();
+            ctx.dispatch(i).unwrap();
+        }
+    })
+    .unwrap();
+    assert_eq!(event_loop.spin(), Ok(()));
+}

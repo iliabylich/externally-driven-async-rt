@@ -111,15 +111,17 @@ impl EpollSelector {
         self.apply_timer(change)
     }
 
-    pub(crate) fn poll_nonblocking(
+    pub(crate) fn poll(
         &self,
         out: &mut [Option<SelectorEvent>; EVENTS_PER_CALL],
+        timeout: Option<Duration>,
     ) -> rustix::io::Result<bool> {
         let mut buf = [NO_EVENT; EVENTS_PER_CALL];
+        let timeout = timeout.map(timespec);
         let len = loop {
             syscall_start!("epoll_wait", self.epoll);
-            let result = epoll::wait(&self.epoll, &mut buf, Some(&ZERO));
-            syscall_end!(result; &buf[..result.unwrap_or(0)], EVENTS_PER_CALL, ZERO);
+            let result = epoll::wait(&self.epoll, &mut buf, timeout.as_ref());
+            syscall_end!(result; &buf[..result.unwrap_or(0)], EVENTS_PER_CALL, timeout);
             match result {
                 Ok(len) => break len,
                 Err(Errno::INTR) => {}
@@ -194,11 +196,7 @@ impl EpollSelector {
 
     fn apply_timer(&self, change: TimerChange) -> rustix::io::Result<()> {
         let it_value = match change {
-            TimerChange::Arm(after) => Timespec::try_from(after.max(Duration::from_nanos(1)))
-                .unwrap_or(Timespec {
-                    tv_sec: i64::MAX,
-                    tv_nsec: 0,
-                }),
+            TimerChange::Arm(after) => timespec(after.max(Duration::from_nanos(1))),
             TimerChange::Disarm => ZERO,
         };
         let spec = Itimerspec {
@@ -224,6 +222,13 @@ impl Drop for EpollSelector {
         syscall!("close", self.timer_fd);
         syscall!("close", self.notify_fd);
     }
+}
+
+fn timespec(duration: Duration) -> Timespec {
+    Timespec::try_from(duration).unwrap_or(Timespec {
+        tv_sec: i64::MAX,
+        tv_nsec: 0,
+    })
 }
 
 fn add_readable(epoll: &OwnedFd, fd: &OwnedFd, data: u64) -> rustix::io::Result<()> {

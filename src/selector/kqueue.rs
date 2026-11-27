@@ -61,20 +61,21 @@ impl KqueueSelector {
         self.submit(timer_change.map(Self::timer_kevent))
     }
 
-    pub(crate) fn poll_nonblocking(
+    pub(crate) fn poll(
         &self,
         out: &mut [Option<SelectorEvent>; EVENTS_PER_CALL],
+        timeout: Option<Duration>,
     ) -> rustix::io::Result<bool> {
         let mut buf = [MaybeUninit::<Event>::uninit(); EVENTS_PER_CALL];
         loop {
             // SAFETY: the changelist is empty, so this call doesn't register any fd.
             syscall_start!("kevent", self.kq, &[][..] as &[Event]);
-            let result = unsafe { kevent(&self.kq, &[], &mut buf, Some(Duration::ZERO)) };
+            let result = unsafe { kevent(&self.kq, &[], &mut buf, timeout) };
             syscall_end!(
                 result;
                 result.as_ref().ok().map(|(events, _)| &**events),
                 EVENTS_PER_CALL,
-                Duration::ZERO,
+                timeout,
             );
             match result {
                 Ok((events, _)) => {

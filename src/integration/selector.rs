@@ -23,7 +23,7 @@ fn events(selector: &Selector) -> impl Iterator<Item = SelectorEvent> + '_ {
             if !full {
                 return None;
             }
-            full = selector.poll_nonblocking(&mut batch).unwrap();
+            full = selector.poll(&mut batch, Some(Duration::ZERO)).unwrap();
             next = 0;
         }
     })

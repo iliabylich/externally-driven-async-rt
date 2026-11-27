@@ -5,7 +5,7 @@ use core::{
     task::Poll,
 };
 
-use super::{EventLoopError, EventLoop};
+use super::{EventLoop, EventLoopError};
 
 use crate::{
     Context, LoopStorage, NotEnoughResources, Selector,

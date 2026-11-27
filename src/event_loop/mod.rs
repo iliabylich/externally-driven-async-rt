@@ -1,6 +1,6 @@
 mod error;
 
-use core::{mem::DropGuard, task::Poll};
+use core::{mem::DropGuard, task::Poll, time::Duration};
 
 use rustix::fd::{AsFd, BorrowedFd};
 
@@ -57,7 +57,9 @@ impl<
         F: FnOnce(Context<'sel, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>) -> Fut,
         Fut: Future<Output = ()> + 'sel,
     {
-        let (ctx, root) = storage.claim(selector).ok_or(EventLoopError::StorageAlreadyUsed)?;
+        let (ctx, root) = storage
+            .claim(selector)
+            .ok_or(EventLoopError::StorageAlreadyUsed)?;
         let event_loop = Self {
             ctx,
             poisoned: false,
@@ -86,12 +88,42 @@ impl<
     /// 2. root future completed
     /// 3. a previous call panicked, the event loop is poisoned then
     pub fn drain_events_without_blocking(&mut self) -> Result<(), EventLoopError> {
+        self.drain(Some(Duration::ZERO))
+    }
+
+    /// Runs the event loop on the current thread until the root future finishes.
+    ///
+    /// This is the way to use the runtime as the main one, without an external event loop:
+    /// it blocks in epoll/kqueue until there is something to do, then drains like
+    /// [`drain_events_without_blocking`](Self::drain_events_without_blocking).
+    ///
+    /// Events pushed by [`Context::dispatch`](crate::Context::dispatch) have no effect
+    /// once this method is called.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    ///
+    /// 1. epoll/kqueue returned an error
+    /// 2. a previous call panicked, the event loop is poisoned then
+    pub fn spin(&mut self) -> Result<(), EventLoopError> {
+        loop {
+            match self.drain(None) {
+                Ok(()) => {}
+                Err(EventLoopError::RootFinished) => return Ok(()),
+                Err(err) => return Err(err),
+            }
+            self.ctx.storage.events.clear();
+        }
+    }
+
+    fn drain(&mut self, timeout: Option<Duration>) -> Result<(), EventLoopError> {
         if self.poisoned {
             return Err(EventLoopError::Poisoned);
         }
         let ctx = self.ctx;
         let poison = DropGuard::new(&mut self.poisoned, |poisoned: &mut bool| *poisoned = true);
-        let result = ctx.drain();
+        let result = ctx.drain(timeout);
         DropGuard::dismiss(poison);
         result
     }

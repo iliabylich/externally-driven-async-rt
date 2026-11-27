@@ -12,6 +12,8 @@ mod timer_change;
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
 compile_error!("externally-driven-async-rt supports only macOS, Linux and Android");
 
+use core::time::Duration;
+
 use rustix::fd::{AsFd, BorrowedFd};
 
 #[cfg(miri)]
@@ -62,11 +64,12 @@ impl Selector {
         self.backend.flush(deadline, now)
     }
 
-    pub(crate) fn poll_nonblocking(
+    pub(crate) fn poll(
         &self,
         out: &mut [Option<SelectorEvent>; EVENTS_PER_CALL],
+        timeout: Option<Duration>,
     ) -> rustix::io::Result<bool> {
-        self.backend.poll_nonblocking(out)
+        self.backend.poll(out, timeout)
     }
 
     pub(crate) fn as_fd(&self) -> BorrowedFd<'_> {

@@ -1,4 +1,4 @@
-use core::cell::Cell;
+use core::{cell::Cell, time::Duration};
 
 use rustix::fd::{AsFd, BorrowedFd};
 
@@ -37,9 +37,10 @@ impl DummySelector {
         Ok(())
     }
 
-    pub(crate) fn poll_nonblocking(
+    pub(crate) fn poll(
         &self,
         out: &mut [Option<SelectorEvent>; EVENTS_PER_CALL],
+        _: Option<Duration>,
     ) -> rustix::io::Result<bool> {
         out.fill(None);
         if self.notified.replace(false)
