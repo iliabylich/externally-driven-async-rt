@@ -63,7 +63,6 @@ impl<const SIZE: usize> TaskEntry<SIZE> {
             >(task)
         };
         self.task.set(TaskSlot::Idle(future));
-        self.join_waiter.take();
     }
 
     pub(super) const fn has_task(&self) -> bool {

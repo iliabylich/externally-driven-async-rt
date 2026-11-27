@@ -142,8 +142,8 @@ fn timer_fires_after_flush() {
     let start = Instant::now();
     selector
         .flush(
-            Some(Instant::ZERO.saturating_add(Duration::from_millis(20))),
-            Instant::ZERO,
+            Some(Instant(0).saturating_add(Duration::from_millis(20))),
+            Instant(0),
         )
         .unwrap();
     assert!(selector.as_fd().wait_readable_blocking(500));
@@ -157,11 +157,11 @@ fn disarm_prevents_firing() {
     let selector = Selector::new().unwrap();
     selector
         .flush(
-            Some(Instant::ZERO.saturating_add(Duration::from_millis(10))),
-            Instant::ZERO,
+            Some(Instant(0).saturating_add(Duration::from_millis(10))),
+            Instant(0),
         )
         .unwrap();
-    selector.flush(None, Instant::ZERO).unwrap();
+    selector.flush(None, Instant(0)).unwrap();
     assert!(!selector.as_fd().wait_readable_blocking(50));
     assert_yields!(events(&selector), []);
 }
@@ -169,14 +169,14 @@ fn disarm_prevents_firing() {
 #[test]
 fn disarm_after_timer_fired_is_ok() {
     let selector = Selector::new().unwrap();
-    selector.flush(Some(Instant::ZERO), Instant::ZERO).unwrap();
+    selector.flush(Some(Instant(0)), Instant(0)).unwrap();
     assert!(selector.as_fd().wait_readable_blocking(500));
-    selector.flush(None, Instant::ZERO).unwrap();
+    selector.flush(None, Instant(0)).unwrap();
     assert_yields!(events(&selector), []);
 }
 
 #[test]
 fn disarm_when_never_armed_is_ok() {
     let selector = Selector::new().unwrap();
-    selector.flush(None, Instant::ZERO).unwrap();
+    selector.flush(None, Instant(0)).unwrap();
 }

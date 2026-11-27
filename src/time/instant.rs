@@ -4,11 +4,9 @@ use crate::sys::monotonic_nanos;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[must_use]
-pub(crate) struct Instant(u64);
+pub(crate) struct Instant(pub(crate) u64);
 
 impl Instant {
-    pub(crate) const ZERO: Self = Self(0);
-
     pub(crate) fn now() -> Self {
         Self(monotonic_nanos())
     }

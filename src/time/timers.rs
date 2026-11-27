@@ -24,8 +24,6 @@ pub(crate) struct Timers<const N: usize> {
 
 #[must_use]
 struct TimerEntry {
-    deadline: Cell<Instant>,
-    seq: Cell<u64>,
     waker: WakerSlot,
 }
 
@@ -38,8 +36,6 @@ impl<const N: usize> Timers<N> {
             pool: ObjectPool::new(
                 [const {
                     TimerEntry {
-                        deadline: Cell::new(Instant::ZERO),
-                        seq: Cell::new(0),
                         waker: WakerSlot::new(),
                     }
                 }; N],
@@ -64,8 +60,6 @@ impl<const N: usize> Timers<N> {
         let (index, timer) = self.pool.alloc().ok_or(NotEnoughResources::Timers)?;
         let seq = self.next_seq.get();
         self.next_seq.set(seq.wrapping_add(1));
-        timer.deadline.set(deadline);
-        timer.seq.set(seq);
         timer.waker.store(waker);
         self.armed.insert(index.idx, (deadline, seq));
         Ok(index)
@@ -93,12 +87,7 @@ impl<const N: usize> Timers<N> {
     }
 
     fn set_waker(&self, index: TimerIndex, waker: &Waker) {
-        let timer = self.entry(index);
-        timer.waker.store(waker);
-        if !self.armed.contains(index.idx) {
-            self.armed
-                .insert(index.idx, (timer.deadline.get(), timer.seq.get()));
-        }
+        self.entry(index).waker.store(waker);
     }
 
     fn release(&self, index: TimerIndex) {

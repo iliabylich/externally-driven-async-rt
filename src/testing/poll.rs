@@ -6,7 +6,7 @@ use core::{
 use crate::time::{Instant, Timers};
 
 pub(crate) fn fake_instant(millis: &AtomicU64) -> Instant {
-    Instant::ZERO.saturating_add(Duration::from_millis(millis.load(Relaxed)))
+    Instant(0).saturating_add(Duration::from_millis(millis.load(Relaxed)))
 }
 
 pub(crate) fn wake_expired_timers<const TIMERS: usize>(timers: &Timers<TIMERS>) {
