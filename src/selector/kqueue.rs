@@ -14,7 +14,7 @@ use crate::{
 
 const TIMER_IDENT: isize = 0;
 const NOTIFY_IDENT: isize = 0;
-const CHANGES_PER_CALL: usize = if cfg!(test) { 4 } else { 64 };
+const MAX_CHANGES: usize = 2;
 
 #[must_use]
 pub(crate) struct KqueueSelector {
@@ -36,7 +36,7 @@ impl KqueueSelector {
             kq,
             timer: Cell::new(KernelTimer::default()),
         };
-        selector.submit([Self::notify_kevent(
+        selector.submit(&[Self::notify_kevent(
             UserFlags::empty(),
             EventFlags::ADD | EventFlags::CLEAR,
         )])?;
@@ -44,21 +44,24 @@ impl KqueueSelector {
     }
 
     pub(crate) fn notify(&self) -> rustix::io::Result<()> {
-        self.submit([Self::notify_kevent(UserFlags::TRIGGER, EventFlags::empty())])
+        self.submit(&[Self::notify_kevent(UserFlags::TRIGGER, EventFlags::empty())])
     }
 
     pub(crate) fn register(&self, fd: BorrowedFd<'_>) -> rustix::io::Result<()> {
-        self.submit(Self::io_kevents(fd, EventFlags::ADD | EventFlags::CLEAR))
+        self.submit(&Self::io_kevents(fd, EventFlags::ADD | EventFlags::CLEAR))
     }
 
     pub(crate) fn deregister(&self, fd: BorrowedFd<'_>) -> rustix::io::Result<()> {
-        self.submit(Self::io_kevents(fd, EventFlags::DELETE))
+        self.submit(&Self::io_kevents(fd, EventFlags::DELETE))
     }
 
     pub(crate) fn flush(&self, deadline: Option<Instant>, now: Instant) -> rustix::io::Result<()> {
         let (timer, timer_change) = self.timer.get().flush(deadline, now);
         self.timer.set(timer);
-        self.submit(timer_change.map(Self::timer_kevent))
+        let Some(change) = timer_change else {
+            return Ok(());
+        };
+        self.submit(&[Self::timer_kevent(change)])
     }
 
     pub(crate) fn poll(
@@ -90,42 +93,16 @@ impl KqueueSelector {
         }
     }
 
-    fn submit(&self, changes: impl IntoIterator<Item = Event>) -> rustix::io::Result<()> {
-        let mut changes = changes.into_iter();
-        let mut list = [Self::timer_kevent(TimerChange::Disarm); CHANGES_PER_CALL];
-        let mut receipts = [MaybeUninit::<Event>::uninit(); CHANGES_PER_CALL];
-        loop {
-            let mut len = 0;
-            for (filled, (entry, change)) in (1..).zip(list.iter_mut().zip(&mut changes)) {
-                *entry = change;
-                len = filled;
-            }
-            if len == 0 {
-                return Ok(());
-            }
-            let Some(filled) = list.get(..len) else {
-                unreachable!("at most {CHANGES_PER_CALL} changes are filled");
-            };
-            self.submit_list(filled, &mut receipts)?;
-            if len < CHANGES_PER_CALL {
-                return Ok(());
-            }
-        }
-    }
-
-    fn submit_list(
-        &self,
-        changes: &[Event],
-        receipts: &mut [MaybeUninit<Event>; CHANGES_PER_CALL],
-    ) -> rustix::io::Result<()> {
+    fn submit(&self, changes: &[Event]) -> rustix::io::Result<()> {
+        let mut receipts = [MaybeUninit::<Event>::uninit(); MAX_CHANGES];
         // SAFETY: only `register` and `deregister` pass fds, and only open ones, and every registered
         // fd is deregistered before it's closed, so the kqueue never refers to an invalid fd.
         syscall_start!("kevent", self.kq, changes);
-        let result = unsafe { kevent(&self.kq, changes, receipts, Some(Duration::ZERO)) };
+        let result = unsafe { kevent(&self.kq, changes, &mut receipts, Some(Duration::ZERO)) };
         syscall_end!(
             result;
             result.as_ref().ok().map(|(receipts, _)| &**receipts),
-            CHANGES_PER_CALL,
+            MAX_CHANGES,
             Duration::ZERO,
         );
         let receipts = match result {
