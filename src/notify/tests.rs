@@ -10,7 +10,6 @@ use crate::{
     testing::{counting_waker, flag_waker},
 };
 
-
 #[test]
 fn dropping_a_pending_notified_forgets_its_waker() {
     let drops = Cell::new(0);

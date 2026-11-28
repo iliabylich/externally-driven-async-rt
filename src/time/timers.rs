@@ -168,7 +168,6 @@ mod tests {
         assert_eq!(timers.next_deadline(), None);
     }
 
-
     #[test]
     fn expire_wakes_due_timers_in_deadline_order() {
         let drops: [Cell<u32>; 8] = [const { Cell::new(0) }; 8];
@@ -225,8 +224,6 @@ mod tests {
         let _ = timers.alloc(now, &counting_waker(&drops[2])).unwrap();
         assert_expires(timers, &drops, now, [1, 2]);
     }
-
-
 
     #[test]
     fn next_deadline_is_the_earliest_one() {

@@ -202,7 +202,6 @@ fn counting(polls: &Cell<u32>) -> impl Future<Output = ()> {
     })
 }
 
-
 #[test]
 fn a_stale_wake_of_a_freed_slot_polls_nothing() {
     let (tasks, _root, claimed, _scope) = tasks!(1, 1024, 0);

@@ -1,12 +1,16 @@
 mod error;
 
-use core::{mem::DropGuard, task::Poll, time::Duration};
+use core::{task::Poll, time::Duration};
 
 use rustix::fd::{AsFd, BorrowedFd};
 
 pub use self::error::EventLoopError;
 
-use crate::{context::Context, selector::Selector, storage::LoopStorage};
+use crate::{
+    context::Context,
+    selector::{EVENTS_PER_CALL, Selector, SelectorEvent},
+    storage::LoopStorage,
+};
 
 /// The main type, an event loop.
 #[must_use]
@@ -69,7 +73,7 @@ impl<
             Poll::Pending => {}
             Poll::Ready(()) => return Err(EventLoopError::RootFinished),
         }
-        ctx.flush()?;
+        event_loop.flush()?;
         Ok(event_loop)
     }
 
@@ -121,11 +125,62 @@ impl<
         if self.poisoned {
             return Err(EventLoopError::Poisoned);
         }
-        let ctx = self.ctx;
-        let poison = DropGuard::new(&mut self.poisoned, |poisoned: &mut bool| *poisoned = true);
-        let result = ctx.drain(timeout);
-        DropGuard::dismiss(poison);
+        self.poisoned = true;
+        let result = self.run_until_idle(timeout);
+        self.poisoned = false;
         result
+    }
+
+    fn run_until_idle(&self, mut timeout: Option<Duration>) -> Result<(), EventLoopError> {
+        let storage = self.ctx.storage;
+        if !storage.tasks.has_root() {
+            return Err(EventLoopError::RootFinished);
+        }
+        loop {
+            self.process_selector_events(timeout)?;
+            timeout = Some(Duration::ZERO);
+            if !storage.tasks.has_woken() {
+                break;
+            }
+            if storage.tasks.run_ready().is_ready() {
+                storage.tasks.drop_all();
+                self.flush()?;
+                return Err(EventLoopError::RootFinished);
+            }
+        }
+        self.flush()?;
+        Ok(())
+    }
+
+    fn process_selector_events(&self, mut timeout: Option<Duration>) -> rustix::io::Result<()> {
+        let storage = self.ctx.storage;
+        let mut events = [None; EVENTS_PER_CALL];
+        loop {
+            let full = self.ctx.selector.poll(&mut events, timeout)?;
+            timeout = Some(Duration::ZERO);
+            for event in events.iter().map_while(|event| *event) {
+                match event {
+                    SelectorEvent::Io { fd, ready } => storage.io_waiters.wake_ready(fd, ready),
+                    SelectorEvent::Notify => storage.notification.fire(),
+                    SelectorEvent::Timer => {
+                        let now = storage.timers.now();
+                        while let Some(waker) = storage.timers.take_expired(now) {
+                            waker.wake();
+                        }
+                    }
+                }
+            }
+            if !full {
+                return Ok(());
+            }
+        }
+    }
+
+    fn flush(&self) -> rustix::io::Result<()> {
+        let timers = &self.ctx.storage.timers;
+        self.ctx
+            .selector
+            .flush(timers.next_deadline(), timers.now())
     }
 
     /// Makes the event loop's file descriptor readable and wakes up a task
@@ -161,7 +216,8 @@ impl<
 > Drop for EventLoop<'_, E, EVENTS, TASKS, TASK_SIZE, ROOT_TASK_SIZE, TIMERS, FDS>
 {
     fn drop(&mut self) {
-        self.ctx.clear();
+        self.ctx.storage.tasks.drop_all();
+        self.ctx.storage.events.clear();
     }
 }
 

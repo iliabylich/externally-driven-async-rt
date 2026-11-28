@@ -45,7 +45,6 @@ fn alloc_get_free() {
     assert_eq!(value(pool, a), Some("a"));
 }
 
-
 #[test]
 fn full_pool_rejects_alloc() {
     let pool = &ObjectPool::<Cell<u32>, 1>::new([const { Cell::new(0) }; 1]);

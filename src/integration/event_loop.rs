@@ -28,7 +28,6 @@ fn loop_exposes_the_selector_fd() {
     assert_eq!(event_loop.as_fd().as_raw_fd(), fd);
 }
 
-
 #[test]
 fn drift_free_interval_from_relative_sleeps() {
     static STORAGE: Storage = Storage::new();

@@ -1,10 +1,10 @@
 use core::{future::Future, time::Duration};
 
 use crate::{
-    Either2, EventLoopError, NotEnoughResources,
+    Either2, NotEnoughResources,
     claimed::Claimed,
     select2,
-    selector::{EVENTS_PER_CALL, Selector, SelectorEvent},
+    selector::Selector,
     storage::LoopStorage,
     tasks::{SlotWaiterTakenError, TaskReservation},
 };
@@ -166,63 +166,6 @@ impl<
     {
         self.storage.notification.notified()
     }
-
-    pub(crate) fn clear(&self) {
-        self.storage.tasks.drop_all();
-        self.storage.events.clear();
-    }
-
-    pub(crate) fn drain(&self, mut timeout: Option<Duration>) -> Result<(), EventLoopError> {
-        if !self.storage.tasks.has_root() {
-            return Err(EventLoopError::RootFinished);
-        }
-        loop {
-            self.process_selector_events(timeout)?;
-            timeout = Some(Duration::ZERO);
-            if !self.storage.tasks.has_woken() {
-                break;
-            }
-            if self.storage.tasks.run_ready().is_ready() {
-                self.storage.tasks.drop_all();
-                self.flush()?;
-                return Err(EventLoopError::RootFinished);
-            }
-        }
-        self.flush()?;
-        Ok(())
-    }
-
-    fn process_selector_events(&self, mut timeout: Option<Duration>) -> rustix::io::Result<()> {
-        let mut events = [None; EVENTS_PER_CALL];
-        loop {
-            let full = self.selector.poll(&mut events, timeout)?;
-            timeout = Some(Duration::ZERO);
-            for event in events.iter().map_while(|event| *event) {
-                match event {
-                    SelectorEvent::Io { fd, ready } => {
-                        self.storage.io_waiters.wake_ready(fd, ready);
-                    }
-                    SelectorEvent::Notify => self.storage.notification.fire(),
-                    SelectorEvent::Timer => {
-                        let now = self.storage.timers.now();
-                        while let Some(waker) = self.storage.timers.take_expired(now) {
-                            waker.wake();
-                        }
-                    }
-                }
-            }
-            if !full {
-                return Ok(());
-            }
-        }
-    }
-
-    pub(crate) fn flush(&self) -> rustix::io::Result<()> {
-        self.selector.flush(
-            self.storage.timers.next_deadline(),
-            self.storage.timers.now(),
-        )
-    }
 }
 
 impl<
@@ -303,7 +246,8 @@ mod tests {
         assert_eq!(ctx.storage.tasks.run_ready(), Poll::Pending);
         assert_yields!(ctx.storage.events.iter_removing(), [1]);
         assert_eq!(ctx.storage.timers.next_deadline(), None);
-        ctx.clear();
+        ctx.storage.tasks.drop_all();
+        ctx.storage.events.clear();
     }
 
     #[test]
@@ -339,7 +283,8 @@ mod tests {
         assert_yields!(ctx.storage.events.iter_removing(), [0]);
         assert!(DROPPED.load(Relaxed));
         assert_eq!(ctx.storage.timers.next_deadline(), None);
-        ctx.clear();
+        ctx.storage.tasks.drop_all();
+        ctx.storage.events.clear();
     }
 
     #[test]
@@ -407,6 +352,7 @@ mod tests {
         wake_expired_timers(&ctx.storage.timers);
         assert_eq!(ctx.storage.tasks.run_ready(), Poll::Ready(()));
         assert_yields!(ctx.storage.events.iter_removing(), [100, 200, 300]);
-        ctx.clear();
+        ctx.storage.tasks.drop_all();
+        ctx.storage.events.clear();
     }
 }
